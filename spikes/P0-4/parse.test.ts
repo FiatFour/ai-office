@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 import {
   assignToFactories,
   branchName,
+  githubSignatureValid,
+  lifecycleWriteAllowed,
   PayloadError,
   parseEvent,
   routeBranch,
-  signatureValid,
-  writeAllowed,
 } from './githost.mjs';
 
 type Body = Record<string, unknown>;
@@ -109,19 +109,19 @@ describe('routing', () => {
 
 describe('guards', () => {
   it('sends only the writes the lifecycle needs, so no merge call goes out', () => {
-    expect(writeAllowed('PUT', '/repos/o/r/pulls/4/merge')).toBe(false);
-    expect(writeAllowed('POST', '/repos/o/r/merges')).toBe(false);
-    expect(writeAllowed('PUT', '/projects/9/merge_requests/4/merge')).toBe(false);
-    expect(writeAllowed('GET', '/repos/o/r/pulls/4/merge')).toBe(true);
-    expect(writeAllowed('POST', '/repos/o/r/pulls/4/reviews')).toBe(true);
-    expect(writeAllowed('PUT', '/repos/o/r/contents/spike/perf.txt')).toBe(true);
+    expect(lifecycleWriteAllowed('PUT', '/repos/o/r/pulls/4/merge')).toBe(false);
+    expect(lifecycleWriteAllowed('POST', '/repos/o/r/merges')).toBe(false);
+    expect(lifecycleWriteAllowed('PUT', '/projects/9/merge_requests/4/merge')).toBe(false);
+    expect(lifecycleWriteAllowed('GET', '/repos/o/r/pulls/4/merge')).toBe(true);
+    expect(lifecycleWriteAllowed('POST', '/repos/o/r/pulls/4/reviews')).toBe(true);
+    expect(lifecycleWriteAllowed('PUT', '/repos/o/r/contents/spike/perf.txt')).toBe(true);
   });
 
   it('accepts only the matching webhook signature', () => {
     const raw = Buffer.from('Hello, World!');
     const docsVector = 'sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17';
-    expect(signatureValid("It's a Secret to Everybody", raw, docsVector)).toBe(true);
-    expect(signatureValid('another secret', raw, docsVector)).toBe(false);
-    expect(signatureValid("It's a Secret to Everybody", raw, undefined)).toBe(false);
+    expect(githubSignatureValid("It's a Secret to Everybody", raw, docsVector)).toBe(true);
+    expect(githubSignatureValid('another secret', raw, docsVector)).toBe(false);
+    expect(githubSignatureValid("It's a Secret to Everybody", raw, undefined)).toBe(false);
   });
 });

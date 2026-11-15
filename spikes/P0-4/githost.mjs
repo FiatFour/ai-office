@@ -185,8 +185,6 @@ const PARSERS = {
 };
 
 /**
- * Parses a webhook body into a typed event. Returns null for an event type the lifecycle does not use,
- * and throws PayloadError when a used event lacks a field.
  * @param {Host} host
  * @param {string} event
  * @param {unknown} body
@@ -213,7 +211,6 @@ export function branchName(route) {
 }
 
 /**
- * Groups changes by the factory their branch names. Branches without the prefix land under null.
  * @template {{ branch: string }} T
  * @param {T[]} changes
  * @returns {Map<string | null, T[]>}
@@ -231,12 +228,11 @@ export function assignToFactories(changes) {
 }
 
 /**
- * Verifies `X-Hub-Signature-256` against the raw body (S-31).
  * @param {string} secret
  * @param {Buffer} raw
  * @param {string | undefined} header
  */
-export function signatureValid(secret, raw, header) {
+export function githubSignatureValid(secret, raw, header) {
   if (!header) return false;
   const expected = Buffer.from(`sha256=${createHmac('sha256', secret).update(raw).digest('hex')}`);
   const actual = Buffer.from(header);
@@ -244,7 +240,7 @@ export function signatureValid(secret, raw, header) {
 }
 
 /** @type {[string, RegExp][]} */
-const WRITES = [
+const LIFECYCLE_WRITES = [
   ['POST', /^\/repos\/[^/]+\/[^/]+\/git\/refs$/],
   ['PUT', /^\/repos\/[^/]+\/[^/]+\/contents\/[^?]+$/],
   ['POST', /^\/repos\/[^/]+\/[^/]+\/pulls$/],
@@ -253,13 +249,11 @@ const WRITES = [
 ];
 
 /**
- * The spike never merges: a human does (lane 10). A write goes out only when it is one the lifecycle needs,
- * so no merge path can be called, whatever its shape.
  * @param {string} method
  * @param {string} path
  */
-export function writeAllowed(method, path) {
-  return method === 'GET' || WRITES.some(([m, pattern]) => m === method && pattern.test(path));
+export function lifecycleWriteAllowed(method, path) {
+  return method === 'GET' || LIFECYCLE_WRITES.some(([m, pattern]) => m === method && pattern.test(path));
 }
 
 export class HttpError extends Error {
@@ -281,7 +275,8 @@ const etags = new Map();
  * @returns {Promise<{ status: number, body: any }>}
  */
 async function github(client, method, path, body) {
-  if (!writeAllowed(method, path)) throw new Error(`refusing a write outside the allowlist: ${method} ${path}`);
+  if (!lifecycleWriteAllowed(method, path))
+    throw new Error(`refusing a write outside the allowlist: ${method} ${path}`);
   /** @type {Record<string, string>} */
   const headers = {
     authorization: `Bearer ${client.token}`,
@@ -335,15 +330,14 @@ async function pollPull(client, repo, number) {
 }
 
 /**
- * Commits one file change to a branch through the contents API, which is a push the host sees.
  * @param {Client} client
  * @param {string} repo
  * @param {string} branch
  * @param {string} path
  * @param {string} content
- * @returns {Promise<string>} the new head SHA
+ * @returns {Promise<string>}
  */
-async function commitFile(client, repo, branch, path, content) {
+async function pushFileChange(client, repo, branch, path, content) {
   const sha = await github(client, 'GET', `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`).then(
     (result) => /** @type {string} */ (result.body.sha),
     (error) => {
@@ -375,7 +369,7 @@ async function lifecycle(client, repo, route) {
   }
   const path = `spike/${route.factory}-${route.task}.md`;
   const lines = Array.from({ length: 6 }, (_, i) => `line ${i + 1} of ${route.task}`);
-  const headSha = await commitFile(client, repo, branch, path, `${lines.join('\n')}\n`);
+  const headSha = await pushFileChange(client, repo, branch, path, `${lines.join('\n')}\n`);
 
   const owner = repo.split('/')[0];
   const existing = (await github(client, 'GET', `/repos/${repo}/pulls?state=open&head=${owner}:${branch}`)).body;
@@ -439,8 +433,19 @@ async function route(client, repo) {
   }
 }
 
+/** @param {import('node:child_process').ChildProcessByStdio<null, import('node:stream').Readable, import('node:stream').Readable>} forwarder */
+function untilForwarding(forwarder) {
+  return new Promise((resolve, reject) => {
+    const ready = (/** @type {Buffer} */ chunk) => {
+      if (chunk.toString().includes('Forwarding Webhook events')) resolve(undefined);
+    };
+    forwarder.stdout.on('data', ready);
+    forwarder.stderr.on('data', ready);
+    forwarder.on('exit', (code) => reject(new Error(`gh webhook forward exited ${code}`)));
+  });
+}
+
 /**
- * Starts a local listener and `gh webhook forward` to it. Resolves once the forwarder reports it is forwarding.
  * @param {{ repo: string, port: number, out: string, onEvent: (event: GitHostEvent, at: number) => void }} options
  */
 async function startWebhooks({ repo, port, out, onEvent }) {
@@ -452,7 +457,7 @@ async function startWebhooks({ repo, port, out, onEvent }) {
     const raw = await buffer(request);
     const at = Date.now();
     const name = String(request.headers['x-github-event'] ?? '');
-    const signed = signatureValid(
+    const signed = githubSignatureValid(
       secret,
       raw,
       /** @type {string | undefined} */ (request.headers['x-hub-signature-256']),
@@ -486,14 +491,7 @@ async function startWebhooks({ repo, port, out, onEvent }) {
     ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
-  await new Promise((resolve, reject) => {
-    const ready = (/** @type {Buffer} */ chunk) => {
-      if (chunk.toString().includes('Forwarding Webhook events')) resolve(undefined);
-    };
-    forwarder.stdout.on('data', ready);
-    forwarder.stderr.on('data', ready);
-    forwarder.on('exit', (code) => reject(new Error(`gh webhook forward exited ${code}`)));
-  });
+  await untilForwarding(forwarder);
   return {
     stop() {
       forwarder.kill('SIGINT');
@@ -531,14 +529,12 @@ function quantile(values, q) {
 }
 
 /**
- * Makes `changes` pushes to the PR branch and times when the webhook listener and the poller each see the new head.
- * Both observers run for every change. The webhook observer makes no API calls, so it cannot skew the poller's count.
  * @param {Client} client
  * @param {string} repo
  * @param {number} number
  * @param {{ changes: number, intervalSeconds: number, port: number, out: string }} options
  */
-async function perf(client, repo, number, { changes, intervalSeconds, port, out }) {
+async function raceWebhookAgainstPoll(client, repo, number, { changes, intervalSeconds, port, out }) {
   const pull = (await github(client, 'GET', `/repos/${repo}/pulls/${number}`)).body;
   const branch = pull.head.ref;
   /** @type {Map<string, { webhook?: number, poll?: number }>} */
@@ -575,7 +571,7 @@ async function perf(client, repo, number, { changes, intervalSeconds, port, out 
   for (let i = 0; i < changes; i++) {
     await sleep(5000 + Math.random() * intervalSeconds * 1000);
     const sent = Date.now();
-    const sha = await commitFile(
+    const sha = await pushFileChange(
       driver,
       repo,
       branch,
@@ -680,7 +676,7 @@ async function main() {
       timeoutSeconds: Number(values.timeout),
     });
   } else if (command === 'perf') {
-    const pass = await perf(client, repo, Number(values.pr), {
+    const pass = await raceWebhookAgainstPoll(client, repo, Number(values.pr), {
       changes: Number(values.changes),
       intervalSeconds: Number(values.interval),
       port,

@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 import {
   assignToFactories,
   branchName,
-  isMergeCall,
   PayloadError,
   parseEvent,
   routeBranch,
   signatureValid,
+  writeAllowed,
 } from './githost.mjs';
 
 type Body = Record<string, unknown>;
@@ -34,6 +34,7 @@ function edit(body: Body, path: string, value?: unknown) {
 const expected: Record<string, object> = {
   'github/push.json': { kind: 'push', ref: 'refs/heads/aw/alpha/t1' },
   'github/status.json': { kind: 'check', name: 'agent-works/spike', state: 'success' },
+  'github/check_run-completed.json': { kind: 'check', repo: 'FiatFour/ai-office', state: 'success' },
   'github/pull_request-opened.json': { kind: 'change', action: 'opened', state: 'open', branch: 'aw/alpha/t1' },
   'github/pull_request_review.json': { kind: 'review', number: 1, verdict: 'commented' },
   'github/pull_request_review_comment.json': { kind: 'review_comment', path: 'spike/alpha-t1.md', line: 2 },
@@ -57,6 +58,7 @@ describe('parseEvent', () => {
     ['github/push.json', 'after'],
     ['github/pull_request-opened.json', 'pull_request.head.ref'],
     ['github/pull_request_review.json', 'review.state'],
+    ['github/check_run-completed.json', 'check_run.head_sha'],
     ['gitlab/merge_request-open.json', 'object_attributes.iid'],
     ['gitlab/pipeline.json', 'object_attributes.status'],
   ])('rejects %s without %s', (name, path) => {
@@ -106,11 +108,13 @@ describe('routing', () => {
 });
 
 describe('guards', () => {
-  it('refuses merge calls and allows the merge-state read', () => {
-    expect(isMergeCall('PUT', '/repos/o/r/pulls/4/merge')).toBe(true);
-    expect(isMergeCall('PUT', '/projects/9/merge_requests/4/merge')).toBe(true);
-    expect(isMergeCall('GET', '/repos/o/r/pulls/4/merge')).toBe(false);
-    expect(isMergeCall('POST', '/repos/o/r/pulls/4/reviews')).toBe(false);
+  it('sends only the writes the lifecycle needs, so no merge call goes out', () => {
+    expect(writeAllowed('PUT', '/repos/o/r/pulls/4/merge')).toBe(false);
+    expect(writeAllowed('POST', '/repos/o/r/merges')).toBe(false);
+    expect(writeAllowed('PUT', '/projects/9/merge_requests/4/merge')).toBe(false);
+    expect(writeAllowed('GET', '/repos/o/r/pulls/4/merge')).toBe(true);
+    expect(writeAllowed('POST', '/repos/o/r/pulls/4/reviews')).toBe(true);
+    expect(writeAllowed('PUT', '/repos/o/r/contents/spike/perf.txt')).toBe(true);
   });
 
   it('accepts only the matching webhook signature', () => {

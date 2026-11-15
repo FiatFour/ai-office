@@ -4,6 +4,8 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buffer } from 'node:stream/consumers';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -87,61 +89,62 @@ function gitlabPipeline(status) {
   return ['failed', 'canceled'].includes(status) ? 'failure' : 'pending';
 }
 
+/** @param {boolean} merged @param {string} state @returns {ChangeState} */
+function githubState(merged, state) {
+  if (merged) return 'merged';
+  return state === 'open' ? 'open' : 'closed';
+}
+
+/** @param {string} state @returns {CheckState} */
+function githubStatus(state) {
+  return state === 'pending' || state === 'success' ? state : 'failure';
+}
+
 /** @param {string} state @returns {ChangeState} */
 function gitlabState(state) {
   if (state === 'merged') return 'merged';
   return state === 'closed' ? 'closed' : 'open';
 }
 
-/** @type {Record<Host, Record<string, (body: unknown) => GitHostEvent>>} */
+/** @typedef {GitHostEvent extends infer E ? E extends GitHostEvent ? Omit<E, 'host' | 'repo'> : never : never} EventFields */
+
+/** @type {Record<Host, string>} */
+const REPO_PATH = { github: 'repository.full_name', gitlab: 'project.path_with_namespace' };
+
+/** @type {Record<Host, Record<string, (body: unknown) => EventFields>>} */
 const PARSERS = {
   github: {
     push: (b) => ({
-      host: 'github',
-      repo: str(b, 'repository.full_name'),
       kind: 'push',
       ref: str(b, 'ref'),
       headSha: str(b, 'after'),
     }),
     pull_request: (b) => ({
-      host: 'github',
-      repo: str(b, 'repository.full_name'),
       kind: 'change',
       number: num(b, 'number'),
       action: str(b, 'action'),
-      state: bool(b, 'pull_request.merged') ? 'merged' : str(b, 'pull_request.state') === 'open' ? 'open' : 'closed',
+      state: githubState(bool(b, 'pull_request.merged'), str(b, 'pull_request.state')),
       branch: str(b, 'pull_request.head.ref'),
       headSha: str(b, 'pull_request.head.sha'),
     }),
     pull_request_review: (b) => ({
-      host: 'github',
-      repo: str(b, 'repository.full_name'),
       kind: 'review',
       number: num(b, 'pull_request.number'),
       verdict: str(b, 'review.state'),
     }),
     pull_request_review_comment: (b) => ({
-      host: 'github',
-      repo: str(b, 'repository.full_name'),
       kind: 'review_comment',
       number: num(b, 'pull_request.number'),
       path: str(b, 'comment.path'),
       line: nullableNum(b, 'comment.line'),
     }),
-    status: (b) => {
-      const state = str(b, 'state');
-      return {
-        host: 'github',
-        repo: str(b, 'repository.full_name'),
-        kind: 'check',
-        headSha: str(b, 'sha'),
-        name: str(b, 'context'),
-        state: state === 'pending' ? 'pending' : state === 'success' ? 'success' : 'failure',
-      };
-    },
+    status: (b) => ({
+      kind: 'check',
+      headSha: str(b, 'sha'),
+      name: str(b, 'context'),
+      state: githubStatus(str(b, 'state')),
+    }),
     check_run: (b) => ({
-      host: 'github',
-      repo: str(b, 'repository.full_name'),
       kind: 'check',
       headSha: str(b, 'check_run.head_sha'),
       name: str(b, 'check_run.name'),
@@ -150,15 +153,11 @@ const PARSERS = {
   },
   gitlab: {
     'Push Hook': (b) => ({
-      host: 'gitlab',
-      repo: str(b, 'project.path_with_namespace'),
       kind: 'push',
       ref: str(b, 'ref'),
       headSha: str(b, 'after'),
     }),
     'Merge Request Hook': (b) => ({
-      host: 'gitlab',
-      repo: str(b, 'project.path_with_namespace'),
       kind: 'change',
       number: num(b, 'object_attributes.iid'),
       action: str(b, 'object_attributes.action'),
@@ -170,8 +169,6 @@ const PARSERS = {
       const attributes = /** @type {Record<string, unknown>} */ (field(b, 'object_attributes'));
       const position = attributes.position ?? null;
       return {
-        host: 'gitlab',
-        repo: str(b, 'project.path_with_namespace'),
         kind: 'review_comment',
         number: num(b, 'merge_request.iid'),
         path: position === null ? null : str(position, 'new_path'),
@@ -179,8 +176,6 @@ const PARSERS = {
       };
     },
     'Pipeline Hook': (b) => ({
-      host: 'gitlab',
-      repo: str(b, 'project.path_with_namespace'),
       kind: 'check',
       headSha: str(b, 'object_attributes.sha'),
       name: `pipeline ${num(b, 'object_attributes.id')}`,
@@ -199,7 +194,7 @@ const PARSERS = {
  */
 export function parseEvent(host, event, body) {
   const parse = PARSERS[host][event];
-  return parse ? parse(body) : null;
+  return parse ? /** @type {GitHostEvent} */ ({ host, repo: str(body, REPO_PATH[host]), ...parse(body) }) : null;
 }
 
 const BRANCH = /^aw\/([a-z0-9][a-z0-9-]*)\/([a-z0-9][a-z0-9-]*)$/;
@@ -228,7 +223,9 @@ export function assignToFactories(changes) {
   const byFactory = new Map();
   for (const change of changes) {
     const factory = routeBranch(change.branch)?.factory ?? null;
-    byFactory.set(factory, [...(byFactory.get(factory) ?? []), change]);
+    const assigned = byFactory.get(factory) ?? [];
+    assigned.push(change);
+    byFactory.set(factory, assigned);
   }
   return byFactory;
 }
@@ -246,13 +243,31 @@ export function signatureValid(secret, raw, header) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+/** @type {[string, RegExp][]} */
+const WRITES = [
+  ['POST', /^\/repos\/[^/]+\/[^/]+\/git\/refs$/],
+  ['PUT', /^\/repos\/[^/]+\/[^/]+\/contents\/[^?]+$/],
+  ['POST', /^\/repos\/[^/]+\/[^/]+\/pulls$/],
+  ['POST', /^\/repos\/[^/]+\/[^/]+\/statuses\/[0-9a-f]{40}$/],
+  ['POST', /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews$/],
+];
+
 /**
- * The spike never merges: a human does (lane 10). Any non-GET call to a merge path is refused before it is sent.
+ * The spike never merges: a human does (lane 10). A write goes out only when it is one the lifecycle needs,
+ * so no merge path can be called, whatever its shape.
  * @param {string} method
  * @param {string} path
  */
-export function isMergeCall(method, path) {
-  return method !== 'GET' && /\/pulls\/\d+\/merge$|\/merge_requests\/\d+\/merge$/.test(path);
+export function writeAllowed(method, path) {
+  return method === 'GET' || WRITES.some(([m, pattern]) => m === method && pattern.test(path));
+}
+
+export class HttpError extends Error {
+  /** @param {string} method @param {string} path @param {number} status @param {string} text */
+  constructor(method, path, status, text) {
+    super(`${method} ${path} -> ${status} ${text.slice(0, 300)}`);
+    this.status = status;
+  }
 }
 
 /** @type {Map<string, { etag: string, body: unknown }>} */
@@ -266,7 +281,7 @@ const etags = new Map();
  * @returns {Promise<{ status: number, body: any }>}
  */
 async function github(client, method, path, body) {
-  if (isMergeCall(method, path)) throw new Error(`refusing merge call ${method} ${path}`);
+  if (!writeAllowed(method, path)) throw new Error(`refusing a write outside the allowlist: ${method} ${path}`);
   /** @type {Record<string, string>} */
   const headers = {
     authorization: `Bearer ${client.token}`,
@@ -299,7 +314,7 @@ async function github(client, method, path, body) {
   appendFileSync(client.log, `${JSON.stringify(call)}\n`);
   if (response.status === 304 && cached) return { status: 304, body: cached.body };
   const parsed = text ? JSON.parse(text) : null;
-  if (!response.ok) throw new Error(`${method} ${path} -> ${response.status} ${text.slice(0, 300)}`);
+  if (!response.ok) throw new HttpError(method, path, response.status, text);
   const etag = response.headers.get('etag');
   if (method === 'GET' && etag) etags.set(path, { etag, body: parsed });
   return { status: response.status, body: parsed };
@@ -308,7 +323,7 @@ async function github(client, method, path, body) {
 /** @param {any} pull @returns {PullSnapshot} */
 function snapshot(pull) {
   return {
-    state: pull.merged ? 'merged' : pull.state === 'open' ? 'open' : 'closed',
+    state: githubState(pull.merged, pull.state),
     headSha: pull.head.sha,
     updatedAt: pull.updated_at,
   };
@@ -329,13 +344,13 @@ async function pollPull(client, repo, number) {
  * @returns {Promise<string>} the new head SHA
  */
 async function commitFile(client, repo, branch, path, content) {
-  /** @type {string | undefined} */
-  let sha;
-  try {
-    sha = (await github(client, 'GET', `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`)).body.sha;
-  } catch {
-    sha = undefined;
-  }
+  const sha = await github(client, 'GET', `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`).then(
+    (result) => /** @type {string} */ (result.body.sha),
+    (error) => {
+      if (error instanceof HttpError && error.status === 404) return undefined;
+      throw error;
+    },
+  );
   const result = await github(client, 'PUT', `/repos/${repo}/contents/${path}`, {
     message: `spike: update ${path}`,
     content: Buffer.from(content).toString('base64'),
@@ -354,7 +369,9 @@ async function lifecycle(client, repo, route) {
   try {
     await github(client, 'POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: baseSha });
   } catch (error) {
-    if (!String(error).includes('-> 422')) throw error;
+    const exists =
+      error instanceof HttpError && error.status === 422 && error.message.includes('Reference already exists');
+    if (!exists) throw error;
   }
   const path = `spike/${route.factory}-${route.task}.md`;
   const lines = Array.from({ length: 6 }, (_, i) => `line ${i + 1} of ${route.task}`);
@@ -393,11 +410,7 @@ async function lifecycle(client, repo, route) {
   ).body;
   console.log(`review ${review.id} ${review.state}`);
 
-  const checkRuns = (await github(client, 'GET', `/repos/${repo}/commits/${headSha}/check-runs`)).body;
-  const combined = (await github(client, 'GET', `/repos/${repo}/commits/${headSha}/status`)).body;
-  console.log(
-    `checks combined=${combined.state} statuses=${combined.statuses.map((/** @type {any} */ s) => `${s.context}:${s.state}`).join(',')} check_runs=${checkRuns.total_count}`,
-  );
+  await readChecks(client, repo, headSha);
 
   const final = await pollPull(client, repo, pull.number);
   console.log(`final github PR #${pull.number} state=${final.state} head=${final.headSha}`);
@@ -406,11 +419,13 @@ async function lifecycle(client, repo, route) {
 
 /** @param {Client} client @param {string} repo @param {string} ref */
 async function readChecks(client, repo, ref) {
-  const runs = (await github(client, 'GET', `/repos/${repo}/commits/${ref}/check-runs?per_page=100`)).body;
+  const [runs, combined] = await Promise.all([
+    github(client, 'GET', `/repos/${repo}/commits/${ref}/check-runs?per_page=100`).then((r) => r.body),
+    github(client, 'GET', `/repos/${repo}/commits/${ref}/status`).then((r) => r.body),
+  ]);
   for (const run of runs.check_runs) {
     console.log(`${run.name}\t${run.status}\t${run.conclusion ?? '-'}\t${githubConclusion(run.conclusion)}`);
   }
-  const combined = (await github(client, 'GET', `/repos/${repo}/commits/${ref}/status`)).body;
   for (const status of combined.statuses) console.log(`${status.context}\tstatus\t${status.state}`);
 }
 
@@ -426,41 +441,36 @@ async function route(client, repo) {
 
 /**
  * Starts a local listener and `gh webhook forward` to it. Resolves once the forwarder reports it is forwarding.
- * @param {{ repo: string, port: number, out: string, onEvent: (event: GitHostEvent, name: string, at: number) => void }} options
+ * @param {{ repo: string, port: number, out: string, onEvent: (event: GitHostEvent, at: number) => void }} options
  */
 async function startWebhooks({ repo, port, out, onEvent }) {
   const secret = randomBytes(16).toString('hex');
   const deliveries = join(out, 'deliveries');
   mkdirSync(deliveries, { recursive: true });
   let count = 0;
-  const server = createServer((request, response) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    request.on('data', (chunk) => chunks.push(chunk));
-    request.on('end', () => {
-      const at = Date.now();
-      const raw = Buffer.concat(chunks);
-      const name = String(request.headers['x-github-event'] ?? '');
-      const signed = signatureValid(
-        secret,
-        raw,
-        /** @type {string | undefined} */ (request.headers['x-hub-signature-256']),
-      );
-      response.writeHead(signed ? 202 : 401).end();
-      if (!signed) {
-        console.log(`webhook ${name} rejected: bad signature`);
-        return;
-      }
-      const body = JSON.parse(raw.toString('utf8'));
-      count += 1;
-      writeFileSync(
-        join(deliveries, `${String(count).padStart(3, '0')}-${name}.json`),
-        JSON.stringify({ host: 'github', event: name, delivery: request.headers['x-github-delivery'], body }, null, 2),
-      );
-      const event = parseEvent('github', name, body);
-      console.log(`webhook ${name} signature=ok ${event ? JSON.stringify(event) : 'ignored'}`);
-      if (event) onEvent(event, name, at);
-    });
+  const server = createServer(async (request, response) => {
+    const raw = await buffer(request);
+    const at = Date.now();
+    const name = String(request.headers['x-github-event'] ?? '');
+    const signed = signatureValid(
+      secret,
+      raw,
+      /** @type {string | undefined} */ (request.headers['x-hub-signature-256']),
+    );
+    response.writeHead(signed ? 202 : 401).end();
+    if (!signed) {
+      console.log(`webhook ${name} rejected: bad signature`);
+      return;
+    }
+    const body = JSON.parse(raw.toString('utf8'));
+    count += 1;
+    writeFileSync(
+      join(deliveries, `${String(count).padStart(3, '0')}-${name}.json`),
+      JSON.stringify({ host: 'github', event: name, delivery: request.headers['x-github-delivery'], body }, null, 2),
+    );
+    const event = parseEvent('github', name, body);
+    console.log(`webhook ${name} signature=ok ${event ? JSON.stringify(event) : 'ignored'}`);
+    if (event) onEvent(event, at);
   });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(undefined)));
   const events = 'push,pull_request,pull_request_review,pull_request_review_comment,status,check_run';
@@ -491,9 +501,6 @@ async function startWebhooks({ repo, port, out, onEvent }) {
     },
   };
 }
-
-/** @param {number} ms */
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * @param {Client} client
@@ -546,7 +553,7 @@ async function perf(client, repo, number, { changes, intervalSeconds, port, out 
     repo,
     port,
     out,
-    onEvent: (event, _name, at) => {
+    onEvent: (event, at) => {
       if (event.kind === 'push' && event.ref === `refs/heads/${branch}`) mark(event.headSha, 'webhook', at);
     },
   });
@@ -603,7 +610,6 @@ async function perf(client, repo, number, { changes, intervalSeconds, port, out 
     pollP95Ms: quantile(polled, 0.95),
     pollCalls,
     pollCallsPerPrPerHour: Math.round(pollCalls / hours),
-    webhookCallsPerPrPerHour: 0,
   };
   writeFileSync(join(out, 'perf.json'), JSON.stringify({ summary, results }, null, 2));
   console.log(JSON.stringify(summary));

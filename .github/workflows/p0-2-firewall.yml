@@ -23,8 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         engine: [docker, podman, krun]
-    env:
-      OUT: ${{ runner.temp }}/p0-2
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -32,6 +30,8 @@ jobs:
           node-version: "lts/*"
       - name: Record the engine facts
         run: |
+          echo "OUT=$RUNNER_TEMP/p0-2" >> "$GITHUB_ENV"
+          OUT="$RUNNER_TEMP/p0-2"
           mkdir -p "$OUT"
           {
             uname -a

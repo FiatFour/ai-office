@@ -489,12 +489,16 @@ async function startWebhooks({ repo, port, out, onEvent }) {
       `--url=http://127.0.0.1:${port}/`,
       `--secret=${secret}`,
     ],
-    { stdio: ['ignore', 'pipe', 'pipe'] },
+    { stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' },
   );
   await untilForwarding(forwarder);
+  const exited = new Promise((resolve) => forwarder.on('exit', resolve));
   return {
-    stop() {
-      forwarder.kill('SIGINT');
+    async stop() {
+      if (forwarder.pid && process.platform !== 'win32') process.kill(-forwarder.pid, 'SIGINT');
+      else forwarder.kill('SIGINT');
+      await exited;
+      server.closeAllConnections();
       server.close();
     },
   };
@@ -591,7 +595,7 @@ async function raceWebhookAgainstPoll(client, repo, number, { changes, intervalS
   }
   polling = false;
   await poller;
-  hooks.stop();
+  await hooks.stop();
   const hours = (Date.now() - pollStart) / 3_600_000;
   const webhook = results.map((r) => r.webhookMs).filter(Number.isFinite);
   const polled = results.map((r) => r.pollMs).filter(Number.isFinite);
@@ -667,7 +671,7 @@ async function main() {
     const hooks = await startWebhooks({ repo, port, out: values.out, onEvent: () => {} });
     console.log(`listening for ${values.seconds} s`);
     await sleep(Number(values.seconds) * 1000);
-    hooks.stop();
+    await hooks.stop();
   } else if (command === 'poll') {
     const until = values.until === undefined ? null : /** @type {ChangeState} */ (values.until);
     await poll(client, repo, Number(values.pr), {

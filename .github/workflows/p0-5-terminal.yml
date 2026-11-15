@@ -1,0 +1,28 @@
+name: p0-5-terminal
+
+on:
+  push:
+    branches: [aw/p0-5]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - run: docker version; docker info --format '{{.OSType}} {{.Architecture}}'
+        continue-on-error: true
+      - if: runner.os == 'Windows'
+        run: wsl --status; wsl -l -v; Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform | Select-Object State
+        continue-on-error: true
+      - if: runner.os == 'macOS'
+        run: sysctl kern.hv_support machdep.cpu.brand_string; uname -m; Get-Command colima, docker, podman, limactl -ErrorAction SilentlyContinue
+        continue-on-error: true

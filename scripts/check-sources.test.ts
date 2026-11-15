@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 const script = join(import.meta.dirname, 'check-sources.mjs');
 const repoRoot = join(import.meta.dirname, '..');
@@ -12,8 +12,11 @@ function runChecker(...files: string[]) {
   return { status: result.status, output: result.stdout + result.stderr };
 }
 
+const tempDir = mkdtempSync(join(tmpdir(), 'check-sources-'));
+afterAll(() => rmSync(tempDir, { recursive: true, force: true }));
+
 function writeTemp(name: string, text: string) {
-  const file = join(mkdtempSync(join(tmpdir(), 'check-sources-')), name);
+  const file = join(tempDir, name);
   writeFileSync(file, text);
   return file;
 }

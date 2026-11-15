@@ -77,17 +77,19 @@ export function parseTables(text, file) {
     if (!header.trim().startsWith('|') || !/^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] ?? '')) continue;
     const columns = splitRow(header);
     const kind = TABLE_KINDS.find((k) => k.columns.every((c) => columns.includes(c)));
-    let j = i + 2;
-    for (; j < lines.length && (lines[j] ?? '').trim().startsWith('|'); j++) {
-      if (!kind) continue;
-      const values = splitRow(lines[j] ?? '');
-      /** @type {Record<string, string>} */
-      const cells = Object.fromEntries(columns.map((c, n) => [c, values[n] ?? '']));
+    let end = i + 2;
+    while (end < lines.length && (lines[end] ?? '').trim().startsWith('|')) end++;
+    if (kind) {
       const rows = found.get(kind) ?? [];
-      rows.push({ file, line: j + 1, id: cells.Id || `line ${j + 1}`, cells });
-      found.set(kind, rows);
+      for (let j = i + 2; j < end; j++) {
+        const values = splitRow(lines[j] ?? '');
+        /** @type {Record<string, string>} */
+        const cells = Object.fromEntries(columns.map((c, n) => [c, values[n] ?? '']));
+        rows.push({ file, line: j + 1, id: cells.Id || `line ${j + 1}`, cells });
+      }
+      if (rows.length > 0) found.set(kind, rows);
     }
-    i = j - 1;
+    i = end - 1;
   }
   return found;
 }

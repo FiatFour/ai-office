@@ -1,0 +1,6 @@
+FROM debian:trixie-slim
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends tmux procps ncurses-bin \
+  && rm -rf /var/lib/apt/lists/*
+ENV LANG=C.UTF-8 TERM=xterm-256color
+CMD ["sh", "-c", "tmux new-session -d -s aw && exec sleep infinity"]

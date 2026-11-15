@@ -1,33 +1,66 @@
 name: p0-5-terminal
 
 on:
+  pull_request:
+    paths:
+      - spikes/P0-5/**
+      - .github/workflows/p0-5-terminal.yml
   push:
     branches: [aw/p0-5]
 
 permissions:
   contents: read
 
-jobs:
-  probe-wsl:
-    runs-on: windows-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - run: wsl --install -d Debian --no-launch --web-download
-        continue-on-error: true
-      - run: wsl -l -v; wsl -d Debian -u root -- uname -a; wsl -d Debian -u root -- cat /proc/version
-        continue-on-error: true
-      - run: wsl --set-version Debian 1; wsl -l -v; wsl -d Debian -u root -- uname -a
-        continue-on-error: true
+defaults:
+  run:
+    shell: pwsh
 
-  probe-colima:
-    runs-on: macos-15-intel
-    timeout-minutes: 25
+jobs:
+  lanes:
+    name: lanes (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            lane-args: ""
+          - os: windows-latest
+            label: windows
+            lane-args: --mount-style wsl
     steps:
-      - run: brew install colima docker
-      - run: colima start --cpu 2 --memory 2 2>&1 | tail -40
-        continue-on-error: true
-      - run: docker version; docker run --rm debian:trixie-slim uname -a
-        continue-on-error: true
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test spikes/P0-5
+      - if: runner.os == 'Linux'
+        run: pnpm --dir spikes/P0-5 exec playwright install --with-deps chromium
+      - if: runner.os == 'Windows'
+        run: pnpm --dir spikes/P0-5 exec playwright install chromium
+      - name: Run a Linux docker daemon in WSL 2 for docker.exe
+        if: runner.os == 'Windows'
+        run: |
+          docker info --format 'runner daemon OSType: {{.OSType}}'
+          wsl --install -d Debian --no-launch --web-download
+          wsl -d Debian -u root -- sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null'
+          Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'dockerd', '-H', 'unix:///var/run/docker.sock', '-H', 'tcp://0.0.0.0:2375', '--tls=false'
+          $env:DOCKER_HOST = 'tcp://127.0.0.1:2375'
+          $deadline = (Get-Date).AddMinutes(2)
+          while (-not (docker.exe version 2>$null)) {
+            if ((Get-Date) -gt $deadline) { throw 'the WSL docker daemon did not answer docker.exe within 2 minutes' }
+            Start-Sleep -Seconds 2
+          }
+          docker.exe info --format 'WSL daemon OSType: {{.OSType}}, kernel {{.KernelVersion}}'
+          "DOCKER_HOST=$env:DOCKER_HOST" >> $env:GITHUB_ENV
+      - run: node spikes/P0-5/lanes.mjs --label ${{ matrix.label }} --out "${{ runner.temp }}/p0-5" ${{ matrix.lane-args }}
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: p0-5-${{ matrix.label }}
+          path: ${{ runner.temp }}/p0-5

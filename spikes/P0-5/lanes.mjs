@@ -117,13 +117,22 @@ const LANES = [
       await page.setViewportSize({ width: Math.round(viewport.width * 0.6), height: viewport.height });
       await page.waitForFunction((cols) => /** @type {any} */ (window).aw.term.cols !== cols, Number(before));
       const browserCols = await page.evaluate(() => /** @type {any} */ (window).aw.term.cols);
-      await clearScreen(page);
-      const after = await runAndRead(page, 'tput cols');
+      const resizedAt = Date.now();
+      let after = before;
+      while (Number(after) !== browserCols && Date.now() - resizedAt < 5_000) {
+        await clearScreen(page);
+        after = await runAndRead(page, 'tput cols');
+      }
+      const settleMs = Date.now() - resizedAt;
+      const clients = await runAndRead(page, "tmux list-clients -F '#{client_width}' | paste -sd ' '");
       const file = await shot(page, 'resize');
       await page.setViewportSize(viewport);
       await page.waitForTimeout(500);
       const pass = Number(after) === browserCols && Number(after) !== Number(before);
-      return { pass, detail: `tput cols ${before} -> ${after}, xterm cols ${browserCols}; ${file}` };
+      return {
+        pass,
+        detail: `tput cols ${before} -> ${after} after ${settleMs} ms, xterm cols ${browserCols}, tmux client widths ${clients}; ${file}`,
+      };
     },
   },
   {

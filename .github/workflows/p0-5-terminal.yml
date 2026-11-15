@@ -8,21 +8,26 @@ permissions:
   contents: read
 
 jobs:
-  probe:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, macos-15-intel, windows-latest]
-    runs-on: ${{ matrix.os }}
+  probe-wsl:
+    runs-on: windows-latest
+    timeout-minutes: 20
     defaults:
       run:
         shell: pwsh
     steps:
-      - run: docker version; docker info --format '{{.OSType}} {{.Architecture}}'
+      - run: wsl --install -d Debian --no-launch --web-download
         continue-on-error: true
-      - if: runner.os == 'Windows'
-        run: wsl --status; wsl -l -v; Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform | Select-Object State
+      - run: wsl -l -v; wsl -d Debian -u root -- uname -a; wsl -d Debian -u root -- cat /proc/version
         continue-on-error: true
-      - if: runner.os == 'macOS'
-        run: sysctl kern.hv_support machdep.cpu.brand_string; uname -m; Get-Command colima, docker, podman, limactl -ErrorAction SilentlyContinue
+      - run: wsl --set-version Debian 1; wsl -l -v; wsl -d Debian -u root -- uname -a
+        continue-on-error: true
+
+  probe-colima:
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+    steps:
+      - run: brew install colima docker
+      - run: colima start --cpu 2 --memory 2 2>&1 | tail -40
+        continue-on-error: true
+      - run: docker version; docker run --rm debian:trixie-slim uname -a
         continue-on-error: true

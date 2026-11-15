@@ -67,6 +67,9 @@ async function runAndRead(page, cmd, marker = `m${tag()}`) {
   return line?.slice(marker.length + 1);
 }
 
+/** @type {Partial<Record<NodeJS.Platform, number>>} */
+const P95_BUDGET_MS = { linux: 50, win32: 100 };
+
 /** @param {number[]} samples */
 function summarize(samples) {
   const sorted = [...samples].sort((a, b) => a - b);
@@ -249,12 +252,12 @@ const LANES = [
         path.join(out, `perf-${label}.json`),
         JSON.stringify({ label, rendered, arrived, samples, parsed }, null, 2),
       );
-      const budget = process.platform === 'win32' ? 100 : 50;
+      const budget = P95_BUDGET_MS[process.platform];
       const fmt = (/** @type {ReturnType<typeof summarize>} */ s) =>
         `n=${s.n} p50=${s.p50.toFixed(1)} p95=${s.p95.toFixed(1)} max=${s.max.toFixed(1)} ms`;
       return {
-        pass: rendered.n === 200 && rendered.p95 <= budget,
-        detail: `key to render ${fmt(rendered)}; key to parsed echo ${fmt(arrived)}; budget p95<=${budget} ms`,
+        pass: rendered.n === 200 && (budget === undefined || rendered.p95 <= budget),
+        detail: `key to render ${fmt(rendered)}; key to parsed echo ${fmt(arrived)}; ${budget === undefined ? 'no budget for this host in the plan, recorded only' : `budget p95<=${budget} ms`}`,
       };
     },
   },

@@ -15,7 +15,7 @@ import { parseArgs } from 'node:util';
  * @typedef {Source & { kind: 'push', ref: string, headSha: string }} PushEvent
  * @typedef {Source & { kind: 'change', number: number, action: string, state: ChangeState, branch: string, headSha: string }} ChangeEvent
  * @typedef {Source & { kind: 'review', number: number, verdict: string }} ReviewEvent
- * @typedef {Source & { kind: 'review_comment', number: number, path: string, line: number | null }} ReviewCommentEvent
+ * @typedef {Source & { kind: 'review_comment', number: number, path: string | null, line: number | null }} ReviewCommentEvent
  * @typedef {Source & { kind: 'check', headSha: string, name: string, state: CheckState }} CheckEvent
  * @typedef {PushEvent | ChangeEvent | ReviewEvent | ReviewCommentEvent | CheckEvent} GitHostEvent
  * @typedef {{ factory: string, task: string }} Route
@@ -167,13 +167,14 @@ const PARSERS = {
       headSha: str(b, 'object_attributes.last_commit.id'),
     }),
     'Note Hook': (b) => {
-      const position = field(b, 'object_attributes.position');
+      const attributes = /** @type {Record<string, unknown>} */ (field(b, 'object_attributes'));
+      const position = attributes.position ?? null;
       return {
         host: 'gitlab',
         repo: str(b, 'project.path_with_namespace'),
         kind: 'review_comment',
         number: num(b, 'merge_request.iid'),
-        path: position === null ? '' : str(position, 'new_path'),
+        path: position === null ? null : str(position, 'new_path'),
         line: position === null ? null : nullableNum(position, 'new_line'),
       };
     },

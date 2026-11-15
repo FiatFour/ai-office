@@ -27,9 +27,9 @@ The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `
 | --- | --- | --- | --- |
 | 1. `echo hi` on Linux | `ubuntu-latest`, Docker | PASS | `linux-echo.png` in CI artifact `p0-5-linux` |
 | 2. `echo hi` in WSL2 | this machine, WSL2 kernel 6.18, Docker 29.1.3 | PASS | `wsl2-echo.png` |
-| 3. `echo hi` on macOS | `macos-latest` | not run | arm64, `kern.hv_support: 0`, no Docker binary (S-49, S-50, S-57). No VM can start, so no Linux engine can run. |
+| 3. `echo hi` on macOS | `macos-latest` | not run | arm64, `kern.hv_support: 0`, no Docker binary (S-49, S-50, S-58). No VM can start, so no Linux engine can run. |
 | 3. `echo hi` on macOS | `macos-15-intel`, Colima | PASS | `macos-intel-echo.png` in CI artifact `p0-5-macos-intel` |
-| 4. `echo hi` with `docker.exe` under PowerShell 7 | `windows-latest` | see PR | The runner's own daemon runs Windows containers only (S-58). The lane points `docker.exe` at a Linux daemon in WSL 2 Debian (S-59) and mounts with `--mount-style wsl`. |
+| 4. `echo hi` with `docker.exe` under PowerShell 7 | `windows-latest` | see PR | The runner's own daemon runs Windows containers only (S-59). The lane points `docker.exe` at a Linux daemon in WSL 2 Debian (S-60) and mounts with `--mount-style wsl`. |
 | 5. Resize | WSL2, Linux, macOS Intel | PASS | `tput cols` went 139 to 82 and matched xterm's cols |
 | 6. Drop and reconnect | WSL2, Linux, macOS Intel | PASS | Same shell PID, marker still in tmux scrollback and in the viewer |
 | 7. Two tabs | WSL2, Linux, macOS Intel | PASS | Both tabs show the line typed in one |
@@ -53,7 +53,7 @@ On Linux and WSL2 the round trip through the WebSocket, `docker exec` and tmux t
 
 ## Findings
 
-- node-pty 1.1.0 ships no `linux-x64` prebuild. It needs node-gyp, a C++ compiler and a pnpm build-script approval. The spike uses `@lydell/node-pty`, the same node-pty code with prebuilt binaries for six targets and no install script (S-56).
+- node-pty 1.1.0 ships no `linux-x64` prebuild. It needs node-gyp, a C++ compiler and a pnpm build-script approval. The spike uses `@lydell/node-pty`, the same node-pty code with prebuilt binaries for six targets and no install script (S-57).
 - The bind-mount source depends on where the daemon runs, not on the client. `docker.exe` talking to Docker Desktop takes `C:\...`. `docker.exe` talking to a daemon inside WSL needs `/mnt/c/...`. `mountSource` takes a `MountStyle` of `posix`, `windows` or `wsl`.
 - tmux needs a UTF-8 locale for Thai. The image sets `LANG=C.UTF-8` and the attach passes `-u`.
 - `docker stop` ends the `docker exec` client with code 137. The server forwards that as the exit frame, and the page stops reconnecting.

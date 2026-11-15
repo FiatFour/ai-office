@@ -5,6 +5,8 @@ on:
     paths:
       - spikes/P0-5/**
       - .github/workflows/p0-5-terminal.yml
+  push:
+    branches: [aw/p0-5]
 
 permissions:
   contents: read

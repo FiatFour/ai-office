@@ -118,7 +118,7 @@ Each entry quotes the spec line and the source line. A spike or a G1 decision re
 - Spec, `AGENT_WORKS_PROMPT.md` §9: "CI matrix `ubuntu-latest`, `macos-latest`, `windows-latest` (Docker on Windows runners; mark krun and Podman jobs as Linux-only where runners lack them)."
 - Source, S-49 and S-50: `macos-latest` is arm64 and its image lists no Docker. The runner docs say "Nested-virtualization is not supported due to the limitation of Apple's Virtualization Framework."
 - Effect. Colima and Docker Desktop need a VM, so the macOS terminal lane cannot run on `macos-latest`. P0-5 marks it as not runnable there, or the operator names a macOS machine. The Windows image has Docker 29.7.2 and WSL 2 (S-51), but whether it runs Linux containers is not stated, so P0-5 lane 4 records `docker version` OS type first.
-- Resolved by P0-5. The `macos-latest` lane stays not runnable (S-57). P0-5 runs the macOS lane on `macos-15-intel` with Colima instead. The Windows daemon is Windows-only (S-58), so the Windows lane points `docker.exe` at a Linux daemon inside WSL 2 (S-59).
+- Resolved by P0-5. The `macos-latest` lane stays not runnable (S-58). P0-5 runs the macOS lane on `macos-15-intel` with Colima instead. The Windows daemon is Windows-only (S-59), so the Windows lane points `docker.exe` at a Linux daemon inside WSL 2 (S-60).
 
 ### C-4. Hooks that report to HQ fail open by default
 

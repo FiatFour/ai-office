@@ -2,7 +2,7 @@
 
 This page lists every outside fact the Agent Works design depends on. Each row links the primary page that states the fact, the version of the tool or document checked, and the date it was checked. Phase 0 spikes cite rows by id, and a spike that disproves a row updates it in the same PR.
 
-`node scripts/check-sources.mjs` fails when a row has no link, no checked version, no check date, or no plan PR id, or when a spike from P0-2 to P0-5 has no row. `pnpm test` runs it.
+`node scripts/check-sources.mjs` fails when a row has no link, no checked version, no valid check date, or a plan PR id that is not a heading in `docs/plans/agent-works-plan.md`, or when a spike from P0-2 to P0-5 has no row. It also fails on a duplicate id, a row with the wrong number of cells, a table header it does not know, a table row outside a table, and a page with no source table. `pnpm test` runs it.
 
 Versions come from the page itself when it states one. When it does not, the version is the latest release of the tool on the check date, read from npm or the project's release list.
 
@@ -82,13 +82,15 @@ Versions come from the page itself when it states one. When it does not, the ver
 
 | Id | Area | Fact | Link | Version checked | Date checked | Used by |
 | --- | --- | --- | --- | --- | --- | --- |
-| S-48 | GitHub runners | `ubuntu-latest` is Ubuntu 24.04 with Docker 28.0.4, Podman 4.9.3 and PowerShell 7.6.10. | [Ubuntu 24.04 runner image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) | image 20261111.370.1 | 2026-11-16 | P0-2, P0-3, P2-3 |
+| S-48 | GitHub runners | This PR's `ubuntu-latest` jobs ran on image `ubuntu-26.04` 20261111.196.1, which is Ubuntu 26.04.1 with Docker 29.4.2, Podman 5.7.0 and PowerShell 7.6.10. | [Ubuntu 26.04 runner image](https://github.com/actions/runner-images/blob/ubuntu26/20261111.196/images/ubuntu/Ubuntu2604-Readme.md) | image 20261111.196.1 | 2026-11-16 | P0-2, P0-3, P2-3 |
 | S-49 | GitHub runners | `macos-latest` is macOS 26 on arm64. The image lists no Docker, Podman or Colima. | [runner-images README](https://github.com/actions/runner-images/blob/main/README.md) | macOS 26 arm64 image 20261102.0473.1 | 2026-11-16 | P0-5, P2-3 |
 | S-50 | GitHub runners | Nested virtualization is not supported on arm64 macOS runners, because of a limit in Apple's Virtualization Framework. | [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) | GitHub docs, checked live | 2026-11-16 | P0-5, P2-3 |
 | S-51 | GitHub runners | `windows-latest` is Windows Server 2025 with Docker 29.7.2 and WSL 2. | [Windows 2025 runner image](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-VS2026-Readme.md) | image 20261103.298.1 | 2026-11-16 | P0-5, P2-3 |
 | S-52 | GitHub runners | GitHub-hosted Linux runners support hardware acceleration for Android SDK tools. The page does not name KVM. | [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) | GitHub docs, checked live | 2026-11-16 | P0-2 |
 | S-53 | Node.js | Node.js 20 is end-of-life. Node.js 22, 24 and 26 are LTS, and 26 is the latest LTS. | [Node.js releases](https://nodejs.org/en/about/previous-releases) | Node.js 26 LTS | 2026-11-16 | P0-1, P0-3 |
 | S-54 | Terminal | node-pty uses the Windows ConPTY API and needs Windows 10 1809 or later. winpty support is removed. | [node-pty README](https://github.com/microsoft/node-pty/blob/main/README.md) | README on main, release v1.1.0 | 2026-11-16 | P0-5 |
+| S-55 | GitHub runners | The `ubuntu-latest` label moves from Ubuntu 24.04 to Ubuntu 26.04 over several weeks from October 19, 2026, with the migration planned to finish by November 19, 2026. Until then a job can land on either image. | [runner-images#14748](https://github.com/actions/runner-images/issues/14748) | issue open on the check date | 2026-11-16 | P0-2, P0-3, P2-3 |
+| S-56 | GitHub runners | The Ubuntu 24.04 image is Ubuntu 24.04.5 with Docker 28.0.4, Podman 4.9.3 and PowerShell 7.6.10. | [Ubuntu 24.04 runner image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) | image 20261111.370.1 | 2026-11-16 | P0-2, P2-3 |
 
 ## Spec assumptions the sources contradict
 
@@ -119,17 +121,27 @@ Each entry quotes the spec line and the source line. A spike or a G1 decision re
 - Source, S-04: for an HTTP hook, "Connection failure: non-blocking error", and on `PreToolUse` a timed-out hook "doesn't block the tool call, except for hooks whose failure blocks the action".
 - Effect. If HQ is down or slow, an HTTP PreToolUse hook lets the call through. P0-3 sets `onFailure: "block"` on every guard hook, or runs the guard as a local command hook that exits 2, and tests HQ-down as an attack path in P0-6.
 
-### C-5. Deny rules alone do not stop `grep -r`
-
-- Spec, `AGENT_WORKS_PROMPT.md` §4 layer 3 lists "Claude Code `permissions.deny` entries (`Read(**/.env)`, `Edit(**/.env)`, `Read(~/.ssh/**)`, …)", and layer 4 adds the hook for "`cat`, `cp`, `grep -r` over it, redirects".
-- Source, S-10: deny rules "don't apply to a command that reads files without naming them, such as `grep -r pattern .` run from the directory that holds the file, or to arbitrary subprocesses that read or write files indirectly".
-- Effect. This agrees with the spec's layering and is not a contradiction of layer 3. It does mean layer 4 is only as good as its parser, since a script that opens `.env` itself passes both layers. In `subagents-local`, which has no layer 2 mask, the threat model in P0-6 must rate this best effort.
-
-### C-6. Codex has no equivalent of Claude Code deny rules in `sandbox_mode`
+### C-5. Codex has no equivalent of Claude Code deny rules in `sandbox_mode`
 
 - Spec, `AGENT_WORKS_PROMPT.md` §4 layer 3: "and the equivalent Codex sandbox config".
 - Source, S-22 and S-24: `sandbox_mode` takes only `read-only`, `workspace-write` or `danger-full-access`. Read denial needs a beta permissions profile, "`"deny"` to deny reads for matching paths", which is not combined with `sandbox_mode`. S-25: on Linux the sandbox needs user namespaces through bubblewrap.
 - Effect. The Codex layer 3 is a beta permissions profile, not `sandbox_mode`. Inside a cage the bubblewrap sandbox may not start if the engine blocks user namespaces. P0-3 lane 7 records whether the profile denies `.env` inside a docker and a podman cage, and falls back to layer 2 masking when it does not.
+
+### C-6. `ubuntu-latest` is moving to Ubuntu 26.04
+
+- Plan, P2-3 lane 3: "Run the SandboxDriver suite on podman on `ubuntu-latest`." The first version of S-48 on this page said `ubuntu-latest` is Ubuntu 24.04 with Podman 4.9.3.
+- Source, S-55: "This change will be rolled out over a period of several weeks beginning October 19, 2026. We plan to complete the migration by November 19, 2026." S-48: every `ubuntu-latest` job of this PR ran on image `ubuntu-26.04` 20261111.196.1, with Docker 29.4.2 and Podman 5.7.0. The runner-images README linked from S-49 still lists `ubuntu-latest` next to Ubuntu 24.04, whose image is S-56.
+- Effect. Until the migration ends, one `ubuntu-latest` job can get Podman 4.9.3 and the next Podman 5.7.0. Each Linux lane prints `docker version` and `podman version` first. A lane whose result depends on the version pins `ubuntu-26.04`.
+
+## Spec assumptions the sources narrow
+
+These agree with the spec but limit how far a layer can be trusted.
+
+### N-1. Deny rules alone do not stop `grep -r`
+
+- Spec, `AGENT_WORKS_PROMPT.md` §4 layer 3 lists "Claude Code `permissions.deny` entries (`Read(**/.env)`, `Edit(**/.env)`, `Read(~/.ssh/**)`, …)", and layer 4 adds the hook for "`cat`, `cp`, `grep -r` over it, redirects".
+- Source, S-10: deny rules "don't apply to a command that reads files without naming them, such as `grep -r pattern .` run from the directory that holds the file, or to arbitrary subprocesses that read or write files indirectly".
+- Effect. This agrees with the spec's layering. It does mean layer 4 is only as good as its parser, since a script that opens `.env` itself passes both layers. In `subagents-local`, which has no layer 2 mask, the threat model in P0-6 must rate this best effort.
 
 ## Unverified spec assumptions
 
@@ -137,4 +149,4 @@ These assumptions have no primary source yet. The named spike tests each one dir
 
 - "krun: it ignores the image `USER`, so the entrypoint must drop to the `agent` user itself." The krun man page at crun 1.31 does not mention it. P0-3 tests it.
 - TSI networking under krun (S-46) proxies guest sockets "in the VMM's network context". The man page does not say whether that context is the container's internal network namespace. P0-2 lane 4 tests the bypass under krun.
-- `ubuntu-latest` ships Podman 4.9.3 (S-48), while the Podman docs checked are v6.2.0. P0-2 records which internal-network and DNS behavior the runner's Podman shows.
+- The runner's Podman behaves like the Podman docs checked. Those docs are v6.2.0, while `ubuntu-latest` gives Podman 5.7.0 on Ubuntu 26.04 (S-48) or Podman 4.9.3 on Ubuntu 24.04 (S-56) until the migration ends (C-6). P0-2 records `podman version` and the internal-network and DNS behavior the runner's Podman shows.

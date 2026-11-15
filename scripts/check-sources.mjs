@@ -1,59 +1,87 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { basename, join } from 'node:path';
 
-const DEFAULT_FILES = ['docs/sources.md', 'docs/prior-art.md'];
+const REPO_ROOT = join(import.meta.dirname, '..');
+const DEFAULT_FILES = ['docs/sources.md', 'docs/prior-art.md'].map((file) => join(REPO_ROOT, file));
+const PLAN = readFileSync(join(REPO_ROOT, 'docs/plans/agent-works-plan.md'), 'utf8');
+const PLAN_IDS = new Set(Array.from(PLAN.matchAll(/^## .*\((P\d-\d+)\)\s*$/gm), (match) => match[1]));
 const SPIKES = ['P0-2', 'P0-3', 'P0-4', 'P0-5'];
 const MIN_PRIOR_ART_PROJECTS = 3;
 
 /** @param {string} cell */
 const isLink = (cell) => /\]\(https?:\/\/[^)\s]+\)|^https?:\/\/\S+$/.test(cell);
 /** @param {string} cell */
-const isFilled = (cell) => !/^(|-|—|\?|n\/a|tbd|todo)$/i.test(cell);
+const isFilled = (cell) => !/^(|-|—|\?|n\/a|tbd|todo|unknown)$/i.test(cell);
 /** @param {string} cell */
-const isDate = (cell) => /^\d{4}-\d{2}-\d{2}$/.test(cell);
+const isDate = (cell) => {
+  const date = new Date(`${cell}T00:00:00Z`);
+  return /^\d{4}-\d{2}-\d{2}$/.test(cell) && !Number.isNaN(date.getTime()) && date.toISOString().startsWith(cell);
+};
 /** @param {string} cell */
-const isPlanId = (cell) => /\bP[0-2]-\d+\b|\bP3\b/.test(cell);
+const planIds = (cell) =>
+  cell
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
 
 /**
- * @typedef {{ file: string, line: number, id: string, cells: Record<string, string> }} Row
- * @typedef {{ column: string, test: (cell: string) => boolean, problem: string }} CellRule
- * @typedef {{ kind: string, columns: string[], cells: CellRule[], whole: (rows: Row[]) => string[] }} TableKind
+ * @param {(cell: string) => boolean} test
+ * @param {string} problem
+ * @returns {(cell: string) => string | undefined}
+ */
+const must = (test, problem) => (cell) => (test(cell) ? undefined : problem);
+
+/** @param {string} cell */
+const checkPlanIds = (cell) => {
+  const ids = planIds(cell);
+  if (ids.length === 0) return 'no plan PR id';
+  const unknown = ids.filter((id) => !PLAN_IDS.has(id));
+  return unknown.length > 0 ? `${unknown.join(', ')} is not a plan PR id` : undefined;
+};
+
+/**
+ * @typedef {Record<string, string>} Cells
+ * @typedef {{ name: string, columns: string[], cells: Record<string, (cell: string) => string | undefined>, whole: (rows: Cells[]) => string[] }} TableKind
  */
 
-/** @type {TableKind[]} */
-const TABLE_KINDS = [
-  {
-    kind: 'source',
-    columns: ['Id', 'Fact', 'Link', 'Version checked', 'Date checked', 'Used by'],
-    cells: [
-      { column: 'Fact', test: isFilled, problem: 'no fact' },
-      { column: 'Link', test: isLink, problem: 'no link' },
-      { column: 'Version checked', test: isFilled, problem: 'no checked version' },
-      { column: 'Date checked', test: isDate, problem: 'no check date (YYYY-MM-DD)' },
-      { column: 'Used by', test: isPlanId, problem: 'no plan PR id' },
-    ],
+/** @type {Record<string, TableKind>} */
+const TABLE_BY_FILE = {
+  'sources.md': {
+    name: 'source',
+    columns: ['Id', 'Area', 'Fact', 'Link', 'Version checked', 'Date checked', 'Used by'],
+    cells: {
+      Fact: must(isFilled, 'no fact'),
+      Link: must(isLink, 'no link'),
+      'Version checked': must(isFilled, 'no checked version'),
+      'Date checked': must(isDate, 'no check date (YYYY-MM-DD)'),
+      'Used by': checkPlanIds,
+    },
     whole: (rows) =>
-      SPIKES.filter((spike) => !rows.some((row) => row.cells['Used by']?.includes(spike))).map(
+      SPIKES.filter((spike) => !rows.some((row) => planIds(row['Used by'] ?? '').includes(spike))).map(
         (spike) => `no source row is used by ${spike}`,
       ),
   },
-  {
-    kind: 'prior-art',
-    columns: ['Id', 'Project', 'Failure mode', 'Issue', 'Handled by'],
-    cells: [
-      { column: 'Failure mode', test: isFilled, problem: 'no failure mode' },
-      { column: 'Issue', test: isLink, problem: 'no issue link' },
-      { column: 'Handled by', test: isPlanId, problem: 'no plan PR id' },
-    ],
+  'prior-art.md': {
+    name: 'prior-art',
+    columns: ['Id', 'Project', 'Failure mode', 'Issue', 'Handled by', 'How this design handles it'],
+    cells: {
+      'Failure mode': must(isFilled, 'no failure mode'),
+      Issue: must(isLink, 'no issue link'),
+      'Handled by': checkPlanIds,
+    },
     whole: (rows) => {
-      const projects = new Set(rows.map((row) => row.cells.Project));
+      const projects = new Set(rows.map((row) => row.Project));
       return projects.size >= MIN_PRIOR_ART_PROJECTS
         ? []
         : [`prior art covers ${projects.size} projects, needs ${MIN_PRIOR_ART_PROJECTS}`];
     },
   },
-];
+};
+
+/** @param {string | undefined} line */
+const isTableLine = (line) => line?.trim().startsWith('|') ?? false;
+/** @param {string | undefined} line */
+const isSeparator = (line) => /^\s*\|[\s:|-]+\|\s*$/.test(line ?? '');
 
 /** @param {string} line */
 const splitRow = (line) =>
@@ -66,68 +94,56 @@ const splitRow = (line) =>
 /**
  * @param {string} text
  * @param {string} file
- * @returns {Map<TableKind, Row[]>}
- */
-export function parseTables(text, file) {
-  const lines = text.split(/\r?\n/);
-  /** @type {Map<TableKind, Row[]>} */
-  const found = new Map();
-  for (let i = 0; i < lines.length - 1; i++) {
-    const header = lines[i] ?? '';
-    if (!header.trim().startsWith('|') || !/^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] ?? '')) continue;
-    const columns = splitRow(header);
-    const kind = TABLE_KINDS.find((k) => k.columns.every((c) => columns.includes(c)));
-    let end = i + 2;
-    while (end < lines.length && (lines[end] ?? '').trim().startsWith('|')) end++;
-    if (kind) {
-      const rows = found.get(kind) ?? [];
-      for (let j = i + 2; j < end; j++) {
-        const values = splitRow(lines[j] ?? '');
-        /** @type {Record<string, string>} */
-        const cells = Object.fromEntries(columns.map((c, n) => [c, values[n] ?? '']));
-        rows.push({ file, line: j + 1, id: cells.Id || `line ${j + 1}`, cells });
-      }
-      if (rows.length > 0) found.set(kind, rows);
-    }
-    i = end - 1;
-  }
-  return found;
-}
-
-/**
- * @param {string} text
- * @param {string} file
  * @returns {string[]}
  */
-export function checkMarkdown(text, file) {
-  const tables = parseTables(text, file);
-  if (tables.size === 0) return [`${file}: no source or prior-art table found`];
+function checkMarkdown(text, file) {
+  const kind = TABLE_BY_FILE[basename(file)];
+  if (!kind) return [`${file}:1: expected a file named ${Object.keys(TABLE_BY_FILE).join(' or ')}`];
+  const header = kind.columns.join(' | ');
+  const lines = text.split(/\r?\n/);
   const errors = [];
-  for (const [kind, rows] of tables) {
-    for (const row of rows) {
-      for (const rule of kind.cells) {
-        if (!rule.test(row.cells[rule.column] ?? '')) {
-          errors.push(`${file}:${row.line} row ${row.id}: ${rule.problem}`);
-        }
-      }
+  /** @type {Cells[]} */
+  const rows = [];
+  const ids = new Set();
+  let tables = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!isTableLine(lines[i])) continue;
+    if (!isSeparator(lines[i + 1])) {
+      errors.push(`${file}:${i + 1}: table row outside a table`);
+      continue;
     }
-    errors.push(...kind.whole(rows).map((problem) => `${file}: ${problem}`));
+    const known = splitRow(lines[i] ?? '').join(' | ') === header;
+    if (known) tables++;
+    else errors.push(`${file}:${i + 1}: unknown table header, expected | ${header} |`);
+    for (i += 2; isTableLine(lines[i]); i++) {
+      if (!known) continue;
+      const values = splitRow(lines[i] ?? '');
+      const where = `${file}:${i + 1} row ${values[0] || `line ${i + 1}`}`;
+      if (values.length !== kind.columns.length) {
+        errors.push(`${where}: has ${values.length} cells, header has ${kind.columns.length}`);
+        continue;
+      }
+      /** @type {Cells} */
+      const cells = Object.fromEntries(kind.columns.map((column, n) => [column, values[n] ?? '']));
+      if (ids.has(cells.Id)) errors.push(`${where}: duplicate id`);
+      ids.add(cells.Id);
+      for (const [column, check] of Object.entries(kind.cells)) {
+        const problem = check(cells[column] ?? '');
+        if (problem) errors.push(`${where}: ${problem}`);
+      }
+      rows.push(cells);
+    }
   }
-  return errors;
+  if (tables === 0) return [...errors, `${file}:1: no ${kind.name} table`];
+  return [...errors, ...kind.whole(rows).map((problem) => `${file}: ${problem}`)];
 }
 
-/** @param {string[]} files */
-function main(files) {
-  const errors = files.flatMap((file) => checkMarkdown(readFileSync(file, 'utf8'), file));
-  for (const error of errors) console.error(error);
-  if (errors.length > 0) {
-    console.error(`check-sources: ${errors.length} problem(s)`);
-    process.exit(1);
-  }
-  console.log(`check-sources: ${files.join(', ')} ok`);
+const args = process.argv.slice(2);
+const files = args.length > 0 ? args : DEFAULT_FILES;
+const errors = files.flatMap((file) => checkMarkdown(readFileSync(file, 'utf8'), file));
+for (const error of errors) console.error(error);
+if (errors.length > 0) {
+  console.error(`check-sources: ${errors.length} problem(s)`);
+  process.exit(1);
 }
-
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const args = process.argv.slice(2);
-  main(args.length > 0 ? args : DEFAULT_FILES);
-}
+console.log(`check-sources: ${files.join(', ')} ok`);

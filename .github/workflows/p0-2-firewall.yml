@@ -1,0 +1,60 @@
+name: p0-2-firewall
+
+on:
+  pull_request:
+    paths:
+      - spikes/P0-2/**
+      - .github/workflows/p0-2-firewall.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  firewall:
+    name: firewall (${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [docker, podman, krun]
+    env:
+      OUT: ${{ runner.temp }}/p0-2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+      - name: Record the engine facts
+        run: |
+          mkdir -p "$OUT"
+          {
+            uname -a
+            docker version --format 'docker {{.Server.Version}}'
+            podman version --format 'podman {{.Client.Version}}'
+            podman info --format 'network backend {{.Host.NetworkBackend}}, runtime {{.Host.OCIRuntime.Name}} {{.Host.OCIRuntime.Version}}, rootless {{.Host.Security.Rootless}}'
+            ls -l /dev/kvm || echo "no /dev/kvm"
+            apt-cache policy crun libkrun1 libkrun-dev 2>&1 | grep -E '^\S|Candidate' || true
+          } 2>&1 | tee "$OUT/${{ matrix.engine }}-engine-facts.txt"
+      - name: Open /dev/kvm to the runner user
+        if: matrix.engine == 'krun'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm || true
+      - name: Run the escape attempts
+        run: node spikes/P0-2/firewall.mjs --engine ${{ matrix.engine }} --perf 200 --out "$OUT" 2>&1 | tee "$OUT/${{ matrix.engine }}.txt"
+      - name: Clean up by label on both engines
+        if: always()
+        run: node spikes/P0-2/firewall.mjs --cleanup --engine docker,podman --out "$OUT" 2>&1 | tee "$OUT/${{ matrix.engine }}-cleanup.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: p0-2-${{ matrix.engine }}
+          path: ${{ runner.temp }}/p0-2

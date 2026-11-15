@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright';
-import { ENGINES } from './term-server.mjs';
+import { engineFile as resolveEngineFile } from './term-server.mjs';
 
 /**
  * @typedef {import('playwright').Page} Page
@@ -56,8 +56,16 @@ async function openTerminal(page, url) {
   await waitForState(page, 'open');
   await page.waitForTimeout(300);
   await page.locator('.xterm').click();
+  await clearScreen(page);
+}
+
+/** @param {Page} page */
+async function clearScreen(page) {
   await typeLine(page, 'clear');
-  await page.waitForTimeout(300);
+  await page.waitForFunction(() => {
+    const buffer = /** @type {any} */ (window).aw.term.buffer.active;
+    return buffer.cursorY === 0 && buffer.cursorX > 0 && buffer.baseY === buffer.viewportY;
+  });
 }
 
 /** @param {Page} page @param {string} cmd */
@@ -107,9 +115,9 @@ const LANES = [
       const before = await runAndRead(page, 'tput cols');
       const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
       await page.setViewportSize({ width: Math.round(viewport.width * 0.6), height: viewport.height });
-      await page.waitForTimeout(800);
+      await page.waitForFunction((cols) => /** @type {any} */ (window).aw.term.cols !== cols, Number(before));
       const browserCols = await page.evaluate(() => /** @type {any} */ (window).aw.term.cols);
-      await typeLine(page, 'clear');
+      await clearScreen(page);
       const after = await runAndRead(page, 'tput cols');
       const file = await shot(page, 'resize');
       await page.setViewportSize(viewport);
@@ -167,8 +175,7 @@ const LANES = [
     slug: 'thai',
     async run({ page, shot }) {
       const thai = 'สวัสดีครับ ภาษาไทย';
-      await typeLine(page, 'clear');
-      await page.waitForTimeout(300);
+      await clearScreen(page);
       await typeLine(page, `printf '%s\\n' '${thai}'`);
       const hit = await waitForLine(page, (l) => l === thai);
       const width = await runAndRead(page, `printf '%s' '${thai}' | wc -m`);
@@ -198,46 +205,35 @@ const LANES = [
   {
     slug: 'perf',
     async run({ page, out, label }) {
-      await typeLine(page, 'clear');
-      await page.waitForTimeout(500);
+      await clearScreen(page);
       await page.evaluate(() => {
         const w = /** @type {any} */ (window);
         const term = w.aw.term;
-        const probe = {
-          samples: /** @type {number[]} */ ([]),
-          parsed: /** @type {number[]} */ ([]),
-          t0: 0,
-          target: -1,
-          parsedTarget: -1,
-        };
         const position = () =>
           (term.buffer.active.baseY + term.buffer.active.cursorY) * term.cols + term.buffer.active.cursorX;
+        let t0 = 0;
+        const pending = { samples: -1, parsed: -1 };
+        const probe = { samples: /** @type {number[]} */ ([]), parsed: /** @type {number[]} */ ([]) };
         document.addEventListener(
           'keydown',
           () => {
-            probe.t0 = performance.now();
-            probe.target = position() + 1;
-            probe.parsedTarget = probe.target;
+            t0 = performance.now();
+            pending.samples = pending.parsed = position() + 1;
           },
           true,
         );
-        term.onWriteParsed(() => {
-          if (probe.parsedTarget >= 0 && position() >= probe.parsedTarget) {
-            probe.parsed.push(performance.now() - probe.t0);
-            probe.parsedTarget = -1;
+        const track = (/** @type {'samples' | 'parsed'} */ series) => () => {
+          if (pending[series] >= 0 && position() >= pending[series]) {
+            probe[series].push(performance.now() - t0);
+            pending[series] = -1;
           }
-        });
-        term.onRender(() => {
-          if (probe.target >= 0 && position() >= probe.target) {
-            probe.samples.push(performance.now() - probe.t0);
-            probe.target = -1;
-          }
-        });
+        };
+        term.onWriteParsed(track('parsed'));
+        term.onRender(track('samples'));
         w.awProbe = probe;
       });
-      const keys = 'abcdefghijklmnopqrstuvwxyz';
       for (let i = 0; i < 200; i++) {
-        await page.keyboard.press(keys[i % keys.length] ?? 'a');
+        await page.keyboard.press(String.fromCharCode(97 + (i % 26)));
         await page.waitForFunction((n) => /** @type {any} */ (window).awProbe.samples.length >= n, i + 1, {
           timeout: 5_000,
         });
@@ -323,9 +319,9 @@ async function main() {
       'mount-style': { type: 'string' },
     },
   });
-  const engine = values.engine === 'podman' ? 'podman' : 'docker';
+  const engine = /** @type {'docker' | 'podman'} */ (values.engine);
   const host = /** @type {'linux' | 'darwin' | 'win32'} */ (process.platform);
-  const engineFile = ENGINES[engine][host];
+  const engineFile = resolveEngineFile({ engine, host });
   const out = path.resolve(values.out);
   mkdirSync(out, { recursive: true });
   const only = values.only?.split(',');

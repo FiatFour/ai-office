@@ -35,6 +35,13 @@ const WINDOWS_DRIVE = /^([a-zA-Z]):[\\/]?(.*)$/;
  * @typedef {'posix' | 'windows' | 'wsl'} MountStyle
  */
 
+/** @param {Target} target */
+export function engineFile({ engine, host }) {
+  const file = ENGINES[engine]?.[host];
+  if (!file) throw new Error(`no ${engine} binary for ${host}; --engine must be docker or podman`);
+  return file;
+}
+
 /** @type {Record<HostOs, MountStyle>} */
 export const DEFAULT_MOUNT_STYLE = { linux: 'posix', darwin: 'posix', win32: 'windows' };
 
@@ -75,7 +82,7 @@ export function mountSource(hostPath, style) {
 export function runCommand(target, { cage, image, workspace, mountStyle = DEFAULT_MOUNT_STYLE[target.host] }) {
   const mount = `type=bind,source=${mountSource(workspace, mountStyle)},target=/work,readonly`;
   return {
-    file: ENGINES[target.engine][target.host],
+    file: engineFile(target),
     args: ['run', '-d', '--init', '--name', cage, '--label', LABEL, '--mount', mount, image],
   };
 }
@@ -87,7 +94,7 @@ export function runCommand(target, { cage, image, workspace, mountStyle = DEFAUL
  */
 export function attachCommand(target, { cage, session }) {
   return {
-    file: ENGINES[target.engine][target.host],
+    file: engineFile(target),
     args: ['exec', '-it', cage, 'tmux', '-u', 'attach-session', '-t', session],
   };
 }
@@ -111,10 +118,11 @@ export function parseClientMessage(raw) {
 
 /**
  * @param {Command} command
- * @param {{ quiet?: boolean }} [options]
+ * @param {{ quiet?: boolean, input?: string }} [options]
  */
-function run({ file, args }, { quiet = false } = {}) {
-  const result = spawnSync(file, args, { stdio: quiet ? 'pipe' : 'inherit', encoding: 'utf8' });
+function run({ file, args }, { quiet = false, input } = {}) {
+  const stdio = input === undefined ? (quiet ? 'pipe' : 'inherit') : ['pipe', 'inherit', 'inherit'];
+  const result = spawnSync(file, args, { stdio: /** @type {any} */ (stdio), input });
   return result.status === 0;
 }
 
@@ -137,20 +145,16 @@ async function main() {
       'mount-style': { type: 'string' },
     },
   });
-  const engine = values.engine;
-  if (engine !== 'docker' && engine !== 'podman') throw new Error(`--engine must be docker or podman, got ${engine}`);
-  const host = process.platform;
-  if (host !== 'linux' && host !== 'darwin' && host !== 'win32') throw new Error(`unsupported host ${host}`);
-  /** @type {Target} */
-  const target = { engine, host };
-  const file = ENGINES[engine][host];
+  const target = /** @type {Target} */ ({ engine: values.engine, host: process.platform });
+  const file = engineFile(target);
   const here = path.dirname(fileURLToPath(import.meta.url));
   const { cage, image } = values;
-  const mountStyle = /** @type {MountStyle} */ (values['mount-style'] ?? DEFAULT_MOUNT_STYLE[host]);
+  const mountStyle = /** @type {MountStyle} */ (values['mount-style'] ?? DEFAULT_MOUNT_STYLE[target.host]);
   if (!Object.hasOwn(MOUNT_SOURCE, mountStyle))
     throw new Error(`--mount-style must be posix, windows or wsl, got ${mountStyle}`);
 
-  if (!run({ file, args: ['build', '-t', image, '-f', path.join(here, 'Containerfile'), here] })) {
+  const containerfile = readFileSync(path.join(here, 'Containerfile'), 'utf8');
+  if (!run({ file, args: ['build', '-t', image, '-'] }, { input: containerfile })) {
     throw new Error(`${file} build failed`);
   }
   run({ file, args: ['rm', '-f', cage] }, { quiet: true });
@@ -175,10 +179,10 @@ async function main() {
 
   /** @type {Set<import('@lydell/node-pty').IPty>} */
   const ptys = new Set();
+  const attach = attachCommand(target, { cage, session: SESSION });
   const wss = new WebSocketServer({ server, path: '/term' });
   wss.on('connection', (ws, req) => {
     const query = new URL(req.url ?? '/', 'http://localhost').searchParams;
-    const attach = attachCommand(target, { cage, session: SESSION });
     const pty = spawnPty(attach.file, attach.args, {
       name: 'xterm-256color',
       cols: Number(query.get('cols')) || 80,

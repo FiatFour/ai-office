@@ -55,7 +55,7 @@
         };
         socket.onclose = (event) => {
           if (ws !== socket) return;
-          if (event.code === CLOSE_PTY_EXITED) return setState('closed', status.textContent.startsWith('closed') ? status.textContent : 'closed');
+          if (event.code === CLOSE_PTY_EXITED) return status.dataset.state !== 'closed' && setState('closed');
           setState('reconnecting');
           setTimeout(connect, 500);
         };

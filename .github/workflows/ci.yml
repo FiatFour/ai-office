@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  check:
+    name: check (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['20', 'lts/*']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: node --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  perf:
+    name: perf (cold and warm install, lint, typecheck, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+      - name: Time three cold and three warm runs
+        run: |
+          $budgetSeconds = 60
+          $root = Join-Path $env:RUNNER_TEMP 'perf'
+          $warmStore = Join-Path $root 'store-warm'
+          function Measure-Run([string] $store, [string] $label) {
+            $clone = Join-Path $root ([guid]::NewGuid())
+            git clone --quiet --no-hardlinks $env:GITHUB_WORKSPACE $clone
+            Push-Location $clone
+            $elapsed = Measure-Command {
+              $steps = @(
+                @('install', '--frozen-lockfile', '--store-dir', $store, '--cache-dir', "$store-cache"),
+                @('lint'), @('typecheck'), @('test')
+              )
+              foreach ($step in $steps) {
+                & pnpm @step | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw "pnpm $($step[0]) failed in the $label run" }
+              }
+            }
+            Pop-Location
+            Write-Host ("{0}: {1:N1} s" -f $label, $elapsed.TotalSeconds)
+            $elapsed.TotalSeconds
+          }
+          $cold = 1..3 | ForEach-Object { Measure-Run (Join-Path $root "store-cold-$_") "cold $_" }
+          Measure-Run $warmStore 'warm-up' | Out-Null
+          $warm = 1..3 | ForEach-Object { Measure-Run $warmStore "warm $_" }
+          $median = { param($values) ($values | Sort-Object)[1] }
+          $coldMedian = & $median $cold
+          $warmMedian = & $median $warm
+          "| run | median seconds |`n| --- | --- |`n| cold | {0:N1} |`n| warm | {1:N1} |" -f $coldMedian, $warmMedian |
+            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Write-Host ("cold median {0:N1} s, warm median {1:N1} s, budget {2} s" -f $coldMedian, $warmMedian, $budgetSeconds)
+          if ($warmMedian -gt $budgetSeconds) { throw "warm median $warmMedian s exceeds the $budgetSeconds s budget" }

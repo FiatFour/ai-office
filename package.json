@@ -1,0 +1,22 @@
+{
+  "name": "agent-works",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "biome check .",
+    "typecheck": "tsc -p tsconfig.base.json",
+    "test": "vitest run",
+    "check:sources": "node scripts/check-sources.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@types/node": "20.19.43",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12"
+  }
+}

@@ -30,6 +30,9 @@ jobs:
           - os: windows-latest
             label: windows
             lane-args: --mount-style wsl
+          - os: macos-15-intel
+            label: macos-intel
+            lane-args: ""
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -41,19 +44,30 @@ jobs:
       - run: pnpm test spikes/P0-5
       - if: runner.os == 'Linux'
         run: pnpm --dir spikes/P0-5 exec playwright install --with-deps chromium
-      - if: runner.os == 'Windows'
+      - if: runner.os != 'Linux'
         run: pnpm --dir spikes/P0-5 exec playwright install chromium
+      - name: Start Docker in a Colima VM
+        if: runner.os == 'macOS'
+        run: |
+          brew install colima docker
+          colima start --cpu 2 --memory 2
+          docker info --format 'Colima daemon OSType: {{.OSType}}, kernel {{.KernelVersion}}'
       - name: Run a Linux docker daemon in WSL 2 for docker.exe
         if: runner.os == 'Windows'
         run: |
           docker info --format 'runner daemon OSType: {{.OSType}}'
           wsl --install -d Debian --no-launch --web-download
           wsl -d Debian -u root -- sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null'
-          Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'dockerd', '-H', 'unix:///var/run/docker.sock', '-H', 'tcp://0.0.0.0:2375', '--tls=false'
+          Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'sh', '-c', '"dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2375 --tls=false > /var/log/dockerd.log 2>&1"'
           $env:DOCKER_HOST = 'tcp://127.0.0.1:2375'
           $deadline = (Get-Date).AddMinutes(2)
-          while (-not (docker.exe version 2>$null)) {
-            if ((Get-Date) -gt $deadline) { throw 'the WSL docker daemon did not answer docker.exe within 2 minutes' }
+          while ($true) {
+            docker.exe info *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            if ((Get-Date) -gt $deadline) {
+              wsl -d Debian -u root -- sh -c 'tail -40 /var/log/dockerd.log; ss -ltn'
+              throw 'the WSL docker daemon did not answer docker.exe within 2 minutes'
+            }
             Start-Sleep -Seconds 2
           }
           docker.exe info --format 'WSL daemon OSType: {{.OSType}}, kernel {{.KernelVersion}}'

@@ -36,6 +36,7 @@ const expected: Record<string, object> = {
   'github/status.json': { kind: 'check', name: 'agent-works/spike', state: 'success' },
   'github/check_run-completed.json': { kind: 'check', repo: 'FiatFour/ai-office', state: 'success' },
   'github/pull_request-opened.json': { kind: 'change', action: 'opened', state: 'open', branch: 'aw/alpha/t1' },
+  'github/pull_request-closed.json': { kind: 'change', action: 'closed', state: 'closed', branch: 'aw/beta/t2' },
   'github/pull_request_review.json': { kind: 'review', number: 1, verdict: 'commented' },
   'github/pull_request_review_comment.json': { kind: 'review_comment', path: 'spike/alpha-t1.md', line: 2 },
   'gitlab/push.json': { kind: 'push', host: 'gitlab' },
@@ -68,9 +69,7 @@ describe('parseEvent', () => {
   });
 
   it('reads a closed pull request with merged true as merged', () => {
-    const { body } = load('github/pull_request-opened.json');
-    edit(body, 'action', 'closed');
-    edit(body, 'pull_request.state', 'closed');
+    const { body } = load('github/pull_request-closed.json');
     edit(body, 'pull_request.merged', true);
     expect(parseEvent('github', 'pull_request', body)).toMatchObject({ state: 'merged', action: 'closed' });
   });

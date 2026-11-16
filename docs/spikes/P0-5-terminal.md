@@ -13,13 +13,15 @@ node spikes/P0-5/lanes.mjs --label <host> --out /tmp/swarm-P0-5/owner
 
 `lanes.mjs` builds the cage image from `Containerfile` (Debian trixie slim with tmux), starts `term-server.mjs`, drives each lane through Playwright, saves `<slug>.png` and `lanes-<label>.txt`, and removes the cage. To view the terminal by hand, run `node spikes/P0-5/term-server.mjs --engine docker` and open `http://127.0.0.1:7681/`.
 
-The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `ubuntu-latest`, `windows-latest` and `macos-15-intel`, and uploads the screenshots as artifacts. It also runs on pushes to `aw/p0-5`, because GitHub does not run `pull_request` workflows while the PR conflicts with its base. The CI evidence below is from [run 43754183740](https://github.com/FiatFour/ai-office/actions/runs/43754183740) at 4e31fa5 and [run 43787563689](https://github.com/FiatFour/ai-office/actions/runs/43787563689) at 7ed49bc.
+The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `ubuntu-latest`, `windows-latest` and `macos-15-intel`, and uploads the screenshots as artifacts. The CI evidence below is from [run 43754183740](https://github.com/FiatFour/ai-office/actions/runs/43754183740) at 4e31fa5 and [run 43787563689](https://github.com/FiatFour/ai-office/actions/runs/43787563689) at 7ed49bc.
 
 ## Wire shape
 
 - Client to server, JSON text frames: `{ type: 'input', data }` and `{ type: 'resize', cols, rows }`. The server drops any other frame.
 - Server to client: `{ type: 'output', data }` and `{ type: 'exit', code }`, then close code 4000. The page shows a closed state on 4000 and reconnects on any other close.
 - Closing the socket kills the pty. The tmux session lives on in the cage, so a reconnect attaches to the same shell.
+- The server answers only requests whose `Host` is `127.0.0.1:<port>` or `localhost:<port>`, with 403 for any other, so a rebound DNS name cannot reach it. It opens a socket only when the `Origin` is `http://` plus one of those hosts, with 401 for any other origin or none, so another website open in the same browser cannot type into the cage.
+- The initial `cols` and `rows` from the socket URL are clamped to 1..1000, the same range a `resize` frame must fall in.
 
 ## Lanes
 
@@ -27,7 +29,7 @@ The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `
 | --- | --- | --- | --- |
 | 1. `echo hi` on Linux | `ubuntu-latest`, Docker | PASS | `linux-echo.png` in CI artifact `p0-5-linux` |
 | 2. `echo hi` in WSL2 | this machine, WSL2 kernel 6.18, Docker 29.1.3 | PASS | `wsl2-echo.png` |
-| 3. `echo hi` on macOS | `macos-latest` | not run | arm64, `kern.hv_support: 0`, no Docker binary (S-49, S-50, S-58). No VM can start, so no Linux engine can run. |
+| 3. `echo hi` on macOS | `macos-latest` | not run | arm64, `kern.hv_support: 0`, no Docker binary (S-49, S-50, S-58). With no engine installed and no hypervisor reported, the lane has nothing to run against. Starting a VM there was not tried. |
 | 3. `echo hi` on macOS | `macos-15-intel`, Colima | PASS | `macos-intel-echo.png` in CI artifact `p0-5-macos-intel` |
 | 4. `echo hi` with `docker.exe` under PowerShell 7 | `windows-latest`, ConPTY | PASS | `windows-echo.png` in CI artifact `p0-5-windows`. The runner's own daemon runs Windows containers only (S-59), so the lane points `docker.exe` at a Linux daemon in WSL 2 Debian (S-60) and mounts with `--mount-style wsl`. |
 | 5. Resize | WSL2, Linux, macOS Intel, Windows | PASS | `tput cols` matched xterm's cols after 165 to 175 ms on Linux, 299 to 539 ms on macOS Intel and 184 to 423 ms on Windows, over two CI runs. An earlier Windows run read `tput cols` only once, right after the resize, and saw the old width, so the lane now polls for up to 5 s. |
@@ -35,7 +37,7 @@ The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `
 | 7. Two tabs | WSL2, Linux, macOS Intel, Windows | PASS | Both tabs show the line typed in one |
 | 8. Thai | WSL2, Linux, macOS Intel, Windows | PASS | `สวัสดีครับ ภาษาไทย` comes back as the same 18 code points, `thai.png` |
 | 9. Ctrl-C on `sleep 100` | WSL2, Linux, macOS Intel, Windows | PASS | Prompt back in 124 to 286 ms |
-| 10. Stop the cage | WSL2, Linux, macOS Intel, Windows | PASS | Page shows "closed, terminal exited with code 137". No `exec -it aw-p0-5` process is left on the host. |
+| 10. Stop the cage | WSL2, Linux, macOS Intel, Windows | PASS | Page shows "closed, terminal exited with code 137". Within 10 s no `exec -it aw-p0-5` process is left on the host, and on Windows no `conhost.exe` or `OpenConsole.exe` is left under the server. |
 
 A `mount` lane also checks that the read-only bind mount shows `/work/Containerfile` in the cage, so the path conversion runs live as well as in `argv.test.ts`.
 
@@ -59,6 +61,7 @@ On Linux, WSL2 and Windows the round trip through the WebSocket, `docker exec` a
 - tmux needs a UTF-8 locale for Thai. The image sets `LANG=C.UTF-8` and the attach passes `-u`.
 - On Windows and on Colima a resize can reach the cage up to about 550 ms after xterm sees it, against under 200 ms on Linux. A guess, not measured: `docker.exe` has no SIGWINCH on Windows and polls the console size. HQ should not assume a resize is applied when the WebSocket frame is sent.
 - `docker stop` ends the `docker exec` client with code 137. The server forwards that as the exit frame, and the page stops reconnecting.
+- On Windows node-pty closes the pseudo-console only in `kill()`. When the child exits on its own it destroys the pipe but leaves `conhost.exe --headless` running. Earlier Windows runs left one under the server after every cage stop, so the server now calls `kill()` on exit there.
 
 ## Local setup notes
 

@@ -18,6 +18,7 @@ import { parseArgs } from 'node:util';
 export const LABEL = 'agent-works.project=P0-5';
 export const SESSION = 'aw';
 export const CLOSE_PTY_EXITED = 4000;
+const MAX_SIZE = 1000;
 
 /** @type {Record<Engine, Record<HostOs, string>>} */
 export const ENGINES = {
@@ -111,10 +112,16 @@ export function parseClientMessage(raw) {
     return undefined;
   }
   if (message?.type === 'input' && typeof message.data === 'string') return message;
-  const isSize = (/** @type {unknown} */ n) => Number.isInteger(n) && Number(n) > 0 && Number(n) <= 1000;
+  const isSize = (/** @type {unknown} */ n) => Number.isInteger(n) && Number(n) >= 1 && Number(n) <= MAX_SIZE;
   if (message?.type === 'resize' && isSize(message.cols) && isSize(message.rows)) return message;
   return undefined;
 }
+
+/** @param {string | null} raw @param {number} fallback */
+const initialSize = (raw, fallback) => {
+  const n = Number(raw ?? Number.NaN);
+  return Number.isInteger(n) ? Math.min(Math.max(n, 1), MAX_SIZE) : fallback;
+};
 
 /**
  * @param {Command} command
@@ -133,6 +140,71 @@ async function waitFor(probe, timeoutMs = 30_000) {
     if (Date.now() > deadline) throw new Error('timed out waiting for the cage tmux session');
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
+}
+
+/**
+ * @param {{ port: number, attach: Command, assets: Record<string, [string, string]> }} options
+ * @returns {Promise<{ url: string, close: () => void }>}
+ */
+export async function serveTerminal({ port, attach, assets }) {
+  const { spawn: spawnPty } = await import('@lydell/node-pty');
+  const { WebSocketServer } = await import('ws');
+  const ownHosts = () => {
+    const { port: bound } = /** @type {import('node:net').AddressInfo} */ (server.address());
+    return [`127.0.0.1:${bound}`, `localhost:${bound}`];
+  };
+  const isOwnHost = (/** @type {string | undefined} */ host) => ownHosts().includes(host ?? '');
+  const server = createServer((req, res) => {
+    if (!isOwnHost(req.headers.host)) return res.writeHead(403).end();
+    const asset = assets[new URL(req.url ?? '/', 'http://localhost').pathname];
+    if (!asset) return res.writeHead(404).end();
+    res.writeHead(200, { 'content-type': asset[1] }).end(readFileSync(asset[0]));
+  });
+
+  /** @type {Set<import('@lydell/node-pty').IPty>} */
+  const ptys = new Set();
+  const wss = new WebSocketServer({
+    server,
+    path: '/term',
+    verifyClient: (/** @type {{ origin: string, req: import('node:http').IncomingMessage }} */ { origin, req }) =>
+      isOwnHost(req.headers.host) && ownHosts().some((host) => origin === `http://${host}`),
+  });
+  wss.on('connection', (ws, req) => {
+    const query = new URL(req.url ?? '/', 'http://localhost').searchParams;
+    const pty = spawnPty(attach.file, attach.args, {
+      name: 'xterm-256color',
+      cols: initialSize(query.get('cols'), 80),
+      rows: initialSize(query.get('rows'), 24),
+      env: process.env,
+    });
+    ptys.add(pty);
+    const send = (/** @type {ServerMessage} */ message) => ws.send(JSON.stringify(message));
+    pty.onData((data) => send({ type: 'output', data }));
+    pty.onExit(({ exitCode }) => {
+      ptys.delete(pty);
+      if (ws.readyState !== ws.OPEN) return;
+      send({ type: 'exit', code: exitCode });
+      ws.close(CLOSE_PTY_EXITED, 'pty exited');
+    });
+    ws.on('message', (raw) => {
+      const message = parseClientMessage(raw.toString());
+      if (message?.type === 'input') pty.write(message.data);
+      if (message?.type === 'resize') pty.resize(message.cols, message.rows);
+    });
+    ws.on('close', () => {
+      if (ptys.delete(pty)) pty.kill();
+    });
+  });
+
+  await new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(undefined)));
+  return {
+    url: `http://${ownHosts()[0]}/`,
+    close: () => {
+      for (const pty of ptys) pty.kill();
+      wss.close();
+      server.close();
+    },
+  };
 }
 
 async function main() {
@@ -161,64 +233,25 @@ async function main() {
   if (!run(runCommand(target, { cage, image, workspace: here, mountStyle }))) throw new Error(`${file} run failed`);
   await waitFor(() => run({ file, args: ['exec', cage, 'tmux', 'has-session', '-t', SESSION] }, { quiet: true }));
 
-  const { spawn: spawnPty } = await import('@lydell/node-pty');
-  const { WebSocketServer } = await import('ws');
   const require = createRequire(import.meta.url);
-  /** @type {Record<string, [string, string]>} */
-  const assets = {
-    '/': [path.join(here, 'index.html'), 'text/html; charset=utf-8'],
-    '/vendor/xterm.mjs': [require.resolve('@xterm/xterm/lib/xterm.mjs'), 'text/javascript'],
-    '/vendor/xterm.css': [require.resolve('@xterm/xterm/css/xterm.css'), 'text/css'],
-    '/vendor/addon-fit.mjs': [require.resolve('@xterm/addon-fit/lib/addon-fit.mjs'), 'text/javascript'],
-  };
-  const server = createServer((req, res) => {
-    const asset = assets[new URL(req.url ?? '/', 'http://localhost').pathname];
-    if (!asset) return res.writeHead(404).end();
-    res.writeHead(200, { 'content-type': asset[1] }).end(readFileSync(asset[0]));
+  const { url, close } = await serveTerminal({
+    port: Number(values.port),
+    attach: attachCommand(target, { cage, session: SESSION }),
+    assets: {
+      '/': [path.join(here, 'index.html'), 'text/html; charset=utf-8'],
+      '/vendor/xterm.mjs': [require.resolve('@xterm/xterm/lib/xterm.mjs'), 'text/javascript'],
+      '/vendor/xterm.css': [require.resolve('@xterm/xterm/css/xterm.css'), 'text/css'],
+      '/vendor/addon-fit.mjs': [require.resolve('@xterm/addon-fit/lib/addon-fit.mjs'), 'text/javascript'],
+    },
   });
-
-  /** @type {Set<import('@lydell/node-pty').IPty>} */
-  const ptys = new Set();
-  const attach = attachCommand(target, { cage, session: SESSION });
-  const wss = new WebSocketServer({ server, path: '/term' });
-  wss.on('connection', (ws, req) => {
-    const query = new URL(req.url ?? '/', 'http://localhost').searchParams;
-    const pty = spawnPty(attach.file, attach.args, {
-      name: 'xterm-256color',
-      cols: Number(query.get('cols')) || 80,
-      rows: Number(query.get('rows')) || 24,
-      env: process.env,
-    });
-    ptys.add(pty);
-    const send = (/** @type {ServerMessage} */ message) => ws.send(JSON.stringify(message));
-    pty.onData((data) => send({ type: 'output', data }));
-    pty.onExit(({ exitCode }) => {
-      ptys.delete(pty);
-      if (ws.readyState !== ws.OPEN) return;
-      send({ type: 'exit', code: exitCode });
-      ws.close(CLOSE_PTY_EXITED, 'pty exited');
-    });
-    ws.on('message', (raw) => {
-      const message = parseClientMessage(raw.toString());
-      if (message?.type === 'input') pty.write(message.data);
-      if (message?.type === 'resize') pty.resize(message.cols, message.rows);
-    });
-    ws.on('close', () => {
-      if (ptys.delete(pty)) pty.kill();
-    });
-  });
-
   const shutdown = () => {
-    for (const pty of ptys) pty.kill();
+    close();
     run({ file, args: ['rm', '-f', cage] }, { quiet: true });
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-  const port = Number(values.port);
-  server.listen(port, '127.0.0.1', () =>
-    console.log(`listening http://127.0.0.1:${port}/ cage=${cage} engine=${file}`),
-  );
+  console.log(`listening ${url} cage=${cage} engine=${file}`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) await main();

@@ -10,7 +10,8 @@ import { engineFile as resolveEngineFile } from './term-server.mjs';
 /**
  * @typedef {import('playwright').Page} Page
  * @typedef {{ pass: boolean, detail: string }} LaneResult
- * @typedef {{ page: Page, url: string, out: string, label: string, engineFile: string, cage: string, shot: (page: Page, slug: string) => Promise<string> }} LaneContext
+ * @typedef {{ page: Page, url: string, out: string, label: string, engineFile: string, cage: string, serverPid: number, shot: (page: Page, slug: string) => Promise<string> }} LaneContext
+ * @typedef {{ pid: number, ppid: number, args: string }} HostProcess
  * @typedef {{ slug: string, run: (ctx: LaneContext) => Promise<LaneResult> }} Lane
  */
 
@@ -268,36 +269,52 @@ const LANES = [
   },
   {
     slug: 'cage-stop',
-    async run({ page, out, engineFile, cage, shot }) {
+    async run({ page, out, engineFile, cage, serverPid, shot }) {
       spawnSync(engineFile, ['stop', '-t', '1', cage], { stdio: 'ignore' });
       await waitForState(page, 'closed', 20_000);
-      await page.waitForTimeout(1000);
       const file = await shot(page, 'cage-stop');
-      const listing =
-        process.platform === 'win32'
-          ? spawnSync(
-              'pwsh',
-              [
-                '-NoProfile',
-                '-Command',
-                'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }',
-              ],
-              { encoding: 'utf8' },
-            ).stdout
-          : spawnSync('ps', ['-eo', 'pid,args'], { encoding: 'utf8' }).stdout;
-      const orphans = listing.split(/\r?\n/).filter((l) => l.includes(`exec -it ${cage}`));
+      /** @param {HostProcess} p */
+      const isOrphan = (p) =>
+        p.args.includes(`exec -it ${cage}`) || (p.ppid === serverPid && /conhost\.exe|openconsole\.exe/i.test(p.args));
+      const deadline = Date.now() + 10_000;
+      let processes = listProcesses();
+      while (processes.some(isOrphan) && Date.now() < deadline) {
+        await page.waitForTimeout(500);
+        processes = listProcesses();
+      }
+      const orphans = processes.filter(isOrphan).map((p) => `${p.pid} ${p.ppid} ${p.args}`);
       writeFileSync(
         path.join(out, 'cage-stop.txt'),
-        `${listing}\n\norphans matching "exec -it ${cage}":\n${orphans.join('\n')}\n`,
+        `pid ppid args\n${processes.map((p) => `${p.pid} ${p.ppid} ${p.args}`).join('\n')}\n\norphans (exec -it ${cage}, or conhost/OpenConsole under server pid ${serverPid}):\n${orphans.join('\n')}\n`,
       );
       const status = await page.locator('#status').textContent();
       return {
         pass: orphans.length === 0,
-        detail: `page status "${status}"; ${orphans.length} orphan exec processes; ${file}`,
+        detail: `page status "${status}"; ${orphans.length} orphan exec or console host processes; ${file}`,
       };
     },
   },
 ];
+
+/** @returns {HostProcess[]} */
+function listProcesses() {
+  const listing =
+    process.platform === 'win32'
+      ? spawnSync(
+          'pwsh',
+          [
+            '-NoProfile',
+            '-Command',
+            'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CommandLine)" }',
+          ],
+          { encoding: 'utf8' },
+        ).stdout
+      : spawnSync('ps', ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8' }).stdout;
+  return listing.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(line);
+    return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), args: match[3] ?? '' }] : [];
+  });
+}
 
 /** @param {string} engineFile @param {string[]} args */
 function startServer(engineFile, args) {
@@ -357,7 +374,7 @@ async function main() {
     };
     for (const lane of lanes) {
       const result = await lane
-        .run({ page, url, out, label: values.label, engineFile, cage: values.cage, shot })
+        .run({ page, url, out, label: values.label, engineFile, cage: values.cage, serverPid: server.pid ?? -1, shot })
         .catch((/** @type {Error} */ error) => ({ pass: false, detail: `threw ${error.message}` }));
       if (!result.pass) failed++;
       const line = `${result.pass ? 'PASS' : 'FAIL'} ${values.label} ${lane.slug}: ${result.detail}`;

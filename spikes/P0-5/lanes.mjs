@@ -82,7 +82,7 @@ const P95_BUDGET_MS = { linux: 50, win32: 100 };
 function summarize(samples) {
   const sorted = [...samples].sort((a, b) => a - b);
   const at = (/** @type {number} */ q) =>
-    sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)] ?? Number.NaN;
+    sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))] ?? Number.NaN;
   return { n: samples.length, min: at(0), p50: at(0.5), p95: at(0.95), max: at(1) };
 }
 

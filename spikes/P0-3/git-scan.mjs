@@ -89,6 +89,7 @@ const TOP_FILES = new Set([
   'BISECT_EXPECTED_REV',
   'BISECT_ANCESTORS_OK',
   'BISECT_NAMES',
+  'MERGE_RR',
 ]);
 const TOP_FILE_PATTERNS = [/^sharedindex\.[0-9a-f]+$/];
 const TOP_DIRS = new Set([
@@ -105,12 +106,14 @@ const TOP_DIRS = new Set([
   'rebase-merge',
   'rebase-apply',
   'lost-found',
+  'lfs',
+  'fsmonitor--daemon',
 ]);
 const REFS_DIRS = new Set(['heads', 'tags', 'remotes', 'notes', 'replace', 'original', 'bisect', 'rewritten']);
 const INFO_FILES = new Set(['exclude', 'refs', 'attributes', 'sparse-checkout', 'grafts']);
 const OBJECT_INFO_FILES = new Set(['packs', 'commit-graph', 'alternates', 'http-alternates']);
 const OBJECT_INFO_GRAPH_FILE = /^(commit-graph-chain|graph-[0-9a-f]+\.graph|commit-graph-chain\.lock)$/;
-const MIDX_FILE = /^multi-pack-index(-[0-9a-f]+\.(midx|rev)|-chain)?$/;
+const MIDX_FILE = /^multi-pack-index(-[0-9a-f]+\.(midx|rev|bitmap)|-chain)?$/;
 
 /** @param {import('node:fs').Dirent[]} entries @param {string} name @param {'file' | 'dir'} kind */
 const has = (entries, name, kind) =>

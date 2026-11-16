@@ -199,7 +199,7 @@ const decodeEscape = (text, index) => {
 /**
  * Splits a shell command into commands of words with a small, documented grammar. Quotes and
  * backslashes are removed, `$'..'` is decoded like bash, `;&|()` backticks and newlines end a command,
- * and whitespace, `<`, `>` and `=` end a word.
+ * and whitespace, `<`, `>` and `=` end a word, except that `NAME=value` stays one word.
  * @param {string} command
  * @returns {string[][]}
  */
@@ -212,9 +212,11 @@ export const parseCommands = (command) => {
   /** @type {string | null} */
   let quote = null;
   let ansi = false;
+  let assigning = false;
   const flush = () => {
     if (current) tokens.push(current);
     current = '';
+    assigning = false;
   };
   const endCommand = () => {
     flush();
@@ -246,7 +248,10 @@ export const parseCommands = (command) => {
     } else if (char === '$' && command[index + 1] === '"') continue;
     else if (char === '"' || char === "'") quote = char;
     else if (/[;&|()`\n]/.test(char)) endCommand();
-    else if (/[\s<>=]/.test(char)) flush();
+    else if (char === '=' && (assigning || /^[A-Za-z_]\w*$/.test(current))) {
+      current += char;
+      assigning = true;
+    } else if (/[\s<>=]/.test(char)) flush();
     else current += char;
   }
   endCommand();
@@ -341,6 +346,8 @@ const candidates = (token) => {
   const pieces = [token];
   const colon = token.lastIndexOf(':');
   if (colon >= 0) pieces.push(token.slice(colon + 1));
+  const assigned = ASSIGNMENT.exec(token);
+  if (assigned) pieces.push(token.slice(assigned[0].length));
   if (/[{},]/.test(token)) pieces.push(...token.split(/[{},]/));
   return pieces.filter(Boolean);
 };
@@ -360,6 +367,7 @@ const withAssignments = (command) => {
   return text;
 };
 
+const ASSIGNMENT = /^[A-Za-z_]\w*=/;
 const RECURSIVE_SEARCH = /^(rg|ag|ack|grep|egrep|fgrep|find)$/;
 const WRAPPERS = new Set([
   'env',
@@ -373,6 +381,7 @@ const WRAPPERS = new Set([
   'timeout',
   'stdbuf',
   'setsid',
+  'doas',
 ]);
 const INTERPRETERS = /^(python[\d.]*|node|nodejs|deno|bun|ruby|perl|php|sh|bash|zsh|dash|ksh|awk|gawk|lua)$/;
 const WHOLE_TREE_READERS = new Set(['tar', 'zip', '7z', '7za', 'cpio']);
@@ -394,18 +403,80 @@ const GIT_READERS = new Set([
   'difftool',
 ]);
 
-/** @param {string[]} tokens */
-const unwrap = (tokens) => {
+const RESERVED = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'do', 'while', 'until']);
+/** @type {Record<string, string[]>} */
+const VALUE_OPTIONS = {
+  env: ['-u', '--unset', '-C', '--chdir', '-S', '--split-string'],
+  sudo: [
+    '-u',
+    '-g',
+    '-h',
+    '-p',
+    '-C',
+    '-D',
+    '-r',
+    '-t',
+    '-U',
+    '-T',
+    '--user',
+    '--group',
+    '--host',
+    '--prompt',
+    '--chdir',
+    '--role',
+    '--type',
+    '--other-user',
+    '--command-timeout',
+    '--close-from',
+  ],
+  doas: ['-u', '-C'],
+  nice: ['-n', '--adjustment'],
+  timeout: ['-s', '--signal', '-k', '--kill-after'],
+  stdbuf: ['-i', '-o', '-e', '--input', '--output', '--error'],
+  exec: ['-a'],
+  time: ['-f', '--format', '-o', '--output'],
+};
+/** @type {Record<string, string[]>} */
+const CHDIR_OPTIONS = { env: ['-C', '--chdir'], sudo: ['-D', '--chdir'] };
+const DURATION = /^\d[\d.]*[smhd]?$/;
+
+/**
+ * The one normalization both git paths use: drops leading `NAME=value` words, shell reserved words, wrappers and
+ * the options (with their values) of each wrapper, and reports the directory an `env -C` or `sudo -D` moves to.
+ * @param {string[]} tokens
+ * @returns {{ words: string[], chdir: string | undefined }}
+ */
+const normalize = (tokens) => {
   let index = 0;
-  while (index < tokens.length && WRAPPERS.has(basename(/** @type {string} */ (tokens[index])))) {
-    index += 1;
-    while (
-      index < tokens.length &&
-      (/^-/.test(/** @type {string} */ (tokens[index])) || /^\d+$/.test(/** @type {string} */ (tokens[index])))
-    )
+  /** @type {string | undefined} */
+  let chdir;
+  while (index < tokens.length) {
+    const word = /** @type {string} */ (tokens[index]);
+    if (ASSIGNMENT.test(word) || RESERVED.has(word)) {
       index += 1;
+      continue;
+    }
+    const wrapper = basename(word);
+    if (!WRAPPERS.has(wrapper)) break;
+    index += 1;
+    let durationSeen = wrapper !== 'timeout';
+    while (index < tokens.length) {
+      const token = /** @type {string} */ (tokens[index]);
+      if (token === '--') {
+        index += 1;
+        break;
+      }
+      if (!token.startsWith('-')) {
+        if (durationSeen || !DURATION.test(token)) break;
+        durationSeen = true;
+        index += 1;
+        continue;
+      }
+      if (CHDIR_OPTIONS[wrapper]?.includes(token)) chdir = tokens[index + 1] ?? '';
+      index += VALUE_OPTIONS[wrapper]?.includes(token) ? 2 : 1;
+    }
   }
-  return tokens.slice(index);
+  return { words: tokens.slice(index), chdir };
 };
 
 /** @param {string[]} tokens @param {PathContext} ctx */
@@ -546,7 +617,7 @@ const gitReaderHit = (tokens, ctx, moved) => {
 /** @param {string} text @param {PathContext} ctx */
 const embeddedName = (text, ctx) => text.split(/[^\w.\-/~$]+/).find((piece) => piece && isProtectedPath(piece, ctx));
 
-const SHELLS = /^(sh|bash|zsh|dash|ksh)$/;
+const SHELLS = /^(sh|bash|zsh|dash|ksh|su)$/;
 const MAX_SHELL_DEPTH = 4;
 const NOT_VOUCHED =
   'the repo has not passed the git preflight (every object reachable from a branch or tag commit tree, no protected path, no reflog, stash, notes or replace), so any git command could print one';
@@ -563,15 +634,11 @@ const namesGit = (text) =>
  */
 const unboundedCommandWord = (command) =>
   command.split(/[;&|\n]+/).some((segment) => {
-    let words = segment
+    const words = segment
       .trim()
       .replace(/^[({!\s]+/, '')
       .split(/\s+/);
-    while (words.length > 0 && (/^\w+=/.test(words[0] ?? '') || WRAPPERS.has(basename(words[0] ?? '')))) {
-      words = words.slice(1);
-      while (/^-/.test(words[0] ?? '') || /^\d+$/.test(words[0] ?? '')) words = words.slice(1);
-    }
-    return /^\$|^`|\$[({]/.test(words[0] ?? '');
+    return /^\$|^`|\$[({]/.test(normalize(words).words[0] ?? '');
   });
 
 /**
@@ -593,6 +660,48 @@ const gitGate = (command, decoded) => {
     };
   }
   return null;
+};
+
+const CD_COMMANDS = new Set(['cd', 'pushd', 'popd']);
+
+/** @param {string[]} words @param {string} program @param {PathContext} here @returns {string | null} */
+const cdTarget = (words, program, here) => {
+  const target = words.find((token, index) => index > 0 && (token === '-' || !token.startsWith('-'))) ?? here.home;
+  return target === '-' || /^\+\d+$/.test(target) || program === 'popd' ? null : expand(target, here);
+};
+
+/** @param {string[]} words @param {string} program @returns {string | undefined} */
+const innerCommand = (words, program) => {
+  if (program === 'eval') return words.slice(1).join(' ');
+  if (!SHELLS.test(program)) return undefined;
+  const flag = words.findIndex((token) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(token));
+  return flag > 0 ? words[flag + 1] : undefined;
+};
+
+/**
+ * Whether running the command leaves the workspace root as the working directory: a cd, pushd or popd to anywhere
+ * else, an `env -C`, or a nested shell or eval that does either.
+ * @param {string} command
+ * @param {PathContext} ctx
+ * @param {number} depth
+ * @returns {boolean}
+ */
+const leavesRoot = (command, ctx, depth) => {
+  const root = ctx.workspace ?? ctx.cwd;
+  let here = ctx;
+  for (const raw of parseCommands(command)) {
+    const { words, chdir } = normalize(raw);
+    const program = basename(words[0] ?? '');
+    if (chdir !== undefined && expand(chdir, here) !== root) return true;
+    if (CD_COMMANDS.has(program)) {
+      const resolved = cdTarget(words, program, here);
+      if (resolved !== root) return true;
+      here = { ...here, cwd: resolved ?? here.cwd };
+    }
+    const inner = innerCommand(words, program);
+    if (inner !== undefined && (depth >= MAX_SHELL_DEPTH || leavesRoot(inner, here, depth + 1))) return true;
+  }
+  return false;
 };
 
 /**
@@ -624,37 +733,40 @@ const checkBash = (command, ctx, depth = 0, startedElsewhere = false) => {
     }
     let here = ctx;
     let moved = startedElsewhere;
+    const root = ctx.workspace ?? ctx.cwd;
     for (const raw of commands) {
-      const segment = unwrap(raw);
+      const { words: segment, chdir } = normalize(raw);
       const program = basename(segment[0] ?? '');
-      if (program === 'cd' || program === 'pushd' || program === 'popd') {
-        const target =
-          segment.find((token, index) => index > 0 && (token === '-' || !token.startsWith('-'))) ?? ctx.home;
-        const resolved = target === '-' || /^\+\d+$/.test(target) || program === 'popd' ? null : expand(target, here);
-        if (resolved !== (ctx.workspace ?? ctx.cwd)) moved = true;
+      let local = here;
+      if (chdir !== undefined) {
+        local = { ...here, cwd: expand(chdir, here) };
+        if (local.cwd !== root) moved = true;
+      }
+      if (CD_COMMANDS.has(program)) {
+        const resolved = cdTarget(segment, program, here);
+        if (resolved !== root) moved = true;
         here = { ...here, cwd: resolved ?? here.cwd };
+        local = here;
       }
       if (INTERPRETERS.test(program)) {
         const hidden = segment.map((token) => embeddedName(token, ctx)).find(Boolean);
         if (hidden)
           return { blocked: true, path: hidden, reason: `the script text names the protected path ${hidden}` };
       }
-      if (SHELLS.test(program)) {
-        const flag = segment.findIndex((token) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(token));
-        const inner = flag > 0 ? segment[flag + 1] : undefined;
-        if (inner !== undefined) {
-          if (depth >= MAX_SHELL_DEPTH) {
-            return {
-              blocked: true,
-              path: program,
-              reason: `shells are nested deeper than ${MAX_SHELL_DEPTH} levels, which the matcher cannot follow`,
-            };
-          }
-          const nested = checkBash(inner, here, depth + 1, moved);
-          if (nested.blocked) return nested;
+      const inner = innerCommand(segment, program);
+      if (inner !== undefined) {
+        if (depth >= MAX_SHELL_DEPTH) {
+          return {
+            blocked: true,
+            path: program,
+            reason: `shells are nested deeper than ${MAX_SHELL_DEPTH} levels, which the matcher cannot follow`,
+          };
         }
+        const nested = checkBash(inner, local, depth + 1, moved);
+        if (nested.blocked) return nested;
+        if (leavesRoot(inner, local, depth + 1)) moved = true;
       }
-      const hit = recursiveSearchHit(segment, here);
+      const hit = recursiveSearchHit(segment, local);
       if (hit) {
         return {
           blocked: true,
@@ -662,7 +774,7 @@ const checkBash = (command, ctx, depth = 0, startedElsewhere = false) => {
           reason: `a recursive read of ${hit} would reach protected files, or the tree is too large to scan`,
         };
       }
-      const gitHit = gitReaderHit(segment, here, moved && ctx.gitClean === true);
+      const gitHit = gitReaderHit(segment, local, moved && ctx.gitClean === true);
       if (gitHit) return { blocked: true, ...gitHit };
     }
   }

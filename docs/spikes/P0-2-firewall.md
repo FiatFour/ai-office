@@ -125,4 +125,5 @@ The recommendation for G1 is the Node proxy plus a DNS cache. It is the only opt
 - S-41 holds on docker 29.1.3 and 29.4.2. The embedded resolver answered `SERVFAIL` to an internal-only container.
 - S-43 holds on rootless podman 5.7.0. The cage had no route out.
 - S-46: TSI traffic stays in the container's internal network namespace.
-- S-48 is out of date. The `ubuntu-latest` run reported docker 29.4.2, podman 5.7.0 with netavark, and crun 1.21 without `+LIBKRUN`.
+- S-48: the `ubuntu-latest` runs reported docker 29.4.2, podman 5.7.0 with netavark, and crun 1.21 without `+LIBKRUN`. This matches S-48 as P0-1 revised it, not the Ubuntu 24.04 image (S-56 there).
+- S-57 is new. It records the docker `inhibit_ipv4` option this spike depends on.

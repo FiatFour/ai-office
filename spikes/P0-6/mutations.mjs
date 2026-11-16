@@ -97,27 +97,58 @@ export const MUTATIONS = {
 };
 
 /** @param {string | undefined} id */
-export const isMutation = (id) => id !== undefined && id in MUTATIONS;
+export const isMutation = (id) => id !== undefined && Object.hasOwn(MUTATIONS, id);
+
+/** @typedef {{ status: string, observed: string, detail: string }} RowResult */
+
+const RESULT = /^(PASS|FAIL|NOT-RUN) (\S+) expected=\S+ observed=(\S+) .*?\): (.*)$/;
 
 /**
- * Compares what a mutated replay did with what the table declares. A row the mutation must flip has to be FAIL, and any
- * other row that is FAIL has to be named as collateral for that mutation.
+ * Reads the replay's per-row lines.
+ * @param {string} stdout
+ * @returns {Record<string, RowResult>}
+ */
+export const parseReplay = (stdout) => {
+  /** @type {Record<string, RowResult>} */
+  const results = {};
+  for (const line of stdout.split('\n')) {
+    const match = RESULT.exec(line);
+    if (match) results[match[2] ?? ''] = { status: match[1] ?? '', observed: match[3] ?? '', detail: match[4] ?? '' };
+  }
+  return results;
+};
+
+/** @param {RowResult} result */
+const crashed = (result) =>
+  result.observed === '-' ||
+  result.detail.startsWith('error:') ||
+  result.detail.startsWith('rated stopped but replay did not run it');
+
+/**
+ * Compares what a mutated replay did with what the table declares. A row the mutation must flip has to be FAIL because
+ * its check saw the attack get through, not because the row crashed or did not run, and any other row that is FAIL has
+ * to be named as collateral for that mutation.
  * @param {string} id
  * @param {string[]} declared rows whose Mutation cell names `id`
- * @param {Record<string, string>} statuses replay status per row id
+ * @param {Record<string, RowResult>} results replay result per row id
  * @returns {string[]}
  */
-export const flipProblems = (id, declared, statuses) => {
+export const flipProblems = (id, declared, results) => {
   const collateral = Object.keys(MUTATIONS[id]?.collateral ?? {});
   const flips = new Set([...declared, ...collateral]);
   /** @type {string[]} */
   const problems = [];
   for (const row of declared) {
-    if (statuses[row] !== 'FAIL')
-      problems.push(`${id} did not turn ${row} to FAIL (it was ${statuses[row] ?? 'missing'})`);
+    const result = results[row];
+    if (result?.status !== 'FAIL')
+      problems.push(`${id} did not turn ${row} to FAIL (it was ${result?.status ?? 'missing'})`);
+    else if (crashed(result))
+      problems.push(
+        `${id} turned ${row} to FAIL by a crash, not by the attack getting through: ${result.detail.slice(0, 120)}`,
+      );
   }
-  for (const [row, status] of Object.entries(statuses)) {
-    if (status === 'FAIL' && !flips.has(row))
+  for (const [row, result] of Object.entries(results)) {
+    if (result.status === 'FAIL' && !flips.has(row))
       problems.push(`${id} turned ${row} to FAIL and the table does not declare it`);
   }
   return problems;

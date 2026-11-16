@@ -282,14 +282,30 @@ export const locationEnv = (env, cwd, roots) => {
 export const hardenedGit =
   (cwd = process.cwd()) =>
   (args, location = {}) =>
-    execFileSync('git', [...HARDENED_ARGS, ...args], {
+    execFileSync('git', [...HARDENED_ARGS, '-c', 'core.quotePath=true', ...args], {
       cwd,
       encoding: 'utf8',
       maxBuffer: 256 * 1024 * 1024,
       env: { ...HARDENED_ENV, ...location, PATH: process.env.PATH ?? '' },
     });
 
-const DIFF_FLAGS = ['-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames'];
+/**
+ * Every flag that fixes a diff setting the repository's own config could change: the `a/` and `b/` header prefixes
+ * (`diff.noprefix`, `diff.srcPrefix`, `diff.dstPrefix`, `diff.mnemonicPrefix`), rename and copy detection, context size,
+ * the algorithm, paths relative to the cwd and the file order. Header parsing and the line scan read one fixed format.
+ */
+const DIFF_FLAGS = [
+  '-U0',
+  '--no-color',
+  '--no-ext-diff',
+  '--no-textconv',
+  '--no-renames',
+  '--no-relative',
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+  '--diff-algorithm=myers',
+  '-O/dev/null',
+];
 
 /** @param {Finding[]} findings */
 const report = (findings) => {

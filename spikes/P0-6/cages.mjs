@@ -9,7 +9,7 @@ import { commitFixture, makeFixture, maskMounts } from '../P0-3/fixture.mjs';
 import { startGuardServer } from '../P0-3/hooks/guard-server.mjs';
 import { preflightInContainer } from '../P0-3/preflight.mjs';
 import { managedSettings } from '../P0-3/settings.mjs';
-import { LABEL, PROJECT } from './rig.mjs';
+import { LABEL, PROJECT, RUN_LABEL } from './rig.mjs';
 
 const P03_DIR = fileURLToPath(new URL('../P0-3/', import.meta.url));
 export const MOUNT = '/workspace';
@@ -108,7 +108,15 @@ export const startCages = async (runId, mutate = '') => {
   ];
   /** @param {string} name @param {{ src: string, dst: string, ro?: boolean }[]} mounts @param {string[]} extra */
   const startCage = (name, mounts, extra) =>
-    engine.start({ name, image: IMAGE, mounts, network: 'none', runId, project: PROJECT_LABEL, extra });
+    engine.start({
+      name,
+      image: IMAGE,
+      mounts,
+      network: 'none',
+      runId,
+      project: PROJECT_LABEL,
+      extra: [...extra, '--label', `${RUN_LABEL}=${runId}`],
+    });
   const started = [
     startCage(masked, maskedMounts, [...secretEnv, ...extraFor]),
     startCage(local, [repoMount, ...homeMounts], secretEnv),

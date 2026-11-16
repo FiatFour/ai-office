@@ -6,7 +6,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { SCOPES } from './attacks.mjs';
-import { flipProblems, MUTATIONS } from './mutations.mjs';
+import { flipProblems, isMutation, MUTATIONS, parseReplay } from './mutations.mjs';
 import { parseThreatModel } from './threat-table.mjs';
 
 const REPLAY = fileURLToPath(new URL('./replay.mjs', import.meta.url));
@@ -29,7 +29,7 @@ const failures = [];
 /** @type {string[]} */
 const table = ['| mutation | declared rows | flipped to FAIL | wall seconds |', '| --- | --- | --- | --- |'];
 for (const id of ids) {
-  const mutation = MUTATIONS[id];
+  const mutation = isMutation(id) ? MUTATIONS[id] : undefined;
   if (mutation === undefined) {
     failures.push(`${id} is not a mutation`);
     continue;
@@ -42,19 +42,13 @@ for (const id of ids) {
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
   writeFileSync(join(out, `${id}.txt`), result.stdout + result.stderr);
-  /** @type {Record<string, string>} */
-  const statuses = {};
-  for (const line of result.stdout.split('\n')) {
-    const match = /^(PASS|FAIL|NOT-RUN) (\S+) expected=/.exec(line);
-    if (match) statuses[match[2] ?? ''] = match[1] ?? '';
-  }
+  const results = parseReplay(result.stdout);
   const seconds = ((performance.now() - begin) / 1000).toFixed(1);
-  const flipped = Object.entries(statuses)
-    .filter(([, status]) => status === 'FAIL')
+  const flipped = Object.entries(results)
+    .filter(([, row]) => row.status === 'FAIL')
     .map(([row]) => row);
-  const problems = flipProblems(id, declared, statuses);
-  if (Object.keys(statuses).length === 0)
-    problems.push(`${id} produced no replay rows: ${result.stderr.slice(0, 200)}`);
+  const problems = flipProblems(id, declared, results);
+  if (Object.keys(results).length === 0) problems.push(`${id} produced no replay rows: ${result.stderr.slice(0, 200)}`);
   console.log(
     `${problems.length === 0 ? 'OK' : 'BAD'} ${id}: flipped ${flipped.join(', ') || 'nothing'} in ${seconds} s`,
   );

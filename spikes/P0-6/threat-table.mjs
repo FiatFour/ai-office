@@ -98,14 +98,15 @@ const LAYER = /^(L[1-5]|PF|MS|GS|HG|WH|CG|F[1-5][a-z]?|W[1-3])$/;
 
 /**
  * What is wrong with the table, as one sentence per problem. An empty list means every row has one replay id, every id
- * has a row, every `stopped` row (and every `best-effort` row that names a layer) declares the mutation that turns its
+ * has a row, every `stopped-live` row is a live row, every `stopped` row (and every `best-effort` row that names a layer) declares the mutation that turns its
  * mechanism off, every mutation is declared by a row, and every cell the replay reads is well formed.
  * @param {ThreatRow[]} rows
  * @param {string[]} attackIds the ids `attacks.mjs` can replay
  * @param {string[]} mutationIds the ids `mutations.mjs` can apply
  * @param {string[]} [undeclared] ids that no row needs to declare
+ * @param {string[]} [liveIds] ids `rows-live.mjs` can replay, the only rows that may be rated `stopped-live`
  */
-export const tableProblems = (rows, attackIds, mutationIds, undeclared = []) => {
+export const tableProblems = (rows, attackIds, mutationIds, undeclared = [], liveIds = []) => {
   /** @type {string[]} */
   const problems = [];
   const seen = new Set();
@@ -127,6 +128,8 @@ export const tableProblems = (rows, attackIds, mutationIds, undeclared = []) => 
     if (modes.length === 0 || modes.some((mode) => !MODES.has(mode))) problems.push(`${name} has modes "${row.modes}"`);
     if (row.rating === 'open' && row.expect !== 'none') problems.push(`${name} is rated open but names a layer`);
     if (row.rating === 'stopped' && row.expect === 'none') problems.push(`${name} is rated stopped but names no layer`);
+    if (row.rating === 'stopped-live' && !liveIds.includes(row.id))
+      problems.push(`${name} is rated stopped-live but is not a row in rows-live.mjs`);
     const needsMutation = row.rating === 'stopped' || (row.rating === 'best-effort' && row.expect !== 'none');
     if (needsMutation && row.mutations.length === 0)
       problems.push(`${name} is rated ${row.rating} but declares no mutation that turns its mechanism off`);

@@ -2,13 +2,15 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ATTACKS, SCOPES } from './attacks.mjs';
-import { flipProblems, MUTATIONS } from './mutations.mjs';
+import { flipProblems, isMutation, MUTATIONS, parseReplay } from './mutations.mjs';
+import { LIVE_ROWS } from './rows-live.mjs';
 import { matches, parseThreatModel, tableProblems } from './threat-table.mjs';
 
 const MODEL = join(import.meta.dirname, '..', '..', 'docs', 'threat-model.md');
 const rows = parseThreatModel(readFileSync(MODEL, 'utf8'));
 const attackIds = Object.keys(ATTACKS);
 const mutationIds = Object.keys(MUTATIONS);
+const liveIds = Object.keys(LIVE_ROWS);
 const flipsNothing = Object.entries(MUTATIONS)
   .filter(([, mutation]) => 'flipsNothing' in mutation)
   .map(([id]) => id);
@@ -28,7 +30,7 @@ const row = (id: string, overrides: Record<string, unknown> = {}) => ({
 
 describe('docs/threat-model.md', () => {
   it('has a row for every replay id and a replay id for every row', () => {
-    expect(tableProblems(rows, attackIds, mutationIds, flipsNothing)).toEqual([]);
+    expect(tableProblems(rows, attackIds, mutationIds, flipsNothing, liveIds)).toEqual([]);
   });
 
   it('has one row per attack path', () => {
@@ -127,16 +129,91 @@ describe('the mutation scopes', () => {
 });
 
 describe('flipProblems', () => {
+  const ran = (status: string, observed = 'L2', detail = 'the attack got through') => ({ status, observed, detail });
+
   it('asks for every declared row to fail and for no other row to', () => {
-    expect(flipProblems('mask-off', ['a'], { a: 'FAIL', b: 'PASS' })).toEqual([]);
-    expect(flipProblems('mask-off', ['a'], { a: 'PASS' })).toEqual(['mask-off did not turn a to FAIL (it was PASS)']);
-    expect(flipProblems('mask-off', ['a'], { a: 'FAIL', b: 'FAIL' })).toEqual([
+    expect(flipProblems('mask-off', ['a'], { a: ran('FAIL'), b: ran('PASS') })).toEqual([]);
+    expect(flipProblems('mask-off', ['a'], { a: ran('PASS') })).toEqual([
+      'mask-off did not turn a to FAIL (it was PASS)',
+    ]);
+    expect(flipProblems('mask-off', ['a'], { a: ran('FAIL'), b: ran('FAIL') })).toEqual([
       'mask-off turned b to FAIL and the table does not declare it',
     ]);
   });
 
   it('accepts a row named as collateral', () => {
-    expect(flipProblems('allow-example', [], { 'fw-label-spoof': 'FAIL' })).toEqual([]);
+    expect(flipProblems('allow-example', [], { 'fw-label-spoof': ran('FAIL') })).toEqual([]);
+  });
+
+  it.each([
+    ['a row that threw', ran('FAIL', '-', 'error: Error: boom | at x')],
+    ['a row with no observation', ran('FAIL', '-', '')],
+    ['a stopped row the replay did not run', ran('FAIL', '-', 'rated stopped but replay did not run it: no docker')],
+    ['a row whose error detail comes with an observation', ran('FAIL', 'x', 'error: Error: boom')],
+  ])('does not count %s as a flip', (_name, result) => {
+    expect(flipProblems('mask-off', ['a'], { a: result }).join('\n')).toContain('mask-off turned a to FAIL by a crash');
+  });
+
+  it('keeps a crash on an undeclared row a problem too', () => {
+    expect(flipProblems('mask-off', ['a'], { a: ran('FAIL'), b: ran('FAIL', '-', 'error: x') })).toEqual([
+      'mask-off turned b to FAIL and the table does not declare it',
+    ]);
+  });
+});
+
+describe('parseReplay', () => {
+  const stdout = [
+    'MUTATION noop: a switch',
+    'FAIL a-one expected=L2 observed=- rating=stopped modes=C, SC (12 ms): error: Error: boom | at x | at y',
+    'FAIL b-two expected=F2a observed=connect=undefined rating=stopped modes=C, SC (10235 ms): CONNECT: status undefined',
+    'PASS c-three expected=L2 observed=L2 rating=stopped modes=C (3 ms): fine (really): yes',
+    'NOT-RUN d-four expected=L3 observed=- rating=stopped-live modes=C (0 ms): needs --live',
+    '4 rows, 1 PASS',
+  ].join('\n');
+
+  it('reads status, observation and detail per row', () => {
+    expect(parseReplay(stdout)).toEqual({
+      'a-one': { status: 'FAIL', observed: '-', detail: 'error: Error: boom | at x | at y' },
+      'b-two': { status: 'FAIL', observed: 'connect=undefined', detail: 'CONNECT: status undefined' },
+      'c-three': { status: 'PASS', observed: 'L2', detail: 'fine (really): yes' },
+      'd-four': { status: 'NOT-RUN', observed: '-', detail: 'needs --live' },
+    });
+  });
+
+  it('catches the crash of a mutated row end to end', () => {
+    expect(flipProblems('noop', ['a-one'], parseReplay(stdout)).join('\n')).toContain('by a crash');
+  });
+});
+
+describe('isMutation', () => {
+  it('accepts a mutation id and rejects a name inherited from Object', () => {
+    expect(isMutation('mask-off')).toBe(true);
+    expect(isMutation('constructor')).toBe(false);
+    expect(isMutation('__proto__')).toBe(false);
+    expect(isMutation('toString')).toBe(false);
+    expect(isMutation(undefined)).toBe(false);
+  });
+});
+
+describe('stopped-live rows', () => {
+  it('must be a row the live replay runs', () => {
+    expect(
+      tableProblems([row('a-one', { rating: 'stopped-live', mutations: [] })], ['a-one'], ['mask-off'], [], []).join(
+        '\n',
+      ),
+    ).toContain('a-one is rated stopped-live but is not a row in rows-live.mjs');
+  });
+
+  it('pass when the row is a live row', () => {
+    expect(
+      tableProblems(
+        [row('a-one', { rating: 'stopped-live', mutations: [] })],
+        ['a-one'],
+        ['mask-off'],
+        ['mask-off'],
+        ['a-one'],
+      ),
+    ).toEqual([]);
   });
 });
 

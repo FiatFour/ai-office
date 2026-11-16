@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFile
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { checkPush, hookScript, locationEnv, parseDiff, scanDiff } from './guard5.mjs';
 
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
@@ -236,6 +236,82 @@ describePosix('commit forms that build their own index', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('GIT_INDEX_FILE');
     git(['checkout', '--', 'a.ts']);
+  });
+});
+
+describePosix('repository config that changes how git prints a diff', () => {
+  const TOKEN = `ghp_${'a1B2c3D4e5'.repeat(4)}`;
+  const CONFIGS: [string, string][] = [
+    ['diff.dstPrefix', 'zz/'],
+    ['diff.srcPrefix', 'zz/'],
+    ['diff.noprefix', 'true'],
+    ['diff.mnemonicPrefix', 'true'],
+    ['diff.renames', 'copies'],
+    ['diff.context', '9'],
+    ['diff.algorithm', 'patience'],
+    ['diff.relative', 'true'],
+    ['core.quotePath', 'false'],
+    ['diff.orderFile', '/dev/null'],
+  ];
+  let repo: string;
+  let remote: string;
+  let start: string;
+  const git = (args: string[]) =>
+    spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.test', '-c', 'commit.gpgsign=false', ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+    });
+
+  beforeAll(() => {
+    const root = mkdtempSync(join(tmpdir(), 'p0-6-guard5-cfg-'));
+    remote = join(root, 'remote.git');
+    repo = join(root, 'repo');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+    writeFileSync(join(repo, 'a.ts'), 'export const t = 1;\n');
+    git(['add', '-A']);
+    git(['commit', '-qm', 'init']);
+    git(['remote', 'add', 'origin', remote]);
+    for (const name of ['pre-commit', 'pre-push'] as const) {
+      const path = join(repo, '.git', 'hooks', name);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, hookScript(name, { guard: GUARD, base: ['main'] }));
+      chmodSync(path, 0o755);
+    }
+    start = git(['rev-parse', 'HEAD']).stdout.trim();
+  });
+
+  afterEach(() => {
+    for (const [key] of CONFIGS) git(['config', '--unset', key]);
+    git(['reset', '-q', '--hard', start]);
+    git(['clean', '-qfdx']);
+  });
+
+  describe.each(CONFIGS)('with %s=%s', (key, value) => {
+    it('refuses a staged secret and a staged .env at commit time', () => {
+      git(['config', key, value]);
+      writeFileSync(join(repo, 'a.ts'), `export const t = "${TOKEN}";\n`);
+      git(['add', 'a.ts']);
+      const secret = git(['commit', '-qm', 'secret']);
+      git(['reset', '-q', 'a.ts']);
+      git(['checkout', '--', 'a.ts']);
+      writeFileSync(join(repo, '.env'), 'K=v\n');
+      git(['add', '-f', '.env']);
+      const env = git(['commit', '-qm', 'env']);
+      git(['reset', '-q', '.env']);
+      expect([secret.status, secret.stderr]).toEqual([1, expect.stringContaining('github token')]);
+      expect([env.status, env.stderr]).toEqual([1, expect.stringContaining('protected-file')]);
+    });
+
+    it('refuses a pushed secret commit', () => {
+      writeFileSync(join(repo, 's.ts'), `export const s = "${TOKEN}";\n`);
+      git(['add', 's.ts']);
+      git(['commit', '-qm', 'secret', '--no-verify']);
+      git(['config', key, value]);
+      const push = git(['push', '-q', 'origin', `HEAD:refs/heads/aw/cfg-${key}`]);
+      git(['config', '--unset', key]);
+      expect([push.status, push.stderr]).toEqual([1, expect.stringContaining('github token')]);
+    });
   });
 });
 

@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { engineFor, newRunId, run } from '../P0-3/cage.mjs';
+import { engineFor, run } from '../P0-3/cage.mjs';
 import { commitFixture, makeFixture } from '../P0-3/fixture.mjs';
 import { startGuardServer } from '../P0-3/hooks/guard-server.mjs';
 import { classifyResult } from '../P0-3/scoring.mjs';
 import { managedSettings } from '../P0-3/settings.mjs';
 import { CAGE_HOME, IMAGE, MOUNT } from './cages.mjs';
-import { LABEL, PROJECT } from './rig.mjs';
+import { LABEL, PROJECT, RUN_LABEL } from './rig.mjs';
 
 const MODEL = 'haiku';
 const CALL_TIMEOUT_MS = 150_000;
@@ -81,10 +81,9 @@ export const attempt = (stream, matches) => {
 export const touchesEnv = (use) =>
   [use.input.command, use.input.file_path, use.input.path].some((field) => String(field ?? '').includes('.env'));
 
-/** @param {{ credsVolume: string, out: string }} options */
-export const startLive = async ({ credsVolume, out }) => {
+/** @param {{ credsVolume: string, out: string, runId: string }} options */
+export const startLive = async ({ credsVolume, out, runId }) => {
   mkdirSync(out, { recursive: true });
-  const runId = newRunId();
   const root = mkdtempSync(join(tmpdir(), 'aw-p0-6-live-'));
   chmodSync(root, 0o755);
   const fixture = makeFixture(root);
@@ -113,7 +112,7 @@ export const startLive = async ({ credsVolume, out }) => {
     network: 'bridge',
     runId,
     project: `${LABEL}=${PROJECT}`,
-    extra: credMounts,
+    extra: [...credMounts, '--label', `${RUN_LABEL}=${runId}`],
   });
   if (started.code !== 0) throw new Error(started.all);
   docker.exec(

@@ -11,6 +11,7 @@ import { startCages } from './cages.mjs';
 import { startLive } from './live.mjs';
 import { isMutation, MUTATIONS } from './mutations.mjs';
 import { leftOver, removeOwn, startFirewall } from './rig.mjs';
+import { LIVE_ROWS } from './rows-live.mjs';
 import { matches, parseThreatModel } from './threat-table.mjs';
 
 const TABLE = fileURLToPath(new URL('../../docs/threat-model.md', import.meta.url));
@@ -75,14 +76,13 @@ if (spawnSync('docker', ['version'], { encoding: 'utf8' }).status !== 0) {
 const rows = parseThreatModel(readFileSync(String(args.table), 'utf8'));
 const only = args.only ? new Set(String(args.only).split(',')) : null;
 const runId = newRunId();
-removeOwn();
 let cagesStarted = false;
 let liveStarted = false;
 const startedCages = once(() => startCages(runId, mutate));
 const startedLive = once(() => {
   const credsVolume = String(args['creds-volume']);
   if (credsVolume === '') throw new Error('--live needs --creds-volume <volume that holds a claude.ai login>');
-  return startLive({ credsVolume, out });
+  return startLive({ credsVolume, out, runId });
 });
 const ctx = {
   mutate,
@@ -90,7 +90,7 @@ const ctx = {
     cagesStarted = true;
     return startedCages();
   },
-  firewall: once(() => startFirewall(mutate)),
+  firewall: once(() => startFirewall(runId, mutate)),
   live: args.live
     ? () => {
         liveStarted = true;
@@ -109,7 +109,9 @@ for (const row of rows) {
   let status = 'FAIL';
   let detail = '';
   let observed = '-';
-  if (!attack) {
+  if (row.rating === 'stopped-live' && !Object.hasOwn(LIVE_ROWS, row.id)) {
+    detail = 'rated stopped-live but its attack is not a live row, so it would run without --live';
+  } else if (!attack) {
     detail = 'the table names a replay id that has no attack in attacks.mjs';
   } else {
     try {
@@ -160,8 +162,8 @@ const failed = results.filter((r) => r.status === 'FAIL').length;
 const notRun = results.filter((r) => r.status === 'NOT-RUN').length;
 const wallSeconds = ((performance.now() - started) / 1000).toFixed(1);
 if (cagesStarted) (await startedCages()).hook.close();
-const removed = removeOwn();
-const left = leftOver();
+const removed = removeOwn(runId);
+const left = leftOver(runId);
 const clean = left.containers === '' && left.networks === '';
 const summary = `${results.length} rows, ${results.length - failed - notRun} PASS, ${notRun} NOT-RUN, ${failed} FAIL, wall ${wallSeconds} s, model calls ${liveCalls}, cleanup removed ${removed.containers} container(s) ${removed.networks} network(s), left over ${clean ? 'nothing' : JSON.stringify(left)}`;
 console.log(summary);

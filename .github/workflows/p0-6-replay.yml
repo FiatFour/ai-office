@@ -9,6 +9,8 @@ on:
       - spikes/P0-5/**
       - spikes/P0-6/**
       - docs/threat-model.md
+      - package.json
+      - pnpm-lock.yaml
       - .github/workflows/p0-6-replay.yml
   workflow_dispatch:
 

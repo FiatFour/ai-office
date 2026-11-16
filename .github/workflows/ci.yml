@@ -75,3 +75,39 @@ jobs:
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           Write-Host ("cold median {0:N1} s, warm median {1:N1} s, budget {2} s" -f $coldMedian, $warmMedian, $budgetSeconds)
           if ($warmMedian -gt $budgetSeconds) { throw "warm median $warmMedian s exceeds the $budgetSeconds s budget" }
+
+  perf-core:
+    name: perf (lifecycle reducer throughput and property suite time)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Time the property suite three times
+        run: |
+          $budgetSeconds = 120
+          $times = 1..3 | ForEach-Object {
+            $elapsed = Measure-Command { pnpm vitest run packages/core | Out-Host }
+            if ($LASTEXITCODE -ne 0) { throw "property suite failed in run $_" }
+            Write-Host ("suite run {0}: {1:N1} s" -f $_, $elapsed.TotalSeconds)
+            $elapsed.TotalSeconds
+          }
+          $median = ($times | Sort-Object)[1]
+          "| metric | seconds |`n| --- | --- |`n| property suite median of 3 | {0:N1} |" -f $median |
+            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Write-Host ("median {0:N1} s, budget {1} s, no baseline, trunk empty" -f $median, $budgetSeconds)
+          if ($median -gt $budgetSeconds) { throw "median $median s exceeds the $budgetSeconds s budget" }
+      - name: Reducer throughput over one million events, three runs
+        env:
+          LIFECYCLE_PERF: "1"
+        run: pnpm vitest run packages/core -t throughput | Tee-Object -FilePath throughput.txt
+      - name: Add throughput to the summary
+        run: |
+          '```' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Get-Content throughput.txt | Where-Object { $_ -match 'throughput|run [0-9]|median|PASS|FAIL' } |
+            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          '```' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY

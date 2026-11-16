@@ -1,0 +1,12 @@
+{
+  "name": "@agent-works/core",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/lifecycle.ts"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2"
+  }
+}

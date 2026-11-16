@@ -15,5 +15,5 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["scripts/**/*", "spikes/**/*"]
+  "include": ["scripts/**/*", "spikes/**/*", "packages/**/*"]
 }

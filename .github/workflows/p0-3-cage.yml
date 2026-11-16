@@ -1,0 +1,56 @@
+name: p0-3-cage
+
+on:
+  pull_request:
+    paths:
+      - spikes/P0-3/**
+      - .github/workflows/p0-3-cage.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  cage:
+    name: cage (${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [docker, podman]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Record the engine facts
+        run: |
+          OUT="$RUNNER_TEMP/p0-3"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          {
+            uname -a
+            docker version --format 'docker {{.Server.Version}}'
+            podman version --format 'podman {{.Client.Version}}'
+            podman info --format 'runtime {{.Host.OCIRuntime.Name}} {{.Host.OCIRuntime.Version}}, rootless {{.Host.Security.Rootless}}'
+          } 2>&1 | tee "$OUT/${{ matrix.engine }}-engine-facts.txt"
+      - name: Run the unit tests for the hook, the settings and the path matcher
+        run: pnpm test spikes/P0-3
+      - name: Run the model-free cage lanes
+        run: node spikes/P0-3/cage-lanes.mjs --engine ${{ matrix.engine }} --out "$OUT" 2>&1 | tee "$OUT/${{ matrix.engine }}.txt"
+      - name: Clean up by label
+        if: always()
+        run: node spikes/P0-3/cage-lanes.mjs --engine ${{ matrix.engine }} --cleanup --out "$OUT" 2>&1 | tee "$OUT/${{ matrix.engine }}-cleanup.txt"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: p0-3-${{ matrix.engine }}
+          path: ${{ runner.temp }}/p0-3

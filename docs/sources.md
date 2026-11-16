@@ -31,6 +31,10 @@ Versions come from the page itself when it states one. When it does not, the ver
 | S-19 | Claude Code headless | `claude -p --output-format stream-json --verbose` prints newline-delimited JSON events. The first event is `system/init` unless startup hook events precede it, and the last is a `result` message with cost and session metadata. Subagent messages carry `parent_tool_use_id`. | [Run Claude Code programmatically](https://code.claude.com/docs/en/headless) | Claude Code 2.1.325 (npm latest) | 2026-11-16 | P0-3, P1-2 |
 | S-20 | Claude Code headless | `--bare` skips hooks, including hooks passed with `--settings`. A run that needs hooks must not use bare mode. | [Run Claude Code programmatically](https://code.claude.com/docs/en/headless) | Claude Code 2.1.325 (npm latest) | 2026-11-16 | P0-3 |
 | S-21 | Claude Code headless | In a Manual mode `claude -p` run, a call that needs approval is denied unless a `PermissionRequest` hook or `--permission-prompt-tool` approves it. | [Run Claude Code programmatically](https://code.claude.com/docs/en/headless) | Claude Code 2.1.325 (npm latest) | 2026-11-16 | P0-3 |
+| S-66 | Claude Code hooks | Measured in headless `-p` mode: a `SessionStart` group holding an `http` hook and a `command` hook reached the stub only through the `command` hook. `PreToolUse`, `PostToolUse`, `SubagentStart`, `SubagentStop` and `Stop` all arrived over `http`. | [Hooks reference](https://code.claude.com/docs/en/hooks) | Claude Code 2.1.325, measured | 2026-11-16 | P0-3 |
+| S-67 | Claude Code hooks | Measured: with `onFailure: "block"` and a refused connection, the tool result reads `PreToolUse:Bash hook error: [url]: failed; blocking because onFailure is "block"` and the command does not run. With `onFailure` unset, the same dead URL lets the command run. | [Hooks reference](https://code.claude.com/docs/en/hooks) | Claude Code 2.1.325, measured | 2026-11-16 | P0-3, P0-6 |
+| S-68 | Claude Code permissions | Measured with `Read` and `Edit` deny rules for `**/.env` and `~/.ssh/**`: a `Read` of `.env`, `cat .env`, `cat ~/.ssh/id_ed25519` and `cp .env /tmp/envcopy` were refused. `grep -r API_KEY .` and a `node -e` script that opens the file ran and printed the canary. A control `cp README.md` ran, so the `cp` refusal came from the deny rule. | [Configure permissions](https://code.claude.com/docs/en/permissions) | Claude Code 2.1.325, measured | 2026-11-16 | P0-3, P0-6 |
+| S-69 | Docker bind mounts | Measured: an empty file bind-mounted read-only over a file inside a bind-mounted directory hides the file. `cat` prints 0 bytes and a write fails with `Read-only file system`. This is the layer 2 mask. | [Bind mounts](https://docs.docker.com/engine/storage/bind-mounts/) | Docker Engine 29.1.3, measured | 2026-11-16 | P0-3 |
 
 ## Codex CLI
 
@@ -130,12 +134,14 @@ Each entry quotes the spec line and the source line. A spike or a G1 decision re
 - Spec, `AGENT_WORKS_PROMPT.md` §4: "*PreToolUse hook* — blocks Bash / tool calls whose arguments touch a protected path".
 - Source, S-04: for an HTTP hook, "Connection failure: non-blocking error", and on `PreToolUse` a timed-out hook "doesn't block the tool call, except for hooks whose failure blocks the action".
 - Effect. If HQ is down or slow, an HTTP PreToolUse hook lets the call through. P0-3 sets `onFailure: "block"` on every guard hook, or runs the guard as a local command hook that exits 2, and tests HQ-down as an attack path in P0-6.
+- Resolved by P0-3. The guard hook is an `http` hook with `onFailure: "block"`. S-67 measured that a refused connection then blocks the call, and that without the flag the call runs.
 
 ### C-5. Codex has no equivalent of Claude Code deny rules in `sandbox_mode`
 
 - Spec, `AGENT_WORKS_PROMPT.md` §4 layer 3: "and the equivalent Codex sandbox config".
 - Source, S-22 and S-24: `sandbox_mode` takes only `read-only`, `workspace-write` or `danger-full-access`. Read denial needs a beta permissions profile, "`"deny"` to deny reads for matching paths", which is not combined with `sandbox_mode`. S-25: on Linux the sandbox needs user namespaces through bubblewrap.
 - Effect. The Codex layer 3 is a beta permissions profile, not `sandbox_mode`. Inside a cage the bubblewrap sandbox may not start if the engine blocks user namespaces. P0-3 lane 7 records whether the profile denies `.env` inside a docker and a podman cage, and falls back to layer 2 masking when it does not.
+- P0-3 lane 7 is not run. The operator scoped P0-3 to Claude Code, so the Codex profile stays untested.
 
 ### C-6. `ubuntu-latest` is moving to Ubuntu 26.04
 
@@ -158,11 +164,12 @@ These agree with the spec but limit how far a layer can be trusted.
 - Spec, `AGENT_WORKS_PROMPT.md` §4 layer 3 lists "Claude Code `permissions.deny` entries (`Read(**/.env)`, `Edit(**/.env)`, `Read(~/.ssh/**)`, …)", and layer 4 adds the hook for "`cat`, `cp`, `grep -r` over it, redirects".
 - Source, S-10: deny rules "don't apply to a command that reads files without naming them, such as `grep -r pattern .` run from the directory that holds the file, or to arbitrary subprocesses that read or write files indirectly".
 - Effect. This agrees with the spec's layering. It does mean layer 4 is only as good as its parser, since a script that opens `.env` itself passes both layers. In `subagents-local`, which has no layer 2 mask, the threat model in P0-6 must rate this best effort.
+- Measured by P0-3 (S-68). With deny rules alone, `grep -r API_KEY .` and a `node -e` script printed the canary. The layer 4 hook blocked `grep -r`, and only the layer 2 mask stopped the script.
 
 ## Unverified spec assumptions
 
 These assumptions have no primary source yet. The named spike tests each one directly.
 
-- "krun: it ignores the image `USER`, so the entrypoint must drop to the `agent` user itself." The krun man page at crun 1.31 does not mention it. P0-3 tests it.
+- "krun: it ignores the image `USER`, so the entrypoint must drop to the `agent` user itself." The krun man page at crun 1.31 does not mention it. P0-3 wrote the test and could not run it. This machine has no krun, and `ubuntu-latest` has no `+LIBKRUN` crun (`docs/spikes/P0-3-claude-cage.md`).
 - TSI networking under krun (S-46) proxies guest sockets "in the VMM's network context". P0-2 lane 4 found that context is the container's internal network namespace. Under krun on rootless podman 6.1.3, raw TCP, IPv6 and direct DNS all fail as they do without krun (`docs/spikes/P0-2-firewall.md`).
 - The runner's Podman behaves like the Podman docs checked. Those docs are v6.2.0, while `ubuntu-latest` gives Podman 5.7.0 on Ubuntu 26.04 (S-48) or Podman 4.9.3 on Ubuntu 24.04 (S-56) until the migration ends (C-6). P0-2 found the runner on 2026-11-16 reporting Podman 5.7.0 with netavark, Docker 29.4.2 and crun 1.21 without `+LIBKRUN`. On that Podman, rootless, an internal network had no route out and aardvark did not forward lookups (`docs/spikes/P0-2-firewall.md`).

@@ -89,3 +89,7 @@ All numbers are measured, and each comes from one named source.
 | --- | --- | --- |
 | Full replay, this machine, 3 runs at the final code | 34.1, 33.7 and 29.6 s wall, median 33.7 s | `final-1.txt` to `final-3.txt` |
 | Mutation suite, this machine, 20 mutations | 298 s wall | `mutations-final.txt` |
+| Full replay, `ubuntu-latest`, 3 runs, run 43934746751 at 884d002 | 82, 33 and 33 s wall, median 33 s (budget 600 s). The first run pulls the images. Every run printed 45 PASS, 13 NOT-RUN, 0 FAIL | job log |
+| Mutation job, `ubuntu-latest`, same run | 20 mutations, 0 problems, 301.7 s wall (the job is separate from the replay job, so it does not count against the replay budget) | job log |
+
+CI run 43934746766 (`ci`) at the same commit passed on ubuntu, macOS and Windows. The commit after it changes this page only.

@@ -2,6 +2,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
+
+const describePosix = process.platform === 'win32' ? describe.skip : describe;
+
 import { checkToolCall, isProtectedPath } from './protected-paths.mjs';
 
 let ctx: { home: string; cwd: string };
@@ -17,7 +20,7 @@ beforeAll(() => {
   writeFileSync(join(cwd, '.env.example'), 'KEY=\n');
   writeFileSync(join(cwd, 'src', 'a.ts'), 'export {}\n');
   writeFileSync(join(cleanDir, 'a.ts'), 'export {}\n');
-  ctx = { home: join(root, 'home'), cwd };
+  ctx = { home: '/home/test', cwd };
 });
 
 const bash = (command: string) => checkToolCall({ tool_name: 'Bash', tool_input: { command } }, ctx);
@@ -65,7 +68,7 @@ describe('isProtectedPath', () => {
   });
 });
 
-describe('checkToolCall on Bash', () => {
+describePosix('checkToolCall on Bash', () => {
   it.each([
     'cat .env',
     'cp .env /tmp/x',
@@ -110,7 +113,7 @@ describe('checkToolCall on Bash', () => {
   });
 });
 
-describe('checkToolCall on file tools', () => {
+describePosix('checkToolCall on file tools', () => {
   it.each([
     ['Read', { file_path: '.env' }],
     ['Read', { file_path: '/home/node/.ssh/id_ed25519' }],

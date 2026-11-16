@@ -58,7 +58,9 @@ describe('managedSettings', () => {
   });
 });
 
-describe('guard server', () => {
+const describePosix = process.platform === 'win32' ? describe.skip : describe;
+
+describePosix('guard server', () => {
   let dir: string;
   let server: Awaited<ReturnType<typeof startGuardServer>>;
   const post = async (body: unknown) => {
@@ -130,7 +132,7 @@ describe('guard server', () => {
   });
 });
 
-describe('event forwarder', () => {
+describePosix('event forwarder', () => {
   it('posts its stdin to the server and exits 0 even when the server is down', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'p0-3-fwd-'));
     const server = await startGuardServer({ logPath: join(dir, 'e.jsonl'), home: dir });

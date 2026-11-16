@@ -1,5 +1,5 @@
 import { readdirSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path/posix';
 
 /**
  * @typedef {{ home: string, cwd: string, mapDir?: ((path: string) => string) | undefined }} PathContext

@@ -80,6 +80,7 @@ const fixture = makeFixture(root);
 commitFixture(fixture.repo);
 const emptyFile = join(root, 'empty');
 writeFileSync(emptyFile, '');
+chmodSync(emptyFile, 0o666);
 const image = args.image ?? `${IMAGE}:lanes`;
 const exposed = /** @type {string[]} */ ([]);
 

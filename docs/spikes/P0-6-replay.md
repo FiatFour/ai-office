@@ -50,3 +50,4 @@ All numbers are measured.
 | Metric | Value |
 | --- | --- |
 | Full replay, this machine, 3 runs | 21, 22 and 22 s wall, median 22 s (budget 600 s) |
+| Full replay, `ubuntu-latest`, 3 runs, run 43923574685 at ffc640b | 68, 26 and 26 s wall, median 26 s (budget 600 s). The first run pulls the images. Same result in every run, 40 PASS, 10 NOT-RUN, 0 FAIL |

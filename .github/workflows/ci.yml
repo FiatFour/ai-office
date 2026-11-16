@@ -101,13 +101,15 @@ jobs:
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           Write-Host ("median {0:N1} s, budget {1} s, no baseline, trunk empty" -f $median, $budgetSeconds)
           if ($median -gt $budgetSeconds) { throw "median $median s exceeds the $budgetSeconds s budget" }
-      - name: Reducer throughput over one million events, three runs
-        env:
-          LIFECYCLE_PERF: "1"
-        run: pnpm vitest run packages/core -t throughput | Tee-Object -FilePath throughput.txt
+      - name: Reducer throughput, small and large states
+        run: |
+          pnpm vitest run --config packages/core/vitest.perf.config.ts 2>&1 | Tee-Object -FilePath throughput.txt
+          if ($LASTEXITCODE -ne 0) { throw "the throughput probe failed" }
+          node scripts/check-throughput.mjs throughput.txt
+          if ($LASTEXITCODE -ne 0) { throw "the throughput probe printed no throughput result" }
       - name: Add throughput to the summary
         run: |
           '```' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
-          Get-Content throughput.txt | Where-Object { $_ -match 'throughput|run [0-9]|median|PASS|FAIL' } |
+          Get-Content throughput.txt | Where-Object { $_ -match 'throughput|run [0-9]|median|chunk|PASS|FAIL' } |
             Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           '```' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY

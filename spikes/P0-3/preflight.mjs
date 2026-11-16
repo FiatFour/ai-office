@@ -68,8 +68,9 @@ export const preflightInContainer = (engine, { timeoutMs = 300_000, ...options }
   if (/[,"]/.test(options.repo))
     return notClean(`${options.repo} has a comma or quote the container mount cannot carry`);
   const name = `aw-p0-3-preflight-${options.runId}-${randomBytes(3).toString('hex')}`;
-  const result = run(engine, preflightArgs({ ...options, name }), { timeout: timeoutMs });
+  const result = run(engine, preflightArgs({ ...options, name }), { timeout: timeoutMs, killSignal: 'SIGKILL' });
   run(engine, ['rm', '-f', name]);
+  if (result.timedOut) return notClean(`the contained preflight timed out after ${timeoutMs} ms and was killed`);
   try {
     return JSON.parse(result.out);
   } catch {

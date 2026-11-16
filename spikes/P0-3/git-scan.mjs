@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isProtectedPath } from './protected-paths.mjs';
 
@@ -52,13 +52,29 @@ const FORBIDDEN_FILES = [
  * @typedef {{ units: string[], pointers: string[], dotGit: string[], issues: string[] }} Discovery
  */
 
+const GIT_SHAPE = ['HEAD', 'objects', 'refs'];
+const HEX2 = /^[0-9a-f]{2}$/;
+const HEX38 = /^[0-9a-f]{38}$/;
+
 /** @param {import('node:fs').Dirent[]} entries @param {string} name @param {'file' | 'dir'} kind */
 const has = (entries, name, kind) =>
   entries.some((entry) => entry.name === name && (kind === 'dir' ? entry.isDirectory() : entry.isFile()));
 
+/** @param {string} path */
+const exists = (path) => {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    return /** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT';
+  }
+};
+
 /**
  * Finds git dirs by structure (a dir holding a HEAD file, an objects dir and a refs dir), never by name, without
- * following symlinks and without running git. Anything it cannot read or bound lands in issues.
+ * following symlinks and without running git. A HEAD, objects or refs that is a symlink, a git dir nested in another
+ * git dir (outside modules/), a pack dir holding .pack files and a dir of 2-hex dirs holding 38-hex files are
+ * findings. The last two are heuristics. Anything it cannot read or bound lands in issues.
  * @param {string} repo
  * @param {number} cap
  * @returns {Discovery}
@@ -67,9 +83,11 @@ const discover = (repo, cap) => {
   /** @type {Discovery} */
   const found = { units: [], pointers: [], dotGit: [], issues: [] };
   const pending = [repo];
+  const stores = new Set();
   let seen = 0;
   while (pending.length > 0) {
     const dir = /** @type {string} */ (pending.pop());
+    const label = relative(repo, dir) || '.';
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -83,10 +101,24 @@ const discover = (repo, cap) => {
       found.issues.push(`${repo} is too large to scan for git dirs (cap ${cap} entries)`);
       return found;
     }
-    if (has(entries, 'HEAD', 'file') && has(entries, 'objects', 'dir') && has(entries, 'refs', 'dir')) {
-      found.units.push(dir);
-      if (has(entries, 'modules', 'dir')) pending.push(join(dir, 'modules'));
-      continue;
+    const shape = entries.filter((entry) => GIT_SHAPE.includes(entry.name));
+    const linked = shape.filter((entry) => entry.isSymbolicLink());
+    if (shape.length >= 2 && linked.length > 0) {
+      found.issues.push(
+        `${label}: ${linked.map((entry) => entry.name).join(', ')} is a symlink in what looks like a git dir, so what it holds cannot be bounded`,
+      );
+    }
+    const isUnit = has(entries, 'HEAD', 'file') && has(entries, 'objects', 'dir') && has(entries, 'refs', 'dir');
+    if (isUnit) found.units.push(dir);
+    if (
+      !isUnit &&
+      basename(dir) === 'pack' &&
+      entries.some((entry) => entry.isFile() && entry.name.endsWith('.pack'))
+    ) {
+      found.issues.push(`${label}: holds .pack files outside any git dir the scan identified (heuristic)`);
+    }
+    if (!isUnit && HEX2.test(basename(dir)) && entries.some((entry) => entry.isFile() && HEX38.test(entry.name))) {
+      stores.add(dirname(dir));
     }
     for (const entry of entries) {
       const path = join(dir, entry.name);
@@ -96,7 +128,32 @@ const discover = (repo, cap) => {
         else
           found.issues.push(`${relative(repo, path)} is neither a git dir nor a gitdir file, so it cannot be bounded`);
       }
-      if (entry.isDirectory()) pending.push(path);
+      if (!entry.isDirectory()) continue;
+      if (isUnit && entry.name === 'objects') {
+        try {
+          for (const object of readdirSync(path, { withFileTypes: true })) {
+            if (object.isDirectory() && !HEX2.test(object.name) && object.name !== 'pack') {
+              pending.push(join(path, object.name));
+            }
+          }
+        } catch (error) {
+          const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+          found.issues.push(`could not scan ${path}, the directory is unreadable (${code})`);
+        }
+      } else pending.push(path);
+    }
+  }
+  for (const store of stores) {
+    found.issues.push(
+      `${relative(repo, store) || '.'}: looks like a loose object store (2-hex dirs holding 38-hex files) outside any git dir the scan identified (heuristic)`,
+    );
+  }
+  for (const unit of found.units) {
+    const parent = found.units.find((other) => unit.startsWith(`${other}/`));
+    if (parent && !relative(parent, unit).startsWith('modules/')) {
+      found.issues.push(
+        `${relative(repo, unit)} is a git dir nested inside the git dir ${relative(repo, parent) || '.'}`,
+      );
     }
   }
   return found;
@@ -191,7 +248,7 @@ export const scanRepo = (repo, { maxEntries = MAX_ENTRIES, timeoutMs = GIT_TIMEO
     const label = relative(repo, gitDir) || '.';
     try {
       for (const file of FORBIDDEN_FILES) {
-        if (existsSync(join(gitDir, ...file))) {
+        if (exists(join(gitDir, ...file))) {
           issues.push(`${label}: ${file.join('/')} is present, so objects can come from outside the scanned store`);
         }
       }

@@ -1,0 +1,361 @@
+import { execFileSync, spawn } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { commitFixture, makeFixture } from './fixture.mjs';
+import { scanRepo } from './git-scan.mjs';
+import { TOKEN_HEADER } from './hooks/guard-server.mjs';
+import * as lane from './lane-checks.mjs';
+import { preflightInContainer } from './preflight.mjs';
+import { checkToolCall } from './protected-paths.mjs';
+
+const describePosix = process.platform === 'win32' ? describe.skip : describe;
+const here = (name: string) => new URL(name, import.meta.url).pathname;
+
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync(
+    'git',
+    ['-c', 'safe.directory=*', '-c', 'user.name=t', '-c', 'user.email=t@t.test', '-c', 'commit.gpgsign=false', ...args],
+    { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+
+let root: string;
+beforeAll(() => {
+  root = mkdtempSync(join(tmpdir(), 'p0-3-r5-'));
+});
+
+const cleanRepo = (name: string) => {
+  const fixture = makeFixture(join(root, name));
+  commitFixture(fixture.repo);
+  return fixture;
+};
+
+describePosix('A structural scan: symlinks, nesting, alternates, loose stores', () => {
+  it('control: a clean repo, a gc-packed repo and a fresh clone stay clean', () => {
+    const { repo } = cleanRepo('a-control');
+    expect(scanRepo(repo).clean).toBe(true);
+    git(repo, 'gc', '-q');
+    expect(scanRepo(repo).clean).toBe(true);
+    const clone = join(root, 'a-control-clone');
+    git(root, 'clone', '-q', repo, clone);
+    expect(scanRepo(clone).clean).toBe(true);
+  });
+
+  it('flags a git dir whose HEAD is a symlink, whatever the dir is named', () => {
+    const { repo } = cleanRepo('a-headlink');
+    const vault = join(repo, 'vault');
+    git(root, 'clone', '-q', '--bare', repo, vault);
+    execFileSync('mv', [join(vault, 'HEAD'), join(repo, 'real-head')]);
+    symlinkSync(join(repo, 'real-head'), join(vault, 'HEAD'));
+    const result = scanRepo(repo);
+    expect(result.clean).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/symlink/);
+  });
+
+  it.each(['objects', 'refs'])('flags a git dir whose %s is a symlink', (entry) => {
+    const { repo } = cleanRepo(`a-${entry}link`);
+    const vault = join(repo, 'vault');
+    git(root, 'clone', '-q', '--bare', repo, vault);
+    execFileSync('mv', [join(vault, entry), join(repo, `real-${entry}`)]);
+    symlinkSync(join(repo, `real-${entry}`), join(vault, entry));
+    const result = scanRepo(repo);
+    expect(result.clean).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/symlink/);
+  });
+
+  it('flags a bare repo nested inside .git, which the walk used to skip', () => {
+    const { repo } = cleanRepo('a-nested');
+    const source = join(root, 'a-nested-src.git');
+    git(root, 'clone', '-q', '--bare', repo, source);
+    execFileSync('cp', ['-r', source, join(repo, '.git', 'vault.git')]);
+    const result = scanRepo(repo);
+    expect(result.clean).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/vault\.git/);
+  });
+
+  it('flags a bare repo nested inside .git/objects', () => {
+    const { repo } = cleanRepo('a-nested-objects');
+    const source = join(root, 'a-nested-objects-src.git');
+    git(root, 'clone', '-q', '--bare', repo, source);
+    execFileSync('cp', ['-r', source, join(repo, '.git', 'objects', 'vault')]);
+    expect(scanRepo(repo).clean).toBe(false);
+  });
+
+  it('flags the alternates file in any form: a file, an empty file, a symlink, a dangling symlink', () => {
+    const forms: Record<string, (path: string) => void> = {
+      file: (path) => writeFileSync(path, '/tmp/elsewhere/objects\n'),
+      empty: (path) => writeFileSync(path, ''),
+      symlink: (path) => {
+        writeFileSync(`${path}.target`, '/tmp/elsewhere/objects\n');
+        symlinkSync(`${path}.target`, path);
+      },
+      dangling: (path) => symlinkSync('/nonexistent/alternates-target', path),
+    };
+    for (const [name, make] of Object.entries(forms)) {
+      const { repo } = cleanRepo(`a-alt-${name}`);
+      make(join(repo, '.git', 'objects', 'info', 'alternates'));
+      const result = scanRepo(repo);
+      expect(result.clean, name).toBe(false);
+      expect(result.issues.join(' '), name).toMatch(/alternates/);
+    }
+  });
+
+  it('flags a loose object store with no HEAD or refs, as a heuristic', () => {
+    const { repo } = cleanRepo('a-loose');
+    const blob = git(repo, 'rev-parse', 'HEAD').trim();
+    const store = join(repo, 'cache', 'store');
+    mkdirSync(join(store, blob.slice(0, 2)), { recursive: true });
+    execFileSync('cp', [join(repo, '.git', 'objects', blob.slice(0, 2), blob.slice(2)), join(store, blob.slice(0, 2))]);
+    const result = scanRepo(repo);
+    expect(result.clean).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/loose object store.*heuristic/);
+  });
+
+  it('flags a pack directory with .pack files anywhere in the tree', () => {
+    const { repo } = cleanRepo('a-pack');
+    git(repo, 'gc', '-q');
+    const pack = join(repo, 'data', 'pack');
+    mkdirSync(pack, { recursive: true });
+    const real = join(repo, '.git', 'objects', 'pack');
+    for (const file of execFileSync('ls', [real], { encoding: 'utf8' }).split('\n').filter(Boolean)) {
+      execFileSync('cp', [join(real, file), pack]);
+    }
+    const result = scanRepo(repo);
+    expect(result.clean).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/pack/);
+  });
+});
+
+describePosix('E the git env vars and path options once the repo is vouched for', () => {
+  const ctx = { home: '/h', cwd: '/workspace', workspace: '/workspace', gitClean: true } as never;
+  const bash = (command: string) => checkToolCall({ tool_name: 'Bash', tool_input: { command } }, ctx);
+
+  it.each([
+    'GIT_DIR=/srv/x/.git git log -p',
+    'GIT_OBJECT_DIRECTORY=/srv/x/objects git log -p',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES=/srv/x git log -p',
+    'GIT_WORK_TREE=/srv/x git diff',
+    'GIT_INDEX_FILE=/srv/x/index git ls-files',
+    'GIT_COMMON_DIR=/srv/x git log',
+    'env GIT_DIR=/srv/x git log -p',
+    'env -i GIT_OBJECT_DIRECTORY=/srv/x git cat-file -p HEAD',
+    'export GIT_DIR=/srv/x; git log -p',
+    'sh -c "GIT_DIR=/srv/x git log -p"',
+    'git --git-dir=/srv/x/.git log -p',
+    'git --git-dir=/workspace/vault.git log -p',
+    'git --git-dir /workspace/vault.git log -p',
+    'git --git-dir=.git/vault.git log -p',
+    'git --work-tree=/workspace/sub diff',
+    'git -C /workspace/sub log -p',
+    'git -C /workspace/.git/vault.git log -p',
+    'git -C /srv/x status',
+    'git --git-dir=/workspace/vault.git status',
+  ])('denies %s', (command) => {
+    expect(bash(command).blocked).toBe(true);
+  });
+
+  it.each([
+    'git log -p',
+    'git status',
+    'git -C /workspace log -p',
+    'git -C . diff',
+    'git --git-dir=/workspace/.git log -p',
+    'git --git-dir .git log -p',
+    'git --git-dir=/workspace/.git --work-tree=/workspace diff',
+    'echo GITHUB_DIR=1',
+  ])('allows %s', (command) => {
+    expect(bash(command).blocked).toBe(false);
+  });
+});
+
+describePosix('F preflight timeoutMs bounds wall time', () => {
+  it('kills a container that ignores SIGTERM at the deadline', () => {
+    const dir = mkdtempSync(join(root, 'f-'));
+    const engine = join(dir, 'fake-engine');
+    writeFileSync(
+      engine,
+      `#!/bin/sh
+if [ "$1" = run ]; then
+  exec ${process.execPath} -e "process.on('SIGTERM', () => {}); setTimeout(() => {}, 30000)"
+fi
+exit 0
+`,
+    );
+    chmodSync(engine, 0o755);
+    const repo = join(dir, 'repo');
+    mkdirSync(repo);
+    const started = Date.now();
+    const result = preflightInContainer(engine, { repo, image: 'x', runId: 'r5', timeoutMs: 1000 });
+    expect(Date.now() - started).toBeLessThan(8000);
+    expect(result.clean).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/timed out|deadline|timeout/i);
+  });
+});
+
+describePosix('B spawn audit: any attempt to start a process is observable even when swallowed', () => {
+  const GUARD_FILES = ['hooks/guard-server.mjs', 'protected-paths.mjs'];
+  const permission = (() => {
+    try {
+      execFileSync(process.execPath, ['--permission', '--allow-fs-read=*', '-e', '1'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const netFlag = (() => {
+    try {
+      execFileSync(process.execPath, ['--permission', '--allow-fs-read=*', '--allow-net', '-e', '1'], {
+        stdio: 'ignore',
+      });
+      return ['--allow-net'];
+    } catch {
+      return [];
+    }
+  })();
+  const itPermission = permission ? it : it.skip;
+  const attempts = (file: string) => (existsSync(file) ? readFileSync(file, 'utf8').trim() : '');
+
+  it('the audit preload records a swallowed spawn that the permission model denies', () => {
+    const audit = join(root, 'b-control.audit');
+    const script = `
+      const name = ['node:child', 'process'].join('_');
+      const m = await import(name);
+      try { m['exec' + 'FileSync']('true'); } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    `;
+    execFileSync(
+      process.execPath,
+      [
+        '--permission',
+        '--allow-fs-read=*',
+        `--allow-fs-write=${audit}`,
+        '--import',
+        here('./spawn-audit.mjs'),
+        '--input-type=module',
+        '-e',
+        script,
+      ],
+      { env: { ...process.env, SPAWN_AUDIT_FILE: audit } },
+    );
+    expect(attempts(audit)).toMatch(/execFileSync/);
+  });
+
+  itPermission('checkToolCall makes no spawn attempt on the gitClean true and false paths', () => {
+    const audit = join(root, 'b-driver.audit');
+    const out = execFileSync(
+      process.execPath,
+      [
+        '--permission',
+        '--allow-fs-read=*',
+        `--allow-fs-write=${audit}`,
+        '--import',
+        here('./spawn-audit.mjs'),
+        here('./spawn-driver.mjs'),
+      ],
+      { encoding: 'utf8', env: { ...process.env, SPAWN_AUDIT_FILE: audit } },
+    );
+    expect(out.trim()).toBe('ok');
+    expect(attempts(audit)).toBe('');
+  });
+
+  itPermission('the guard server makes no spawn attempt with --git-clean on or off', async () => {
+    const fixture = makeFixture(join(root, 'b-server'));
+    for (const clean of [true, false]) {
+      const audit = join(root, `b-server-${clean}.audit`);
+      const log = join(root, `b-server-${clean}.jsonl`);
+      const child = spawn(
+        process.execPath,
+        [
+          '--permission',
+          '--allow-fs-read=*',
+          `--allow-fs-write=${log}`,
+          `--allow-fs-write=${audit}`,
+          ...netFlag,
+          '--import',
+          here('./spawn-audit.mjs'),
+          here('./hooks/guard-server.mjs'),
+          '--log',
+          log,
+          '--secret',
+          's',
+          '--workspace',
+          '/workspace',
+          '--root',
+          fixture.repo,
+          ...(clean ? ['--git-clean'] : []),
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, SPAWN_AUDIT_FILE: audit } },
+      );
+      try {
+        const url = await new Promise<string>((resolve, reject) => {
+          child.stdout.once('data', (chunk) => resolve(String(chunk).trim()));
+          child.once('exit', () => reject(new Error('guard exited')));
+        });
+        for (const command of ['git log -p', 'A=1 git log -p', 'cat .env', 'grep -r K .', 'cat README.md']) {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { [TOKEN_HEADER]: 's' },
+            body: JSON.stringify({
+              hook_event_name: 'PreToolUse',
+              tool_name: 'Bash',
+              tool_input: { command },
+              cwd: '/workspace',
+            }),
+          });
+          expect(response.status).toBe(200);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(attempts(audit), `git-clean ${clean}`).toBe('');
+      } finally {
+        child.kill();
+      }
+    }
+  });
+
+  it('the guard modules contain no dynamic import, process.binding, getBuiltinModule, createRequire, Function( or eval(', () => {
+    const banned = [
+      /\bimport\s*\(/,
+      /process\s*\.\s*binding/,
+      /getBuiltinModule/,
+      /createRequire/,
+      /\bFunction\s*\(/,
+      /\beval\s*\(/,
+      /\brequire\s*\(/,
+      /child_process/,
+    ];
+    for (const file of GUARD_FILES) {
+      const source = readFileSync(here(`./${file}`), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+      for (const pattern of banned) expect(source, `${file} ${pattern}`).not.toMatch(pattern);
+    }
+  });
+});
+
+describePosix('C preflightComplete', () => {
+  const good = { dirtyVariants: 5, variants: 5, missingClean: false, missingCreated: false, cloneClean: true };
+  it('passes when every variant is dirty, the missing path is refused and a fresh clone is clean', () => {
+    expect(lane.preflightComplete(good)).toBe(true);
+  });
+  it('fails without a clean fresh clone', () => {
+    expect(lane.preflightComplete({ ...good, cloneClean: false })).toBe(false);
+  });
+  it('fails when a single variant scans clean', () => {
+    expect(lane.preflightComplete({ ...good, dirtyVariants: 4 })).toBe(false);
+  });
+  it('fails with no variants', () => {
+    expect(lane.preflightComplete({ ...good, dirtyVariants: 0, variants: 0 })).toBe(false);
+  });
+  it('fails when a missing path scans clean or gets created', () => {
+    expect(lane.preflightComplete({ ...good, missingClean: true })).toBe(false);
+    expect(lane.preflightComplete({ ...good, missingCreated: true })).toBe(false);
+  });
+});
+
+describePosix('D toolProbe', () => {
+  it('does not pass on a hook error result', () => {
+    expect(lane.toolProbe([{ attempted: true, output: 'PreToolUse:Glob hook error: connection refused' }])).toBe(
+      'FAIL',
+    );
+    expect(lane.toolProbe([{ attempted: true, output: '/workspace/.env' }])).toBe('PASS');
+  });
+});

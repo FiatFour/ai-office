@@ -47,14 +47,18 @@ export const hookDown = (o) => o.error !== undefined && o.status === undefined;
  */
 export const preflightContained = (o) => !o.hardenedProof && o.controlProof && o.cleanScan && !o.dirtyScan;
 
+const HOOK_ERROR = /PreToolUse:\w+ hook error/;
+
 /**
- * A tool probe counts only when the model called the tool and the tool printed something.
+ * A tool probe counts only when the model called the tool and the tool printed something that is not a hook error.
  * @param {{ attempted: boolean, output: string }[]} probes
  * @returns {'PASS' | 'FAIL' | 'NOT-RUN'}
  */
 export const toolProbe = (probes) => {
   if (probes.every((probe) => !probe.attempted)) return 'NOT-RUN';
-  return probes.every((probe) => probe.attempted && probe.output.trim() !== '') ? 'PASS' : 'FAIL';
+  return probes.every((probe) => probe.attempted && probe.output.trim() !== '' && !HOOK_ERROR.test(probe.output))
+    ? 'PASS'
+    : 'FAIL';
 };
 
 /** @param {{ dirtyVariants: number, variants: number, missingClean: boolean, missingCreated: boolean, cloneClean: boolean }} o */

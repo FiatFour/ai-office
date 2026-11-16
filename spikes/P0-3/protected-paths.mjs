@@ -470,10 +470,11 @@ const recursiveSearchHit = (tokens, ctx) => {
 
 const GIT_PATH_OPTIONS = new Set(['-C', '--git-dir', '--work-tree']);
 const GIT_VALUE_OPTIONS = new Set([...GIT_PATH_OPTIONS, '-c', '--namespace', '--exec-path']);
+const GIT_ENV = /\bGIT_(DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|WORK_TREE|INDEX_FILE|COMMON_DIR)\b/;
 
 /**
- * With a vouched repo a git reader is allowed only inside the workspace and never over untracked or unindexed
- * files. The guard never runs git itself.
+ * With a vouched repo a git command may point only at the workspace root and its own .git, and a reader never runs
+ * over untracked or unindexed files. The guard never runs git itself.
  * @param {string[]} tokens
  * @param {PathContext} ctx
  * @returns {{ path: string, reason: string } | null}
@@ -485,19 +486,26 @@ const gitReaderHit = (tokens, ctx) => {
   let index = 1;
   while (index < tokens.length && /^-/.test(/** @type {string} */ (tokens[index]))) {
     const option = /** @type {string} */ (tokens[index]);
-    if (GIT_PATH_OPTIONS.has(option)) {
-      const target = expand(tokens[index + 1] ?? '.', ctx);
-      if (!within(target, workspace)) outside.push(target);
+    const [name = '', inline] = option.startsWith('--') ? option.split(/=(.*)/s) : [option];
+    if (GIT_PATH_OPTIONS.has(name)) {
+      const target = expand(inline ?? tokens[index + 1] ?? '.', ctx);
+      const allowed = name === '--git-dir' ? resolve(workspace, '.git') : workspace;
+      if (target !== allowed) outside.push(target);
     }
-    index += GIT_VALUE_OPTIONS.has(option) ? 2 : 1;
+    index += GIT_VALUE_OPTIONS.has(name) && inline === undefined ? 2 : 1;
   }
   const subcommand = tokens[index] ?? '';
   const flags = tokens.slice(index + 1).filter((token) => token.startsWith('-'));
   const listsUntracked =
     subcommand === 'ls-files' && flags.some((flag) => flag === '--others' || /^-[a-zA-Z]*o/.test(flag));
-  if (!GIT_READERS.has(subcommand) && !listsUntracked) return null;
   const hit = (/** @type {string} */ path, /** @type {string} */ reason) => ({ path, reason });
-  if (outside[0]) return hit(outside[0], `git would read ${outside[0]}, which is outside the workspace ${workspace}`);
+  if (outside[0]) {
+    return hit(
+      outside[0],
+      `git would use ${outside[0]}, which is outside the workspace root ${workspace} and its own .git`,
+    );
+  }
+  if (!GIT_READERS.has(subcommand) && !listsUntracked) return null;
   if (listsUntracked || flags.some((flag) => flag === '--no-index' || flag === '--untracked')) {
     return hit(subcommand, `git ${subcommand} would read files that git does not track, which the mask may not cover`);
   }
@@ -568,6 +576,13 @@ const checkBash = (command, ctx, depth = 0) => {
     if (ctx.gitClean !== true) {
       const gate = gitGate(text, commands.flat());
       if (gate) return gate;
+    } else if (GIT_ENV.test(text) || commands.flat().some((token) => GIT_ENV.test(token))) {
+      return {
+        blocked: true,
+        path: 'git',
+        reason:
+          'a GIT_DIR, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_WORK_TREE, GIT_INDEX_FILE or GIT_COMMON_DIR variable could point git outside the scanned repo',
+      };
     }
     for (const token of commands.flat()) {
       const named =

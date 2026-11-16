@@ -23,6 +23,7 @@ export const run = (bin, args, options = {}) => {
   const result = spawnSync(bin, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options });
   return {
     code: result.status ?? -1,
+    timedOut: /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code === 'ETIMEDOUT',
     out: String(result.stdout ?? ''),
     err: String(result.stderr ?? ''),
     all: `${result.stdout ?? ''}${result.stderr ?? ''}`,

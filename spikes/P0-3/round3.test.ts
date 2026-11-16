@@ -97,8 +97,8 @@ describePosix('F1 the guard never runs git on the host', () => {
     expect(verdict.blocked && verdict.reason).toMatch(/outside the workspace/);
   });
 
-  it.each(['git -C /workspace/sub log -p', 'git --git-dir .git/modules/sub log -p', 'git -C . diff'])(
-    'allows %s inside the workspace',
+  it.each(['git -C /workspace log -p', 'git --git-dir .git log -p', 'git -C . diff'])(
+    'allows %s at the workspace root and its own .git',
     (command) => {
       expect(bash(command, { cwd: '/workspace', workspace: '/workspace', gitClean: true }).blocked).toBe(false);
     },

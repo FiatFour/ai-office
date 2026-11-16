@@ -13,7 +13,7 @@ node spikes/P0-5/lanes.mjs --label <host> --out /tmp/swarm-P0-5/owner
 
 `lanes.mjs` builds the cage image from `Containerfile` (Debian trixie slim with tmux), starts `term-server.mjs`, drives each lane through Playwright, saves `<slug>.png` and `lanes-<label>.txt`, and removes the cage. To view the terminal by hand, run `node spikes/P0-5/term-server.mjs --engine docker` and open `http://127.0.0.1:7681/`.
 
-The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `ubuntu-latest`, `windows-latest` and `macos-15-intel`, and uploads the screenshots as artifacts. The CI evidence below is from [run 43754183740](https://github.com/FiatFour/ai-office/actions/runs/43754183740) at 4e31fa5 and [run 43787563689](https://github.com/FiatFour/ai-office/actions/runs/43787563689) at 7ed49bc.
+The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `ubuntu-latest`, `windows-latest` and `macos-15-intel`, and uploads the screenshots as artifacts. The CI evidence below is from [run 43754183740](https://github.com/FiatFour/ai-office/actions/runs/43754183740) at 4e31fa5 and [run 43787563689](https://github.com/FiatFour/ai-office/actions/runs/43787563689) at 7ed49bc. After the Origin and Host checks and the switch to the bundled `conpty.dll`, all lanes passed again on the three CI hosts in [run 43799584154](https://github.com/FiatFour/ai-office/actions/runs/43799584154) at ad8995a. In that run Windows resize settled in 436 ms and key-to-render p95 was 16.9 ms.
 
 ## Wire shape
 

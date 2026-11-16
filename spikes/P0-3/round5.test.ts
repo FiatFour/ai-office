@@ -127,6 +127,67 @@ describePosix('A structural scan: symlinks, nesting, alternates, loose stores', 
   });
 });
 
+describePosix('G structural git dir walk: any unknown entry inside a git dir is a finding', () => {
+  const bareInto = (name: string, where: string[]) => {
+    const { repo } = cleanRepo(name);
+    const source = join(root, `${name}-src.git`);
+    git(root, 'clone', '-q', '--bare', repo, source);
+    const target = join(repo, '.git', ...where);
+    mkdirSync(join(target, '..'), { recursive: true });
+    execFileSync('cp', ['-r', source, target]);
+    return repo;
+  };
+
+  it.each([
+    ['objects/pack/v.git'],
+    ['objects/ab/v.git'],
+    ['objects/info/v.git'],
+    ['refs/v.git'],
+    ['hooks/v.git'],
+    ['logs/v.git'],
+  ])('flags a bare repo at .git/%s', (where) => {
+    const repo = bareInto(`g-${where.replace(/\W/g, '-')}`, where.split('/'));
+    expect(scanRepo(repo).clean).toBe(false);
+  });
+
+  it.each([
+    ['objects/pack/stray.txt'],
+    ['objects/ab/stray.txt'],
+    ['objects/stray'],
+    ['info/stray'],
+    ['stray-dir/file'],
+    ['logs/stray'],
+  ])('flags an unknown entry at .git/%s', (where) => {
+    const { repo } = cleanRepo(`g-stray-${where.replace(/\W/g, '-')}`);
+    const path = join(repo, '.git', ...where.split('/'));
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, 'x');
+    expect(scanRepo(repo).clean).toBe(false);
+  });
+
+  it('control: fresh, cloned, gc-packed, repacked and submodule layouts stay clean', () => {
+    const { repo } = cleanRepo('g-control');
+    expect(scanRepo(repo).clean).toBe(true);
+    git(repo, 'gc', '-q');
+    expect(scanRepo(repo).clean).toBe(true);
+    git(repo, 'repack', '-adq', '--write-bitmap-index');
+    git(repo, 'commit-graph', 'write');
+    expect(scanRepo(repo).clean).toBe(true);
+    const clone = join(root, 'g-control-clone');
+    git(root, 'clone', '-q', repo, clone);
+    expect(scanRepo(clone).clean).toBe(true);
+    const sub = cleanRepo('g-control-sub').repo;
+    const outer = cleanRepo('g-control-outer').repo;
+    git(outer, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'vendor/sub');
+    git(outer, 'commit', '-qm', 'sub');
+    const linked = join(root, 'g-control-linked');
+    git(root, '-c', 'protocol.file.allow=always', 'clone', '-q', '--recurse-submodules', outer, linked);
+    expect(existsSync(join(linked, '.git', 'modules', 'vendor', 'sub', 'HEAD'))).toBe(true);
+    git(join(linked, 'vendor', 'sub'), 'reflog', 'expire', '--expire=now', '--all');
+    expect(scanRepo(linked).clean).toBe(true);
+  });
+});
+
 describePosix('E the git env vars and path options once the repo is vouched for', () => {
   const ctx = { home: '/h', cwd: '/workspace', workspace: '/workspace', gitClean: true } as never;
   const bash = (command: string) => checkToolCall({ tool_name: 'Bash', tool_input: { command } }, ctx);
@@ -151,6 +212,34 @@ describePosix('E the git env vars and path options once the repo is vouched for'
     'git -C /workspace/.git/vault.git log -p',
     'git -C /srv/x status',
     'git --git-dir=/workspace/vault.git status',
+    'cd A && git log -p',
+    'cd .git/vault.git && git log -p',
+    'cd sub && git log',
+    'cd .git/objects/pack/v.git && git log -p',
+    'cd sub; cd ..; git log',
+    'cd - && git log -p',
+    'cd $X && git log -p',
+    'cd && git log',
+    'pushd sub >/dev/null && git log',
+    'popd && git log',
+    'sh -c "cd sub && git log -p"',
+    'cd sub && sh -c "git log -p"',
+    'git config core.worktree /home/node && git add -f -A :/ && git diff --cached',
+    'git -c core.worktree=/home/node diff --cached',
+    'git -ccore.worktree=/home/node diff',
+    'git --config-env=core.worktree=WT diff',
+    'git config core.gitdir /x',
+    'git config core.bare true',
+    'git config include.path /x',
+    'git config includeIf.gitdir:/x.path /y',
+    'git config extensions.worktreeConfig true',
+    'git config --add core.worktree /',
+    'git -c include.path=/x log -p',
+    'git worktree add /tmp/w',
+    'git update-ref refs/replace/abc def',
+    'git symbolic-ref HEAD refs/stash',
+    'git update-ref refs/notes/x HEAD',
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.worktree GIT_CONFIG_VALUE_0=/ git diff',
   ])('denies %s', (command) => {
     expect(bash(command).blocked).toBe(true);
   });
@@ -164,6 +253,15 @@ describePosix('E the git env vars and path options once the repo is vouched for'
     'git --git-dir .git log -p',
     'git --git-dir=/workspace/.git --work-tree=/workspace diff',
     'echo GITHUB_DIR=1',
+    'cd /workspace && git log -p',
+    'cd . && git status',
+    'cd sub && ls',
+    'git log; cd sub; ls',
+    'git config user.name x',
+    'git -c core.pager=cat log -p',
+    'git update-ref refs/heads/x HEAD',
+    'git symbolic-ref HEAD refs/heads/main',
+    'git branch',
   ])('allows %s', (command) => {
     expect(bash(command).blocked).toBe(false);
   });

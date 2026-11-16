@@ -469,24 +469,36 @@ const recursiveSearchHit = (tokens, ctx) => {
 };
 
 const GIT_PATH_OPTIONS = new Set(['-C', '--git-dir', '--work-tree']);
-const GIT_VALUE_OPTIONS = new Set([...GIT_PATH_OPTIONS, '-c', '--namespace', '--exec-path']);
-const GIT_ENV = /\bGIT_(DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|WORK_TREE|INDEX_FILE|COMMON_DIR)\b/;
+const GIT_VALUE_OPTIONS = new Set([...GIT_PATH_OPTIONS, '-c', '--config-env', '--namespace', '--exec-path']);
+const GIT_ENV =
+  /\bGIT_(DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|WORK_TREE|INDEX_FILE|COMMON_DIR|CONFIG_[A-Z_]+)\b/;
+const REDIRECTING_CONFIG = /^(core\.(worktree|gitdir|bare)$|include\.path$|includeif\.|extensions\.)/i;
+const HEADS_ONLY_COMMANDS = new Set(['update-ref', 'symbolic-ref']);
+const BOUNDED_REF = /^(refs\/heads\/.+|HEAD|[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
- * With a vouched repo a git command may point only at the workspace root and its own .git, and a reader never runs
- * over untracked or unindexed files. The guard never runs git itself.
+ * With a vouched repo a git command may point only at the workspace root and its own .git, never runs after a cd
+ * to anywhere else, never sets a config key that redirects the work tree, git dir, includes or extensions, never
+ * runs git worktree, and never writes a ref outside refs/heads. A reader never runs over untracked or unindexed
+ * files. The guard never runs git itself.
  * @param {string[]} tokens
  * @param {PathContext} ctx
+ * @param {boolean} moved
  * @returns {{ path: string, reason: string } | null}
  */
-const gitReaderHit = (tokens, ctx) => {
+const gitReaderHit = (tokens, ctx, moved) => {
   if (basename(tokens[0] ?? '') !== 'git') return null;
   const workspace = ctx.workspace ?? ctx.cwd;
   const outside = [];
+  const redirecting = [];
   let index = 1;
   while (index < tokens.length && /^-/.test(/** @type {string} */ (tokens[index]))) {
     const option = /** @type {string} */ (tokens[index]);
     const [name = '', inline] = option.startsWith('--') ? option.split(/=(.*)/s) : [option];
+    if (name === '-c' || name === '--config-env' || (!option.startsWith('--') && option.startsWith('-c'))) {
+      const setting = name === '-c' || name === '--config-env' ? (inline ?? tokens[index + 1] ?? '') : option.slice(2);
+      if (REDIRECTING_CONFIG.test(setting)) redirecting.push(setting);
+    }
     if (GIT_PATH_OPTIONS.has(name)) {
       const target = expand(inline ?? tokens[index + 1] ?? '.', ctx);
       const allowed = name === '--git-dir' ? resolve(workspace, '.git') : workspace;
@@ -504,6 +516,25 @@ const gitReaderHit = (tokens, ctx) => {
       outside[0],
       `git would use ${outside[0]}, which is outside the workspace root ${workspace} and its own .git`,
     );
+  }
+  const operands = tokens.slice(index + 1).filter((token) => !token.startsWith('-'));
+  const reason = (/** @type {string} */ path, /** @type {string} */ why) => hit(path, `git ${why}`);
+  if (moved) {
+    return reason(
+      subcommand,
+      'runs after a cd or pushd to somewhere other than the workspace root, so it may use another repo',
+    );
+  }
+  if (redirecting[0] || (subcommand === 'config' && operands.some((token) => REDIRECTING_CONFIG.test(token)))) {
+    return reason(
+      redirecting[0] ?? 'config',
+      'would set a config key that redirects the work tree, git dir, includes or extensions',
+    );
+  }
+  if (subcommand === 'worktree')
+    return reason(subcommand, 'worktree adds work trees and git dirs the preflight did not scan');
+  if (HEADS_ONLY_COMMANDS.has(subcommand) && !operands.every((token) => BOUNDED_REF.test(token))) {
+    return reason(subcommand, `${subcommand} may write a ref outside refs/heads`);
   }
   if (!GIT_READERS.has(subcommand) && !listsUntracked) return null;
   if (listsUntracked || flags.some((flag) => flag === '--no-index' || flag === '--untracked')) {
@@ -568,9 +599,10 @@ const gitGate = (command, decoded) => {
  * @param {string} command
  * @param {PathContext} ctx
  * @param {number} [depth]
+ * @param {boolean} [startedElsewhere]
  * @returns {Verdict}
  */
-const checkBash = (command, ctx, depth = 0) => {
+const checkBash = (command, ctx, depth = 0, startedElsewhere = false) => {
   for (const text of new Set([command, withAssignments(command)])) {
     const commands = parseCommands(text);
     if (ctx.gitClean !== true) {
@@ -591,12 +623,16 @@ const checkBash = (command, ctx, depth = 0) => {
       if (named) return { blocked: true, path: named, reason: `the command names the protected path ${named}` };
     }
     let here = ctx;
+    let moved = startedElsewhere;
     for (const raw of commands) {
       const segment = unwrap(raw);
       const program = basename(segment[0] ?? '');
-      if (program === 'cd' || program === 'pushd') {
-        const target = segment.find((token, index) => index > 0 && !token.startsWith('-')) ?? ctx.home;
-        here = { ...here, cwd: expand(target, here) };
+      if (program === 'cd' || program === 'pushd' || program === 'popd') {
+        const target =
+          segment.find((token, index) => index > 0 && (token === '-' || !token.startsWith('-'))) ?? ctx.home;
+        const resolved = target === '-' || /^\+\d+$/.test(target) || program === 'popd' ? null : expand(target, here);
+        if (resolved !== (ctx.workspace ?? ctx.cwd)) moved = true;
+        here = { ...here, cwd: resolved ?? here.cwd };
       }
       if (INTERPRETERS.test(program)) {
         const hidden = segment.map((token) => embeddedName(token, ctx)).find(Boolean);
@@ -614,7 +650,7 @@ const checkBash = (command, ctx, depth = 0) => {
               reason: `shells are nested deeper than ${MAX_SHELL_DEPTH} levels, which the matcher cannot follow`,
             };
           }
-          const nested = checkBash(inner, here, depth + 1);
+          const nested = checkBash(inner, here, depth + 1, moved);
           if (nested.blocked) return nested;
         }
       }
@@ -626,7 +662,7 @@ const checkBash = (command, ctx, depth = 0) => {
           reason: `a recursive read of ${hit} would reach protected files, or the tree is too large to scan`,
         };
       }
-      const gitHit = gitReaderHit(segment, here);
+      const gitHit = gitReaderHit(segment, here, moved && ctx.gitClean === true);
       if (gitHit) return { blocked: true, ...gitHit };
     }
   }

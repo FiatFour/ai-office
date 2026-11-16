@@ -55,6 +55,59 @@ const FORBIDDEN_FILES = [
 const GIT_SHAPE = ['HEAD', 'objects', 'refs'];
 const HEX2 = /^[0-9a-f]{2}$/;
 const HEX38 = /^[0-9a-f]{38}$/;
+const TMP_NAME = /^tmp_(obj|pack|idx|rev|bitmap|mtimes)_\w+$/;
+const PACK_NAME = /^pack-[0-9a-f]{40,64}\.(pack|idx|rev|bitmap|mtimes|keep|promisor)$/;
+const TOP_FILES = new Set([
+  'HEAD',
+  'config',
+  'config.worktree',
+  'description',
+  'packed-refs',
+  'index',
+  'commondir',
+  'gitdir',
+  'shallow',
+  'FETCH_HEAD',
+  'ORIG_HEAD',
+  'AUTO_MERGE',
+  'COMMIT_EDITMSG',
+  'MERGE_HEAD',
+  'MERGE_MSG',
+  'MERGE_MODE',
+  'SQUASH_MSG',
+  'TAG_EDITMSG',
+  'CHERRY_PICK_HEAD',
+  'REVERT_HEAD',
+  'REBASE_HEAD',
+  'NOTES_MERGE_REF',
+  'BISECT_LOG',
+  'BISECT_START',
+  'BISECT_TERMS',
+  'BISECT_EXPECTED_REV',
+  'BISECT_ANCESTORS_OK',
+  'BISECT_NAMES',
+]);
+const TOP_FILE_PATTERNS = [/\.lock$/, /^sharedindex\.[0-9a-f]+$/];
+const TOP_DIRS = new Set([
+  'hooks',
+  'info',
+  'objects',
+  'refs',
+  'logs',
+  'branches',
+  'modules',
+  'worktrees',
+  'rr-cache',
+  'sequencer',
+  'rebase-merge',
+  'rebase-apply',
+  'lost-found',
+]);
+const REFS_DIRS = new Set(['heads', 'tags', 'remotes', 'notes', 'replace', 'original', 'bisect', 'rewritten']);
+const INFO_FILES = new Set(['exclude', 'refs', 'attributes', 'sparse-checkout', 'grafts']);
+const OBJECT_INFO_FILES = new Set(['packs', 'commit-graph', 'alternates', 'http-alternates']);
+const OBJECT_INFO_GRAPH_FILE = /^(commit-graph-chain|graph-[0-9a-f]+\.graph|commit-graph-chain\.lock)$/;
+const MIDX_FILE = /^multi-pack-index(-[0-9a-f]+\.(midx|rev)|-chain)?$/;
 
 /** @param {import('node:fs').Dirent[]} entries @param {string} name @param {'file' | 'dir'} kind */
 const has = (entries, name, kind) =>
@@ -68,6 +121,72 @@ const exists = (path) => {
   } catch (error) {
     return /** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT';
   }
+};
+
+/**
+ * Lists a git dir by name only, never reading file contents, and returns what in it is not a known git dir entry.
+ * objects/ holds 2-hex dirs of 38-hex files, pack and info; pack/ holds pack-<hex> files and git's tmp names; no
+ * other subdirectory or file name is tolerated there, nor in the other fixed dirs of a git dir.
+ * @param {string} gitDir
+ * @param {(path: string) => import('node:fs').Dirent[] | null} list
+ * @returns {string[]}
+ */
+const unknownEntries = (gitDir, list) => {
+  /** @type {string[]} */
+  const unknown = [];
+  /** @param {string} path @param {import('node:fs').Dirent[] | null} entries @param {(entry: import('node:fs').Dirent) => boolean} accepts */
+  const check = (path, entries, accepts) => {
+    for (const entry of entries ?? []) {
+      if (!accepts(entry)) unknown.push(`${relative(gitDir, join(path, entry.name))}`);
+    }
+  };
+  const file = (/** @type {import('node:fs').Dirent} */ entry) => entry.isFile();
+  check(gitDir, list(gitDir), (entry) =>
+    entry.isDirectory()
+      ? TOP_DIRS.has(entry.name)
+      : file(entry) && (TOP_FILES.has(entry.name) || TOP_FILE_PATTERNS.some((pattern) => pattern.test(entry.name))),
+  );
+  const sub = (/** @type {string[]} */ ...parts) => join(gitDir, ...parts);
+  check(sub('objects'), list(sub('objects')), (entry) =>
+    entry.isDirectory()
+      ? HEX2.test(entry.name) || entry.name === 'pack' || entry.name === 'info'
+      : file(entry) && TMP_NAME.test(entry.name),
+  );
+  for (const dir of (list(sub('objects')) ?? []).filter((entry) => entry.isDirectory() && HEX2.test(entry.name))) {
+    check(
+      sub('objects', dir.name),
+      list(sub('objects', dir.name)),
+      (entry) => file(entry) && (HEX38.test(entry.name) || TMP_NAME.test(entry.name)),
+    );
+  }
+  check(sub('objects', 'pack'), list(sub('objects', 'pack')), (entry) =>
+    entry.isDirectory()
+      ? entry.name === 'multi-pack-index.d'
+      : file(entry) && (PACK_NAME.test(entry.name) || TMP_NAME.test(entry.name) || MIDX_FILE.test(entry.name)),
+  );
+  check(
+    sub('objects', 'pack', 'multi-pack-index.d'),
+    list(sub('objects', 'pack', 'multi-pack-index.d')),
+    (entry) => file(entry) && MIDX_FILE.test(entry.name),
+  );
+  check(sub('objects', 'info'), list(sub('objects', 'info')), (entry) =>
+    entry.isDirectory() ? entry.name === 'commit-graphs' : file(entry) && OBJECT_INFO_FILES.has(entry.name),
+  );
+  check(
+    sub('objects', 'info', 'commit-graphs'),
+    list(sub('objects', 'info', 'commit-graphs')),
+    (entry) => file(entry) && OBJECT_INFO_GRAPH_FILE.test(entry.name),
+  );
+  check(sub('info'), list(sub('info')), (entry) => file(entry) && INFO_FILES.has(entry.name));
+  check(sub('hooks'), list(sub('hooks')), file);
+  check(sub('branches'), list(sub('branches')), file);
+  check(sub('logs'), list(sub('logs')), (entry) =>
+    entry.name === 'HEAD' ? file(entry) : entry.name === 'refs' && entry.isDirectory(),
+  );
+  check(sub('refs'), list(sub('refs')), (entry) =>
+    entry.isDirectory() ? REFS_DIRS.has(entry.name) : file(entry) && entry.name === 'stash',
+  );
+  return unknown;
 };
 
 /**
@@ -109,7 +228,29 @@ const discover = (repo, cap) => {
       );
     }
     const isUnit = has(entries, 'HEAD', 'file') && has(entries, 'objects', 'dir') && has(entries, 'refs', 'dir');
-    if (isUnit) found.units.push(dir);
+    if (isUnit) {
+      found.units.push(dir);
+      const unknown = unknownEntries(dir, (path) => {
+        try {
+          const listed = readdirSync(path, { withFileTypes: true });
+          seen += listed.length;
+          return listed;
+        } catch (error) {
+          const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+          if (code !== 'ENOENT') found.issues.push(`could not scan ${path}, the directory is unreadable (${code})`);
+          return null;
+        }
+      });
+      if (seen > cap) {
+        found.issues.push(`${repo} is too large to scan for git dirs (cap ${cap} entries)`);
+        return found;
+      }
+      if (unknown.length > 0) {
+        found.issues.push(
+          `${label}: ${unknown.length} entr${unknown.length === 1 ? 'y is' : 'ies are'} not part of a git dir's layout (${unknown.slice(0, 5).join(', ')}), so what they hold cannot be bounded`,
+        );
+      }
+    }
     if (
       !isUnit &&
       basename(dir) === 'pack' &&
@@ -129,18 +270,7 @@ const discover = (repo, cap) => {
           found.issues.push(`${relative(repo, path)} is neither a git dir nor a gitdir file, so it cannot be bounded`);
       }
       if (!entry.isDirectory()) continue;
-      if (isUnit && entry.name === 'objects') {
-        try {
-          for (const object of readdirSync(path, { withFileTypes: true })) {
-            if (object.isDirectory() && !HEX2.test(object.name) && object.name !== 'pack') {
-              pending.push(join(path, object.name));
-            }
-          }
-        } catch (error) {
-          const code = /** @type {NodeJS.ErrnoException} */ (error).code;
-          found.issues.push(`could not scan ${path}, the directory is unreadable (${code})`);
-        }
-      } else pending.push(path);
+      if (!(isUnit && entry.name === 'objects')) pending.push(path);
     }
   }
   for (const store of stores) {

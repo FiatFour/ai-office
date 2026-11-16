@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { NON_PUBLIC } from './address.mjs';
 
 /** @typedef {{ host: string, wildcard: boolean, port: number }} Rule */
 
@@ -72,6 +73,8 @@ const regexEscape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /**
  * Squid config that allows CONNECT only to the rules' host and port pairs, with the same matching as `isAllowed`.
  * `-n` stops Squid from reverse-resolving an IP-literal target, so IP literals never match a rule.
+ * Each rule first denies CONNECT when its name resolves to a non-public address, then allows it. Squid evaluates ACLs
+ * left to right and stops at the first miss, so a name outside the allowlist is never resolved.
  * @param {Rule[]} rules
  * @param {{ dnsServer: string }} options
  */
@@ -79,6 +82,7 @@ export function toSquidConf(rules, { dnsServer }) {
   const ruleLines = rules.flatMap((rule, index) => [
     `acl r${index}_host dstdom_regex -n -i ${rule.wildcard ? `\\.${regexEscape(rule.host)}$` : `^${regexEscape(rule.host)}$`}`,
     `acl r${index}_port port ${rule.port}`,
+    `http_access deny CONNECT r${index}_host r${index}_port non_public_dst`,
     `http_access allow CONNECT r${index}_host r${index}_port`,
   ]);
   return [
@@ -87,6 +91,7 @@ export function toSquidConf(rules, { dnsServer }) {
     'cache deny all',
     'access_log /var/log/squid/access.log',
     'acl CONNECT method CONNECT',
+    `acl non_public_dst dst ${[...NON_PUBLIC.ipv4, ...NON_PUBLIC.ipv6].map(([network, prefix]) => `${network}/${prefix}`).join(' ')}`,
     ...ruleLines,
     'http_access deny all',
     '',

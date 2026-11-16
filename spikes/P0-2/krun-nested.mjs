@@ -7,6 +7,8 @@ import { parseArgs } from 'node:util';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FEDORA = 'docker.io/library/fedora:45';
 const NAME = 'aw-p0-2-fedora';
+const PROJECT_LABEL = 'agent-works.project=p0-2-spike';
+const SCOPE_LABEL = 'agent-works.scope=krun-nested';
 const SETUP = [
   'dnf install -y -q podman crun-krun nodejs util-linux >/dev/null 2>&1',
   'mkdir -p /etc/containers/containers.conf.d /sys/fs/cgroup/init',
@@ -33,6 +35,20 @@ function docker(args) {
   return result.status ?? 1;
 }
 
+/** Removes this driver's own containers by label, never by name and never the lane's. */
+function removeNested() {
+  const ids = spawnSync(
+    'docker',
+    ['ps', '-aq', '--filter', `label=${PROJECT_LABEL}`, '--filter', `label=${SCOPE_LABEL}`],
+    {
+      encoding: 'utf8',
+    },
+  )
+    .stdout.split('\n')
+    .filter(Boolean);
+  if (ids.length > 0) docker(['rm', '-f', '-v', ...ids]);
+}
+
 const { values, positionals } = parseArgs({
   options: {
     out: { type: 'string', default: '/tmp/swarm-p0-2/krun-nested' },
@@ -41,14 +57,16 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
 });
 mkdirSync(values.out, { recursive: true });
-docker(['rm', '-f', '-v', NAME]);
+removeNested();
 const started = docker([
   'run',
   '-d',
   '--name',
   NAME,
   '--label',
-  'agent-works.project=p0-2-spike',
+  PROJECT_LABEL,
+  '--label',
+  SCOPE_LABEL,
   '--privileged',
   '--device',
   '/dev/kvm',
@@ -72,5 +90,5 @@ if (started === 0) {
   }
 }
 if (started === 0) docker(['exec', NAME, 'chmod', '-R', 'a+rX', '/out']);
-docker(['rm', '-f', '-v', NAME]);
+removeNested();
 process.exitCode = code;

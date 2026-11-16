@@ -1,8 +1,7 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -15,14 +14,15 @@ import { parseAllowlist, toSquidConf } from './proxy/allowlist.mjs';
  * @typedef {'docker' | 'podman' | 'krun'} EngineName
  * @typedef {{ bin: string, cageGlobalArgs: string[], hardenInternal: string[], rm: string[], probeBy: 'exec' | 'run' }} Engine
  * @typedef {'node' | 'squid'} ProxyName
- * @typedef {{ args: (setup: ProxySetup) => string[], reload: string[] | null, logFile: string | null, denyHook: boolean }} ProxyKind
+ * @typedef {{ args: (setup: ProxySetup) => string[], reload: string[] | null, logFile: string | null, denyHook: boolean, sniCheck: boolean }} ProxyKind
  * @typedef {{ dir: string, canaryIp: string, stubIp: string }} ProxySetup
  * @typedef {'PASS' | 'FAIL' | 'NOT-RUN'} Status
+ * @typedef {{ host: string, port: number }} DenyTarget
  * @typedef {{ status: Status, detail: unknown }} Outcome
- * @typedef {{ id: string, lane: number | 'perf' | 'host', what: string, run: (ctx: Ctx) => Promise<Outcome> | Outcome }} Attempt
+ * @typedef {{ id: string, lane: number | 'perf' | 'host' | 'front' | 'ssrf', what: string, run: (ctx: Ctx) => Promise<Outcome> | Outcome }} Attempt
  * @typedef {{
  *   engine: Engine, proxy: ProxyKind, dir: string, perfCount: number, hostPort: number, canaryIp: string,
- *   stubIp6: string, proxyIp: string, gateways: string[], deniedSoFar: number, probe: (...args: string[]) => any,
+ *   stubIp6: string, proxyIp: string, gateways: string[], denied: DenyTarget[], allowlist: string, probe: (...args: string[]) => any,
  *   probeOn: (network: string, extra: string[], ...args: string[]) => any, logs: (name: string) => string,
  *   setAllowlist: (text: string) => void,
  * }} Ctx
@@ -37,7 +37,21 @@ const ALLOWED = { host: 'registry.npmjs.org', path: '/' };
 const DENIED_HOST = 'example.com';
 const PUBLIC_V4 = '1.1.1.1';
 const PUBLIC_V6 = '2606:4700:4700::1111';
-const ALLOWLIST = `${ALLOWED.host}\n*.pythonhosted.org\npypi.org\n`;
+const HOST_SERVICE = `import { createServer } from 'node:net';
+const server = createServer((socket) => socket.on('error', () => {}).end('host\\n'));
+server.listen(0, '::', () => console.log(server.address().port));`;
+const SSRF_ZONE = 'ssrf.test';
+const SSRF = {
+  host: `host.${SSRF_ZONE}`,
+  metadata: `meta.${SSRF_ZONE}`,
+  lan: `lan.${SSRF_ZONE}`,
+  mixed: `mixed.${SSRF_ZONE}`,
+};
+const METADATA_IP = '169.254.169.254';
+const LAN_IP = '10.255.255.1';
+/** @param {number} hostPort */
+const allowlistFor = (hostPort) =>
+  `${ALLOWED.host}\n*.pythonhosted.org\npypi.org\n${SSRF.host}:${hostPort}\n${SSRF.metadata}\n${SSRF.lan}\n${SSRF.mixed}\n`;
 const DOCKER0 = '172.17.0.1';
 const PERF_BUDGET_MS = 50;
 const IMAGES = {
@@ -45,6 +59,7 @@ const IMAGES = {
   squid: 'docker.io/ubuntu/squid:latest@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029',
   coredns: 'docker.io/coredns/coredns:latest@sha256:0a9d8c8ddf34347eb59aad9a8784f0710de88d6d112726d11d271f9bc6daca26',
 };
+const NESTED_SCOPE = 'agent-works.scope=krun-nested';
 const NAMES = {
   egress: 'aw-p0-2-egress',
   internal: 'aw-p0-2-internal',
@@ -54,7 +69,26 @@ const NAMES = {
   proxy: 'aw-p0-2-proxy',
   cage: 'aw-p0-2-cage',
 };
-const COREFILE = `${CANARY_ZONE}:53 {\n  log\n  whoami\n}\n.:53 {\n  log\n  forward . /etc/resolv.conf\n}\n`;
+/** @param {string} gatewayIp */
+const corefile = (gatewayIp) => `${CANARY_ZONE}:53 {
+  log
+  whoami
+}
+${SSRF_ZONE}:53 {
+  log
+  hosts {
+    ${gatewayIp} ${SSRF.host}
+    ${METADATA_IP} ${SSRF.metadata}
+    ${LAN_IP} ${SSRF.lan}
+    ${PUBLIC_V4} ${SSRF.mixed}
+    ${LAN_IP} ${SSRF.mixed}
+  }
+}
+.:53 {
+  log
+  forward . /etc/resolv.conf
+}
+`;
 
 /** @type {Engine} */
 const PODMAN = { bin: 'podman', cageGlobalArgs: [], hardenInternal: [], rm: ['rm', '-f', '-t', '0'], probeBy: 'exec' };
@@ -92,6 +126,7 @@ const PROXIES = {
     reload: null,
     logFile: null,
     denyHook: true,
+    sniCheck: true,
   },
   squid: {
     args: ({ dir }) => [
@@ -107,6 +142,7 @@ const PROXIES = {
     reload: ['squid', '-k', 'reconfigure', '-f', '/etc/agent-works/squid.conf'],
     logFile: '/var/log/squid/access.log',
     denyHook: false,
+    sniCheck: false,
   },
 };
 
@@ -137,16 +173,23 @@ async function waitFor(ready, what, timeoutMs = 20000) {
 /** @param {Engine} engine */
 function cleanup(engine) {
   const filter = ['--filter', `label=${LABEL}=${PROJECT}`];
-  const containers = sh(engine, ['ps', '-aq', ...filter])
-    .stdout.split('\n')
-    .filter(Boolean);
+  const lines = (/** @type {string[]} */ args) => sh(engine, args).stdout.split('\n').filter(Boolean);
+  const nested = new Set(lines(['ps', '-aq', ...filter, '--filter', `label=${NESTED_SCOPE}`]));
+  /** The nested krun driver owns its container, so this lane never removes or counts it. */
+  const own = () =>
+    lines(['ps', '-a', ...filter, '--format', '{{.ID}} {{.Names}}'])
+      .map((line) => /** @type {[string, string]} */ (line.split(' ')))
+      .filter(([id]) => !nested.has(id));
+  const containers = own().map(([id]) => id);
   const removal = containers.length > 0 ? sh(engine, [...engine.rm, ...containers], { check: false }) : null;
   const networks = sh(engine, ['network', 'ls', '-q', ...filter])
     .stdout.split('\n')
     .filter(Boolean);
   if (networks.length > 0) sh(engine, ['network', 'rm', ...networks], { check: false });
   const left = {
-    containers: sh(engine, ['ps', '-a', ...filter, '--format', '{{.Names}}']).stdout.trim(),
+    containers: own()
+      .map(([, name]) => name)
+      .join('\n'),
     networks: sh(engine, ['network', 'ls', ...filter, '--format', '{{.Name}}']).stdout.trim(),
   };
   return {
@@ -243,6 +286,49 @@ const ATTEMPTS = [
       return verdict(result.connectStatus === 403, result);
     },
   },
+  {
+    id: 'deny-fronting',
+    lane: 'front',
+    what: `CONNECT to allowed ${ALLOWED.host} then TLS to ${DENIED_HOST} inside the tunnel gets no response`,
+    run: (c) => {
+      const result = c.probe('front', ALLOWED.host, DENIED_HOST);
+      if (c.proxy.sniCheck && !result.ok) c.denied.push({ host: DENIED_HOST, port: 443 });
+      if (!c.proxy.sniCheck) {
+        return {
+          status: result.ok ? 'NOT-RUN' : 'PASS',
+          detail: { ...result, limit: 'this proxy cannot read the SNI without bumping TLS, so the tunnel is open' },
+        };
+      }
+      return verdict(!result.ok, result);
+    },
+  },
+  ...[
+    {
+      id: 'ssrf-host',
+      name: SSRF.host,
+      port: (/** @type {Ctx} */ c) => c.hostPort,
+      what: "resolves to the host's bridge gateway",
+    },
+    { id: 'ssrf-metadata', name: SSRF.metadata, port: () => 443, what: `resolves to ${METADATA_IP}` },
+    { id: 'ssrf-private', name: SSRF.lan, port: () => 443, what: `resolves to private ${LAN_IP}` },
+    {
+      id: 'ssrf-mixed',
+      name: SSRF.mixed,
+      port: () => 443,
+      what: `resolves to public ${PUBLIC_V4} and private ${LAN_IP}`,
+    },
+  ].map(
+    ({ id, name, port, what }) =>
+      /** @type {Attempt} */ ({
+        id,
+        lane: 'ssrf',
+        what: `CONNECT to allowlisted ${name}, which ${what}, gets 403 and no bytes`,
+        run: (c) => {
+          const result = c.probe('tunnel', name, String(port(c)));
+          return verdict(result.connectStatus === 403 && result.banner === '', result);
+        },
+      }),
+  ),
   {
     id: 'raw-tcp',
     lane: 2,
@@ -345,9 +431,9 @@ const ATTEMPTS = [
       const startedAt = () => JSON.parse(sh(c.engine, ['inspect', NAMES.cage]).stdout)[0].State.StartedAt;
       const cageStart = startedAt();
       const before = c.probe('https', DENIED_HOST, '/');
-      c.setAllowlist(`${ALLOWLIST}${DENIED_HOST}\n`);
+      c.setAllowlist(`${c.allowlist}${DENIED_HOST}\n`);
       const after = c.probe('https', DENIED_HOST, '/');
-      c.setAllowlist(ALLOWLIST);
+      c.setAllowlist(c.allowlist);
       const sameCage = startedAt() === cageStart;
       return verdict(before.connectStatus === 403 && after.ok && after.status === 200 && sameCage, {
         before,
@@ -359,7 +445,7 @@ const ATTEMPTS = [
   {
     id: 'deny-event',
     lane: 7,
-    what: `every denied CONNECT posts one event with agent ${AGENT} to /api/sandbox/deny`,
+    what: `every denied CONNECT posts one event with agent ${AGENT}, host and port to /api/sandbox/deny`,
     run: async (c) => {
       if (!c.proxy.denyHook) {
         return {
@@ -367,19 +453,25 @@ const ATTEMPTS = [
           detail: 'squid has no deny hook; HQ would tail its access log for TCP_DENIED lines',
         };
       }
-      /** @returns {Array<{ path: string, body: { agent: string, host: string } }>} */
+      /** @returns {Array<{ path: string, body: { agent: string, host: string, port: number } }>} */
       const events = () =>
         c
           .logs(NAMES.stub)
           .split('\n')
           .filter((line) => line.startsWith('{'))
           .map((line) => JSON.parse(line));
-      await waitFor(() => events().length >= c.deniedSoFar, 'deny events', 5000).catch(() => {});
+      await waitFor(() => events().length >= c.denied.length, 'deny events', 5000).catch(() => {});
       const seen = events();
       const ok =
-        seen.length === c.deniedSoFar &&
-        seen.every((event) => event.path === '/api/sandbox/deny' && event.body.agent === AGENT);
-      return verdict(ok, { expected: c.deniedSoFar, events: seen });
+        seen.length === c.denied.length &&
+        seen.every(
+          (event, i) =>
+            event.path === '/api/sandbox/deny' &&
+            event.body.agent === AGENT &&
+            event.body.host === c.denied[i]?.host &&
+            event.body.port === c.denied[i]?.port,
+        );
+      return verdict(ok, { expected: c.denied, events: seen });
     },
   },
   {
@@ -464,7 +556,8 @@ function setUp(engineName, proxyName, { perfCount, plainInternal, hostPort }) {
     NAMES.internal,
   ]);
 
-  writeFileSync(join(dir, 'Corefile'), COREFILE);
+  const egressGateway = gatewaysOf(engine, NAMES.egress).find((ip) => !ip.includes(':')) ?? '';
+  writeFileSync(join(dir, 'Corefile'), corefile(egressGateway));
   startContainer(engine, NAMES.canary, NAMES.egress, [
     '-v',
     `${dir}:/etc/coredns:ro`,
@@ -488,7 +581,8 @@ function setUp(engineName, proxyName, { perfCount, plainInternal, hostPort }) {
   sh(engine, ['network', 'connect', NAMES.v6, NAMES.stub]);
   const stub = addressOf(engine, NAMES.stub, NAMES.egress);
   const stubIp6 = addressOf(engine, NAMES.stub, NAMES.v6).ip6;
-  writeAllowlist(dir, ALLOWLIST, canaryIp);
+  const allowlist = allowlistFor(hostPort);
+  writeAllowlist(dir, allowlist, canaryIp);
 
   startContainer(engine, NAMES.proxy, NAMES.egress, proxy.args({ dir, canaryIp, stubIp: stub.ip }));
   sh(engine, ['network', 'connect', NAMES.internal, NAMES.proxy]);
@@ -528,7 +622,8 @@ function setUp(engineName, proxyName, { perfCount, plainInternal, hostPort }) {
     return JSON.parse(out.stdout);
   };
   const ctx = {
-    deniedSoFar: 0,
+    /** @type {DenyTarget[]} */
+    denied: [],
     /** @param {string[]} args */
     probe: (...args) => {
       const command =
@@ -545,7 +640,9 @@ function setUp(engineName, proxyName, { perfCount, plainInternal, hostPort }) {
               ...cageArgs,
             ];
       const result = JSON.parse(sh(engine, [...command, 'node', '/probe/probe.mjs', ...args]).stdout);
-      if (args[0] === 'https' && result.connectStatus === 403) ctx.deniedSoFar += 1;
+      if (result.connectStatus === 403) {
+        ctx.denied.push({ host: String(args[1]), port: args[0] === 'tunnel' ? Number(args[2]) : 443 });
+      }
       return result;
     },
   };
@@ -556,6 +653,7 @@ function setUp(engineName, proxyName, { perfCount, plainInternal, hostPort }) {
     dir,
     perfCount,
     hostPort,
+    allowlist,
     canaryIp,
     stubIp6,
     proxyIp,
@@ -672,10 +770,10 @@ async function main() {
     }
     const engine = ENGINES[engineName];
     for (const image of Object.values(IMAGES)) sh(engine, ['pull', '-q', image]);
-    const hostListener = createServer((socket) => socket.on('error', () => {}).end('host\n'));
-    await once(hostListener.listen(0, '::'), 'listening');
-    const address = hostListener.address();
-    const hostPort = typeof address === 'object' && address !== null ? address.port : 0;
+    const hostService = spawn(process.execPath, ['--input-type=module', '-e', HOST_SERVICE], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    const hostPort = Number(String((await once(hostService.stdout, 'data'))[0]).trim());
     for (const proxyName of proxyNames) {
       cleanup(engine);
       /** @type {Ctx | null} */
@@ -752,7 +850,7 @@ async function main() {
         });
       }
     }
-    hostListener.close();
+    hostService.kill();
   }
   process.exitCode = failed ? 1 : 0;
 }

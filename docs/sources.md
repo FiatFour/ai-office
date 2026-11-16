@@ -77,7 +77,7 @@ Versions come from the page itself when it states one. When it does not, the ver
 | S-45 | krun | krun is crun in a mode that runs the container workload in a libkrun KVM microVM. crun still sets up the namespaces and cgroups first. | [krun(1)](https://github.com/containers/crun/blob/1.31/krun.1.md) | crun 1.31 | 2026-11-16 | P0-2, P0-3 |
 | S-46 | krun | The default network mode is TSI. libkrun proxies guest sockets in the VMM's network context, with no guest network interface, and listening on guest UDP sockets is not supported. | [krun(1)](https://github.com/containers/crun/blob/1.31/krun.1.md) | crun 1.31 | 2026-11-16 | P0-2 |
 | S-47 | krun | `krun.ram_mib` defaults to the OCI memory limit, else 1024 MiB. `krun.cpus` defaults to the CPUs in the process CPU affinity, up to 16. | [krun(1)](https://github.com/containers/crun/blob/1.31/krun.1.md) | crun 1.31 | 2026-11-16 | P0-2, P0-3 |
-| S-57 | Docker networks | A bridge is normally given the network's gateway address. `com.docker.network.bridge.inhibit_ipv4` stops Docker from giving the bridge an IPv4 address, so traffic to and from the network does not work unless something else holds the gateway. | [Bridge network driver](https://docs.docker.com/engine/network/drivers/bridge/) | Docker docs, checked live; behavior measured on Docker Engine 29.1.3 and 29.4.2 | 2026-11-16 | P0-2, P0-6 |
+| S-61 | Docker networks | A bridge is normally given the network's gateway address. `com.docker.network.bridge.inhibit_ipv4` stops Docker from giving the bridge an IPv4 address, so traffic to and from the network does not work unless something else holds the gateway. | [Bridge network driver](https://docs.docker.com/engine/network/drivers/bridge/) | Docker docs, checked live; behavior measured on Docker Engine 29.1.3 and 29.4.2 | 2026-11-16 | P0-2, P0-6 |
 
 ## Hosts, runners and runtimes
 
@@ -142,7 +142,7 @@ Each entry quotes the spec line and the source line. A spike or a G1 decision re
 ### C-7. An internal network alone does not cut the cage off from the host
 
 - Spec, `AGENT_WORKS_PROMPT.md` §4 Firewall: "Traffic that ignores the proxy has no route out, so it fails closed."
-- Source, S-40: `--internal` "restricts external access". S-57: the bridge "is normally assigned the network's `--gateway` address", and `com.docker.network.bridge.inhibit_ipv4` will "Prevent Docker from assigning an IP address to the bridge."
+- Source, S-40: `--internal` "restricts external access". S-61: the bridge "is normally assigned the network's `--gateway` address", and `com.docker.network.bridge.inhibit_ipv4` will "Prevent Docker from assigning an IP address to the bridge."
 - Effect. P0-2 measured that a cage on a plain docker `--internal` network, and on a rootful podman internal network, connects to a host service on `0.0.0.0` through the gateway address. The docker driver must set `inhibit_ipv4` on the internal network and leave IPv6 off. Rootful podman has no such option, so it needs a host firewall rule or stays unsupported. Rootless podman is not affected.
 
 ## Spec assumptions the sources narrow

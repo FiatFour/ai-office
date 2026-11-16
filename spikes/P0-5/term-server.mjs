@@ -175,14 +175,15 @@ export async function serveTerminal({ port, attach, assets }) {
       cols: initialSize(query.get('cols'), 80),
       rows: initialSize(query.get('rows'), 24),
       env: process.env,
+      // The inbox conhost.exe outlives a child that exits on its own, because node-pty never closes it then.
+      // The bundled conpty.dll is released at connect, so its OpenConsole.exe exits with the child.
+      useConptyDll: true,
     });
     ptys.add(pty);
     const send = (/** @type {ServerMessage} */ message) => ws.send(JSON.stringify(message));
     pty.onData((data) => send({ type: 'output', data }));
     pty.onExit(({ exitCode }) => {
       ptys.delete(pty);
-      // ConPTY keeps its conhost.exe alive until ClosePseudoConsole, which node-pty calls only from kill().
-      if (process.platform === 'win32') pty.kill();
       if (ws.readyState !== ws.OPEN) return;
       send({ type: 'exit', code: exitCode });
       ws.close(CLOSE_PTY_EXITED, 'pty exited');

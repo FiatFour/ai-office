@@ -61,7 +61,7 @@ On Linux, WSL2 and Windows the round trip through the WebSocket, `docker exec` a
 - tmux needs a UTF-8 locale for Thai. The image sets `LANG=C.UTF-8` and the attach passes `-u`.
 - On Windows and on Colima a resize can reach the cage up to about 550 ms after xterm sees it, against under 200 ms on Linux. A guess, not measured: `docker.exe` has no SIGWINCH on Windows and polls the console size. HQ should not assume a resize is applied when the WebSocket frame is sent.
 - `docker stop` ends the `docker exec` client with code 137. The server forwards that as the exit frame, and the page stops reconnecting.
-- On Windows node-pty closes the pseudo-console only in `kill()`. When the child exits on its own it destroys the pipe but leaves `conhost.exe --headless` running. Earlier Windows runs left one under the server after every cage stop, so the server now calls `kill()` on exit there.
+- With the inbox ConPTY, node-pty leaks the console host when the child exits on its own. Its exit thread drops the pty record without calling `ClosePseudoConsole`, so a later `kill()` finds nothing to close and `conhost.exe --headless` keeps running. Earlier Windows runs left one under the server after every cage stop, including a run that called `kill()` on exit. The server now spawns with `useConptyDll`, so node-pty uses its bundled `conpty.dll` and releases the pseudo-console at connect. The bundled `OpenConsole.exe` then exits with the child.
 
 ## Local setup notes
 

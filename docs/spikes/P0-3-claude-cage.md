@@ -116,12 +116,12 @@ All measured. No baseline, because trunk has no cage.
 | Headless one-edit task, 3 turns | 3.08 s | none |
 | Contained preflight scan, 50000 commits, 300000 objects, 27 MB of `.git`, host git 2.53 (round 3, measured) | 1.3 s, 189 MB peak memory | none. It runs once before the cage starts, never in the hook. Each git call has a 120 s timeout and a timeout is "not clean". |
 
-The hook number is the HTTP round trip to the server only. It leaves out Claude Code's own hook dispatch. The cold start leaves out the first model call. The model-free lanes also ran in CI on `ubuntu-latest` at head 1460dd1 (cage run 43879468500, ci run 43879468631, Docker 29.4.2, Podman 5.7.0, crun 1.21, rootless). Every lane passed on both engines, including the git readers, `git commit -a`, the read-only mask write and the mask on rootless podman. The first head with these lanes (315f479, run 43879037198) failed `L5-mask-write` on both engines, because the runner did not own the mask file and the write got `Permission denied`. The tightened lane caught it, and the mask file is now world-writable so only the read-only mount can refuse the write.
+The hook number is the HTTP round trip to the server only. It leaves out Claude Code's own hook dispatch. The cold start leaves out the first model call. The model-free lanes also ran in CI on `ubuntu-latest` at head 577e5f3 (cage run 43885884884, ci run 43885884816; round 3 added `L1-preflight-contained`, which passed on both engines, and the numbers below are from that run; Docker 29.4.2, Podman 5.7.0, crun 1.21, rootless). Every lane passed on both engines, including the git readers, `git commit -a`, the read-only mask write and the mask on rootless podman. The first head with these lanes (315f479, run 43879037198) failed `L5-mask-write` on both engines, because the runner did not own the mask file and the write got `Permission denied`. The tightened lane caught it, and the mask file is now world-writable so only the read-only mount can refuse the write.
 
 | CI metric (measured) | docker | podman |
 | --- | --- | --- |
-| Hook round trip, 100 POSTs | p50 1.39 ms, p95 3.57 ms | p50 1.08 ms, p95 3.03 ms |
-| Cold start, 10 runs | median 255 ms | median 83 ms |
+| Hook round trip, 100 POSTs | p50 1.43 ms, p95 3.60 ms | p50 1.09 ms, p95 2.74 ms |
+| Cold start, 10 runs | median 270 ms | median 90 ms |
 
 ## Known limits and best effort for P0-6
 

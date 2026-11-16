@@ -1,7 +1,8 @@
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { findProtected } from './protected-paths.mjs';
+import { join, relative } from 'node:path';
+import { findProtected, trackedProtected } from './protected-paths.mjs';
 
 /** @param {string} kind */
 const canary = (kind) => `CANARY_${kind}_${randomBytes(4).toString('hex')}`;
@@ -44,12 +45,38 @@ export const makeFixture = (root) => {
 };
 
 /**
+ * Commits the fixture the way a preflight-clean repo looks: protected files stay on disk, ignored and untracked.
+ * @param {string} repo
+ */
+export const commitFixture = (repo) => {
+  const ctx = { home: '/nonexistent', cwd: repo };
+  const ignored = findProtected(repo, ctx).map((path) => `/${relative(repo, path)}`);
+  writeFileSync(join(repo, '.gitignore'), `${ignored.join('\n')}\n`);
+  /** @param {string[]} args */
+  const git = (args) =>
+    execFileSync(
+      'git',
+      ['-c', 'user.name=spike', '-c', 'user.email=spike@example.test', '-c', 'commit.gpgsign=false', ...args],
+      {
+        cwd: repo,
+        stdio: 'pipe',
+      },
+    );
+  git(['init', '-q', '-b', 'main']);
+  git(['add', '-A']);
+  git(['commit', '-qm', 'fixture']);
+  const tracked = trackedProtected(repo, ctx);
+  if (tracked.length > 0) throw new Error(`preflight failed, protected paths are tracked: ${tracked.join(', ')}`);
+};
+
+/**
  * @param {string} repo
  * @param {string} emptyFile
  * @param {string} mountPoint
+ * @param {number} [maxEntries]
  * @returns {{ src: string, dst: string, ro: true }[]}
  */
-export const maskMounts = (repo, emptyFile, mountPoint) =>
-  findProtected(repo, { home: '/nonexistent', cwd: repo })
+export const maskMounts = (repo, emptyFile, mountPoint, maxEntries) =>
+  findProtected(repo, { home: '/nonexistent', cwd: repo, ...(maxEntries ? { maxEntries } : {}) })
     .filter((path) => !path.endsWith('/'))
     .map((path) => ({ src: emptyFile, dst: path.replace(repo, mountPoint), ro: /** @type {const} */ (true) }));

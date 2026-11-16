@@ -10,6 +10,7 @@ import { writeFileSync } from 'node:fs';
  */
 
 export const PROJECT_LABEL = 'agent-works.project=p0-3-spike';
+export const LIVE_PROJECT_LABEL = 'agent-works.project=p0-3-live';
 export const LANE_LABEL = 'agent-works.p0-3=lane';
 export const IMAGE = 'aw-p0-3-cage';
 
@@ -85,16 +86,16 @@ export const engineFor = (engine) => ({
   build: (tag, context) =>
     run(engine, ['build', '-t', tag, '-f', `${context}/Containerfile`, context], { stdio: ['ignore', 'pipe', 'pipe'] }),
   /**
-   * @param {{ name: string, image: string, mounts?: Mount[], network?: string, extra?: string[], runId: string }} spec
+   * @param {{ name: string, image: string, mounts?: Mount[], network?: string, extra?: string[], runId: string, project?: string }} spec
    */
-  start: ({ name, image, mounts = [], network, extra = [], runId }) => {
+  start: ({ name, image, mounts = [], network, extra = [], runId, project = PROJECT_LABEL }) => {
     const args = [
       'run',
       '-d',
       '--name',
       name,
       '--label',
-      PROJECT_LABEL,
+      project,
       '--label',
       LANE_LABEL,
       '--label',
@@ -104,8 +105,14 @@ export const engineFor = (engine) => ({
     for (const mount of mounts) args.push('-v', `${mount.src}:${mount.dst}${mount.ro ? ':ro' : ''}`);
     return run(engine, [...args, ...extra, image]);
   },
-  cleanup: () => {
-    const ids = run(engine, ['ps', '-aq', '--filter', `label=${LANE_LABEL}`])
+  /** @param {string} [runId] */
+  cleanup: (runId) => {
+    const filters = [
+      '--filter',
+      `label=${LANE_LABEL}`,
+      ...(runId ? ['--filter', `label=agent-works.run=${runId}`] : []),
+    ];
+    const ids = run(engine, ['ps', '-aq', ...filters])
       .out.split('\n')
       .filter(Boolean);
     if (ids.length > 0) run(engine, ['rm', '-f', ...ids]);

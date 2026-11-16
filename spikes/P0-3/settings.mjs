@@ -18,6 +18,9 @@ const HOOK_TIMEOUT_SECONDS = 5;
 
 export const FORWARDER_PATH = '/etc/claude-code/forward-event.mjs';
 
+/** @param {string} text */
+export const shellQuote = (text) => `'${text.replace(/'/g, "'\\''")}'`;
+
 export const denyRules = () => {
   const names = [...ENV_NAMES, ...PROTECTED_GLOBS.names.filter((glob) => glob !== '.env' && glob !== '.env.*')];
   const specifiers = [
@@ -45,7 +48,9 @@ export const managedSettings = ({ hookUrl, layers, failClosed = true }) => {
     const guard = { type: 'http', url: hookUrl, timeout: HOOK_TIMEOUT_SECONDS };
     if (failClosed) guard.onFailure = 'block';
     settings.hooks = { PreToolUse: [{ matcher: '*', hooks: [guard] }] };
-    settings.hooks.SessionStart = [{ hooks: [{ type: 'command', command: `node ${FORWARDER_PATH} ${hookUrl}` }] }];
+    settings.hooks.SessionStart = [
+      { hooks: [{ type: 'command', command: `node ${FORWARDER_PATH} ${shellQuote(hookUrl)}` }] },
+    ];
     for (const event of EVENTS) {
       settings.hooks[event] = [{ hooks: [{ type: 'http', url: hookUrl, timeout: HOOK_TIMEOUT_SECONDS }] }];
     }

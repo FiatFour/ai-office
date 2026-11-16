@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { engineFor, IMAGE, LANE_LABEL, makeReporter, newRunId, percentile, run } from './cage.mjs';
-import { makeFixture, maskMounts } from './fixture.mjs';
+import { commitFixture, makeFixture, maskMounts } from './fixture.mjs';
 import { startGuardServer } from './hooks/guard-server.mjs';
 import { checkToolCall, isProtectedPath } from './protected-paths.mjs';
 import { managedSettings } from './settings.mjs';
@@ -76,6 +77,7 @@ const runId = newRunId();
 const root = mkdtempSync(join(tmpdir(), 'p0-3-lanes-'));
 chmodSync(root, 0o755);
 const fixture = makeFixture(root);
+commitFixture(fixture.repo);
 const emptyFile = join(root, 'empty');
 writeFileSync(emptyFile, '');
 const image = args.image ?? `${IMAGE}:lanes`;
@@ -96,6 +98,7 @@ if (!args.image) {
 }
 
 const server = await startGuardServer({
+  secret: randomUUID(),
   logPath: join(String(args.out), `${engineName}-hook-events.jsonl`),
   home: CAGE_HOME,
   mapDir: (path) => (path.startsWith(MOUNT) ? path.replace(MOUNT, fixture.repo) : path),
@@ -105,6 +108,7 @@ const masks = maskMounts(fixture.repo, emptyFile, MOUNT);
 const repoMount = { src: fixture.repo, dst: MOUNT, ro: true };
 const masked = `aw-p0-3-masked-${runId}`;
 const control = `aw-p0-3-control-${runId}`;
+const maskedRw = `aw-p0-3-maskedrw-${runId}`;
 const started = [
   engine.start({ name: masked, image, mounts: [repoMount, ...masks], network: 'host', runId }),
   engine.start({ name: control, image, mounts: [repoMount], network: 'host', runId }),
@@ -139,15 +143,63 @@ try {
     `grep -r CANARY_ in masked cage: "${grepMasked.out.trim()}" (no hits); control cage: ${grepControl.out.trim()} hits. N-1 is closed by layer 2, not by deny rules`,
   );
 
-  const write = sh(masked, `echo x >> ${MOUNT}/.env`);
+  const GIT = `cd ${MOUNT} && git -c safe.directory='*'`;
+  const readers = [
+    'diff',
+    'diff HEAD',
+    'show HEAD:.env',
+    'show HEAD',
+    'cat-file -p HEAD:.env',
+    'grep KEY HEAD',
+    'grep -h KEY',
+    'log -p --all',
+    'show --stat HEAD',
+  ];
+  const readerOut = readers.map((reader) => sh(masked, `${GIT} ${reader} 2>&1`).out).join('\n');
+  const readerControl = sh(masked, `${GIT} show HEAD:src/greet.js`);
+  const tracked = sh(masked, `${GIT} ls-files`).out.split('\n');
+  exposed.push(readerOut);
+  report.add(
+    'L2-git-readers',
+    leaks(readerOut).length === 0 &&
+      readerControl.out.includes('hello') &&
+      !tracked.some((name) => isProtectedPath(`${MOUNT}/${name}`, { home: CAGE_HOME, cwd: MOUNT }))
+      ? 'PASS'
+      : 'FAIL',
+    `${readers.length} git readers in the masked cage print ${leaks(readerOut).length} canaries; the control read of src/greet.js ${readerControl.out.includes('hello') ? 'printed its content' : 'failed'}, so git ran; ${tracked.length} tracked files, none protected (the preflight rule)`,
+  );
+
+  chmodSync(fixture.repo, 0o777);
+  run('chmod', ['-R', 'a+rwX', fixture.repo]);
+  const startedRw = engine.start({
+    name: maskedRw,
+    image,
+    mounts: [{ src: fixture.repo, dst: MOUNT }, ...masks],
+    network: 'host',
+    runId,
+  });
+  const writeControl = sh(maskedRw, `echo x >> ${MOUNT}/README.md`);
+  const write = sh(maskedRw, `echo x >> ${MOUNT}/.env`);
   report.add(
     'L5-mask-write',
-    write.code !== 0 ? 'PASS' : 'FAIL',
-    `write to the masked .env exits ${write.code}: ${write.err.trim()}`,
+    startedRw.code === 0 && writeControl.code === 0 && write.code !== 0 && /Read-only file system/.test(write.err)
+      ? 'PASS'
+      : 'FAIL',
+    `in a read-write masked cage, appending to README.md exits ${writeControl.code} (control) and appending to the masked .env exits ${write.code}: ${write.err.trim() || 'no error text'}`,
+  );
+  const commit = sh(maskedRw, `${GIT} -c user.name=lane -c user.email=lane@example.test commit -qam lane`);
+  const committedNames = sh(maskedRw, `${GIT} show --name-only --format= HEAD`).out.trim();
+  const history = sh(maskedRw, `${GIT} log -p --all`).out;
+  exposed.push(history);
+  report.add(
+    'L2-commit-a',
+    commit.code === 0 && committedNames === 'README.md' && leaks(history).length === 0 ? 'PASS' : 'FAIL',
+    `git commit -a in the masked read-write cage exits ${commit.code}; the commit names "${committedNames}" and the whole history prints ${leaks(history).length} canaries`,
   );
 
   const script = `cd ${MOUNT} && node -e "console.log(require('fs').readFileSync('.'+'env','utf8'))"`;
   const obfuscated = sh(masked, script);
+  const unmaskedScript = sh(control, script);
   const hookView = checkToolCall(
     { tool_name: 'Bash', tool_input: { command: script.replace(`cd ${MOUNT} && `, '') } },
     { home: CAGE_HOME, cwd: MOUNT, mapDir: (path) => path.replace(MOUNT, fixture.repo) },
@@ -155,8 +207,10 @@ try {
   exposed.push(obfuscated.all);
   report.add(
     'N-1-script-bypass',
-    obfuscated.out.trim() === '' && !hookView.blocked ? 'PASS' : 'FAIL',
-    `a script that builds the name '.'+'env' passes the hook (blocked=${hookView.blocked}) and the deny rules by design, and the masked cage returns ${obfuscated.out.trim().length} bytes. Only layer 2 catches it`,
+    obfuscated.code === 0 && obfuscated.all.trim() === '' && leaks(unmaskedScript.out).length === 1 && !hookView.blocked
+      ? 'PASS'
+      : 'FAIL',
+    `a script that builds the name '.'+'env' passes the hook (blocked=${hookView.blocked}) and the deny rules by design; the control cage prints the canary (${leaks(unmaskedScript.out).length} hit) and the masked cage exits ${obfuscated.code} with ${obfuscated.all.trim().length} bytes on stdout and stderr. Only layer 2 catches it`,
   );
 
   const home = sh(masked, `ls -A ${CAGE_HOME}; echo ---; ls -A /root 2>&1`).all;
@@ -174,7 +228,7 @@ try {
     `home entries [${homeNames.join(' ')}], protected names: ${protectedHome.length}; whole-filesystem sweep for the host-home canaries: ${sweep.out.trim()} hits (host home is never mounted)`,
   );
 
-  const settings = managedSettings({ hookUrl: `${server.url}/hook`, layers: ['deny', 'hook'] });
+  const settings = managedSettings({ hookUrl: server.hookUrl, layers: ['deny', 'hook'] });
   const wrote = engine.exec(
     masked,
     ['sh', '-c', 'mkdir -p /etc/claude-code && cat > /etc/claude-code/managed-settings.json'],
@@ -201,7 +255,7 @@ try {
     JSON.parse(
       (
         await engine.execAsync(masked, ['node', '-e', POST_SCRIPT], {
-          input: JSON.stringify(bodies.map((body) => ({ url: `${server.url}/hook`, body }))),
+          input: JSON.stringify(bodies.map((body) => ({ url: server.hookUrl, body }))),
         })
       ).out || '[]',
     );
@@ -225,6 +279,20 @@ try {
       `PreToolUse ${attack.tool} ${JSON.stringify(attack.input)} -> ${decision} (expected ${attack.expect}) ${attack.note}`.trim(),
     );
   }
+
+  const anonymous = await engine.execAsync(masked, [
+    'node',
+    '-e',
+    `fetch(${JSON.stringify(`${server.url}/hook`)},{method:'POST',body:'{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}'}).then(r=>console.log(r.status))`,
+  ]);
+  const loggedAnonymous = readFileSync(join(String(args.out), `${engineName}-hook-events.jsonl`), 'utf8')
+    .split('\n')
+    .filter(Boolean).length;
+  report.add(
+    'L4-hook-auth',
+    anonymous.out.trim() === '401' ? 'PASS' : 'FAIL',
+    `a POST from inside the cage without the per-run token gets ${anonymous.out.trim()}; the hook log holds ${loggedAnonymous} entries from authenticated calls only`,
+  );
 
   const lifecycle = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop'].map((hook_event_name) => ({
     hook_event_name,

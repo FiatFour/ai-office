@@ -37,7 +37,15 @@ describe('managedSettings', () => {
     const settings = managedSettings({ hookUrl: 'http://h:1/hook', layers: ['hook'] });
     expect(settings.hooks?.SessionStart?.[0]?.hooks[0]).toMatchObject({
       type: 'command',
-      command: 'node /etc/claude-code/forward-event.mjs http://h:1/hook',
+      command: "node /etc/claude-code/forward-event.mjs 'http://h:1/hook'",
+    });
+  });
+
+  it('quotes a hook URL that carries a token so the shell does not split it at &', () => {
+    const url = 'http://h:1/hook?token=a b&via=command';
+    const settings = managedSettings({ hookUrl: url, layers: ['hook'] });
+    expect(settings.hooks?.SessionStart?.[0]?.hooks[0]).toMatchObject({
+      command: "node /etc/claude-code/forward-event.mjs 'http://h:1/hook?token=a b&via=command'",
     });
   });
 

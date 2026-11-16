@@ -1,38 +1,106 @@
+import { timingSafeEqual } from 'node:crypto';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { text } from 'node:stream/consumers';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { checkToolCall } from '../protected-paths.mjs';
 
 export const LAYER = 'pretooluse-hook';
+const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_LOG_BYTES = 16 * 1024 * 1024;
 
 /**
  * @typedef {{
  *   logPath: string, home: string, host?: string, port?: number, mapDir?: (path: string) => string,
+ *   secret?: string, maxBodyBytes?: number, maxLogBytes?: number,
  * }} GuardOptions
  */
 
 /** @param {unknown} value */
 const asRecord = (value) => (value && typeof value === 'object' ? /** @type {Record<string, any>} */ (value) : {});
 
+/** @param {string | null} given @param {string} expected */
+const sameSecret = (given, expected) => {
+  const a = Buffer.from(given ?? '');
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+};
+
+class BodyTooLarge extends Error {}
+
+/** @param {import('node:http').IncomingMessage} request @param {number} limit */
+const readBody = async (request, limit) => {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > limit) throw new BodyTooLarge();
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+};
+
+/** @param {import('node:http').ServerResponse} response @param {number} status @param {string} [body] @param {Record<string, string>} [headers] */
+const reply = (response, status, body = '', headers = {}) => {
+  if (response.headersSent || response.writableEnded) return;
+  response.writeHead(status, { connection: 'close', ...headers }).end(body);
+};
+
 /**
  * @param {GuardOptions} options
  */
-export const startGuardServer = async ({ logPath, home, host = '127.0.0.1', port = 0, mapDir }) => {
+export const startGuardServer = async ({
+  logPath,
+  home,
+  host = '127.0.0.1',
+  port = 0,
+  mapDir,
+  secret,
+  maxBodyBytes = MAX_BODY_BYTES,
+  maxLogBytes = MAX_LOG_BYTES,
+}) => {
   writeFileSync(logPath, '');
   let seq = 0;
-  const server = createServer(async (request, response) => {
-    const target = new URL(request.url ?? '/', 'http://guard.invalid');
+  let logged = 0;
+  /** @param {Record<string, unknown>} entry */
+  const log = (entry) => {
+    if (logged > maxLogBytes) return;
+    const line = `${JSON.stringify(entry)}\n`;
+    if (logged + line.length > maxLogBytes) {
+      appendFileSync(logPath, `${JSON.stringify({ seq: entry.seq, event: 'log-truncated', decision: 'none' })}\n`);
+      logged = maxLogBytes + 1;
+      return;
+    }
+    appendFileSync(logPath, line);
+    logged += line.length;
+  };
+
+  /** @param {import('node:http').IncomingMessage} request @param {import('node:http').ServerResponse} response */
+  const handle = async (request, response) => {
+    let target;
+    try {
+      target = new URL(request.url ?? '/', 'http://guard.invalid');
+    } catch {
+      reply(response, 400, 'bad url');
+      return;
+    }
     if (request.method !== 'POST' || target.pathname !== '/hook') {
-      response.writeHead(404).end();
+      reply(response, 404);
+      return;
+    }
+    if (secret !== undefined && !sameSecret(target.searchParams.get('token'), secret)) {
+      reply(response, 401);
       return;
     }
     let payload;
     try {
-      payload = asRecord(JSON.parse(await text(request)));
-    } catch {
-      response.writeHead(400).end('invalid json');
+      payload = asRecord(JSON.parse(await readBody(request, maxBodyBytes)));
+    } catch (error) {
+      reply(
+        response,
+        error instanceof BodyTooLarge ? 413 : 400,
+        error instanceof BodyTooLarge ? 'too large' : 'invalid json',
+      );
       return;
     }
     const event = String(payload.hook_event_name ?? 'unknown');
@@ -52,10 +120,20 @@ export const startGuardServer = async ({ logPath, home, host = '127.0.0.1', port
     };
     let body = '';
     if (event === 'PreToolUse') {
-      const verdict = checkToolCall(
-        { tool_name: String(payload.tool_name ?? ''), tool_input: asRecord(payload.tool_input) },
-        { home, cwd: String(payload.cwd ?? '/'), mapDir },
-      );
+      /** @type {import('../protected-paths.mjs').Verdict} */
+      let verdict;
+      try {
+        verdict = checkToolCall(
+          { tool_name: payload.tool_name, tool_input: payload.tool_input },
+          { home, cwd: typeof payload.cwd === 'string' ? payload.cwd : '/', mapDir },
+        );
+      } catch (error) {
+        verdict = {
+          blocked: true,
+          path: '',
+          reason: `the guard failed on this call (${/** @type {Error} */ (error).message})`,
+        };
+      }
       entry.decision = verdict.blocked ? 'deny' : 'allow';
       if (verdict.blocked) {
         entry.layer = LAYER;
@@ -70,14 +148,23 @@ export const startGuardServer = async ({ logPath, home, host = '127.0.0.1', port
         });
       }
     }
-    appendFileSync(logPath, `${JSON.stringify(entry)}\n`);
-    response.writeHead(200, body ? { 'content-type': 'application/json' } : {}).end(body);
+    log(entry);
+    reply(response, 200, body, body ? { 'content-type': 'application/json' } : {});
+  };
+
+  const server = createServer((request, response) => {
+    handle(request, response).catch(() => reply(response, 500, 'guard error'));
+  });
+  server.on('clientError', (_error, socket) => {
+    if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n');
+    else socket.destroy();
   });
   server.listen(port, host);
   await new Promise((resolve) => server.once('listening', resolve));
   const address = /** @type {import('node:net').AddressInfo} */ (server.address());
   return {
     url: `http://${host}:${address.port}`,
+    hookUrl: `http://${host}:${address.port}/hook${secret === undefined ? '' : `?token=${encodeURIComponent(secret)}`}`,
     port: address.port,
     close: () =>
       new Promise((resolve) => {
@@ -94,6 +181,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       home: { type: 'string', default: '/home/node' },
       host: { type: 'string', default: '127.0.0.1' },
       port: { type: 'string', default: '0' },
+      secret: { type: 'string' },
     },
   });
   const server = await startGuardServer({
@@ -101,6 +189,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     home: String(values.home),
     host: String(values.host),
     port: Number(values.port),
+    ...(values.secret ? { secret: values.secret } : {}),
   });
-  console.log(server.url);
+  console.log(server.hookUrl);
 }

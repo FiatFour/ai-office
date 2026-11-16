@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import fc from 'fast-check';
 import type { Command, Config, Event, Reducer, State } from '../src/lifecycle.js';
 import { SEED } from './generators.js';
-import { INVARIANTS, Oracle, type Problem, StreamMonitor } from './oracle.js';
-import { initialState, reduce } from './subject.js';
+import { INVARIANTS, type Problem } from './oracle.js';
+import { initialState, Oracle, reduce, StreamMonitor } from './subject.js';
 
 export const EVIDENCE_DIR = process.env.LIFECYCLE_EVIDENCE_DIR;
 if (EVIDENCE_DIR) mkdirSync(EVIDENCE_DIR, { recursive: true });

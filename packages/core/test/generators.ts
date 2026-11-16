@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import type { Config, Event } from '../src/lifecycle.js';
+import { cancel, change, hire, order } from './events.js';
 
 export const SEED = Number(process.env.LIFECYCLE_SEED ?? 20261117);
 
@@ -21,7 +22,7 @@ const KIND_TABLE = [
   ...Array(5).fill('order'),
   ...Array(8).fill('hire'),
   ...Array(2).fill('add_worker'),
-  'cancel',
+  ...Array(3).fill('cancel'),
   ...Array(3).fill('session_ended'),
   ...Array(22).fill('change'),
   ...Array(14).fill('review'),
@@ -123,6 +124,7 @@ export interface StorySpec {
   readonly stale: boolean;
   readonly rename: boolean;
   readonly replace: boolean;
+  readonly cancelAt: number;
   readonly progress: number;
 }
 
@@ -206,6 +208,8 @@ export function storyOf(spec: StorySpec, index: number): Event[] {
     steps.push(open(finalNumber, head, 'open'), checkOn(head, true), ...approvals(finalNumber, head));
   }
   steps.push(open(finalNumber, head, 'merged'));
+  if (spec.cancelAt > 0)
+    steps.splice(Math.min(spec.cancelAt, steps.length), 0, { source: 'human', kind: 'cancel', task });
   return steps.slice(0, spec.progress);
 }
 
@@ -224,6 +228,7 @@ const storySpecBase = {
   stale: fc.boolean(),
   rename: fc.integer({ min: 0, max: 4 }).map((n) => n === 0),
   replace: fc.integer({ min: 0, max: 3 }).map((n) => n === 0),
+  cancelAt: fc.constant(0),
   progress: fc.integer({ min: 1, max: 26 }),
 };
 
@@ -231,7 +236,18 @@ const distinctTasks = <T extends { task: string }>(specs: T[]) =>
   specs.filter((spec, i) => specs.findIndex((other) => other.task === spec.task) === i);
 
 const storySpecArb: fc.Arbitrary<StorySpec[]> = fc
-  .array(fc.record({ ...storySpecBase, shipment: fc.nat(2).map(shipmentFor) }), { minLength: 1, maxLength: 5 })
+  .array(
+    fc.record({
+      ...storySpecBase,
+      shipment: fc.nat(2).map(shipmentFor),
+      cancelAt: fc.oneof(
+        { weight: 3, arbitrary: fc.constant(0) },
+        { weight: 2, arbitrary: fc.integer({ min: 2, max: 4 }) },
+        { weight: 1, arbitrary: fc.integer({ min: 5, max: 9 }) },
+      ),
+    }),
+    { minLength: 1, maxLength: 5 },
+  )
   .map(distinctTasks);
 
 const shipmentSpecArb: fc.Arbitrary<StorySpec[]> = fc
@@ -283,6 +299,25 @@ const storyOver = (specs: fc.Arbitrary<StorySpec[]>) =>
 export const storyArb: fc.Arbitrary<Event[]> = storyOver(storySpecArb);
 export const shipmentStoryArb: fc.Arbitrary<Event[]> = storyOver(shipmentSpecArb);
 
+const stormArb: fc.Arbitrary<Event[]> = fc
+  .tuple(fc.integer({ min: 3, max: 5 }), fc.array(fc.tuple(fc.nat(5), fc.nat(4)), { minLength: 2, maxLength: 10 }))
+  .map(([count, ops]) => {
+    const tasks = TASKS.slice(0, count);
+    const people = ['w1', 'W2', 'w3'];
+    const events: Event[] = [
+      ...tasks.map((task) => order(task)),
+      ...tasks.map((task, i) => hire(task, pick(people, i))),
+    ];
+    for (const [i, [kind, who]] of ops.entries()) {
+      const task = pick(tasks, who);
+      if (kind <= 1) events.push(cancel(task));
+      else if (kind === 2) events.push({ source: 'hook', kind: 'session_ended', task, worker: pick(people, who) });
+      else if (kind === 3) events.push(change(who + 1, `aw/${task}`, 'open', 100 + i, { author: pick(people, who) }));
+      else events.push(hire(task, pick(people, who + i)));
+    }
+    return events;
+  });
+
 export interface Scenario {
   readonly config: Config;
   readonly events: Event[];
@@ -294,5 +329,6 @@ export const scenarioArb: fc.Arbitrary<Scenario> = fc.record({
     { weight: 3, arbitrary: fc.array(arbitraryEvent, { minLength: 1, maxLength: 50 }) },
     { weight: 3, arbitrary: storyArb },
     { weight: 3, arbitrary: shipmentStoryArb },
+    { weight: 2, arbitrary: stormArb },
   ),
 });

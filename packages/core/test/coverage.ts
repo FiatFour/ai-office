@@ -11,6 +11,8 @@ export const COVERAGE_KEYS = [
   'replacementPr',
   'laterPrAfterShip',
   'forkChange',
+  'cancelBuildingWhileFull',
+  'cancelWaitingWhileFull',
   'shipped',
   'merge',
   'qc',
@@ -40,6 +42,15 @@ function hitsOf(step: Step): Set<CoverageKey> {
     if (event.headRepo.toLowerCase() !== event.repo.toLowerCase()) hit.add('forkChange');
     const task = event.branch.startsWith('aw/') ? event.branch.slice(3) : '';
     if (before.boxes[task]?.state === 'shipped') hit.add('laterPrAfterShip');
+  }
+  if (event.source === 'human' && event.kind === 'cancel') {
+    const target = before.boxes[event.task];
+    const boxes = Object.values(before.boxes);
+    const runningBefore = boxes.filter((box) => box.state === 'building').length;
+    const full = runningBefore === before.config.budget;
+    const waiting = boxes.some((box) => box.id !== event.task && box.state === 'belt' && box.worker !== null);
+    if (full && target?.state === 'building' && waiting) hit.add('cancelBuildingWhileFull');
+    if (full && target?.state === 'belt' && target.worker !== null) hit.add('cancelWaitingWhileFull');
   }
   const running = Object.values(after.boxes).filter((box) => box.state === 'building').length;
   if (

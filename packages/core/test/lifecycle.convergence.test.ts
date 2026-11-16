@@ -40,16 +40,21 @@ describe('idempotence', () => {
     let nontrivial = 0;
     let reordered = 0;
     let twoChangesOnABranch = 0;
-    let skippedTwoMerged = 0;
+    let skippedMergedWithSibling = 0;
     const { details, seconds } = checkProperty(
       arb,
       ({ config, setup, web, keys, repeats }) => {
         const ordered = walk(config, [...setup, ...web], undefined, { deep: false });
-        const changesOfBranch = (branch: string) =>
-          Object.values(ordered.state.changes).filter((one) => one.branch === branch && one.state === 'merged');
+        const liveOnBranch = (branch: string) =>
+          Object.values(ordered.state.changes).filter((one) => one.branch === branch && one.state !== 'closed');
         const branches = new Set(Object.values(ordered.state.changes).map((one) => one.branch));
-        if ([...branches].some((branch) => changesOfBranch(branch).length > 1)) {
-          skippedTwoMerged += 1;
+        if (
+          [...branches].some((branch) => {
+            const live = liveOnBranch(branch);
+            return live.length > 1 && live.some((one) => one.state === 'merged');
+          })
+        ) {
+          skippedMergedWithSibling += 1;
           return;
         }
         const noisy = permute(
@@ -72,7 +77,7 @@ describe('idempotence', () => {
         details,
         seconds,
       ),
-      `${nontrivial} of ${details.numRuns} runs built at least one change, ${twoChangesOnABranch} had two changes on one branch, ${skippedTwoMerged} skipped because two changes on one branch merged, ${reordered} added duplicates`,
+      `${nontrivial} of ${details.numRuns} runs built at least one change, ${twoChangesOnABranch} had two changes on one branch, ${skippedMergedWithSibling} skipped because a branch held a merged change and another live one, ${reordered} added duplicates`,
     ]);
     expect(details.failed, fc.defaultReportMessage(details) ?? '').toBe(false);
     expect(nontrivial).toBeGreaterThan(details.numRuns / 4);
@@ -187,7 +192,7 @@ function drive(config: Config, events: readonly Event[]): State {
     let progressed = false;
     for (const box of Object.values(state.boxes).sort((a, b) => a.seq - b.seq)) {
       if (isDone(box)) continue;
-      const builder = box.builder ?? 'zz-builder';
+      const builder = box.builders[0] ?? 'zz-builder';
       if (box.state === 'belt' && box.worker === null) {
         feed(hire(box.id, builder));
         progressed = true;

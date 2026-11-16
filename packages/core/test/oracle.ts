@@ -1,4 +1,4 @@
-import type { Command, Config, Event, State } from '../src/lifecycle.js';
+import type { Box, Command, Config, Event, State } from '../src/lifecycle.js';
 
 export type Invariant =
   | 'no-merge'
@@ -49,6 +49,8 @@ const ALLOWED_ALERTS = [
   'duplicate_pr',
   'change_branch_moved',
   'shipment_blocked',
+  'hire_refused',
+  'cancel_refused',
 ];
 
 const PR_STATIONS = ['test', 'qc', 'merge', 'shipping', 'shipped'];
@@ -58,49 +60,98 @@ const lower = (text: string): string => text.toLowerCase();
 const TASK_NAME = /^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/;
 const TASK_BRANCH = /^aw\/[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/;
 
-const TRACKED_ALERTS = ['no_peer_reviewer', 'worker_ended_without_pr', 'change_closed_unmerged', 'shipment_blocked'];
-const TRACKED_KINDS = ['request_review', 'send_review_to_author', 'notify_ready', 'close_task', 'dispatch_truck'];
+const EVENT_ALERTS = [
+  'invalid_task',
+  'unknown_task',
+  'order_conflict',
+  'hire_refused',
+  'cancel_refused',
+  'duplicate_pr',
+  'change_branch_moved',
+];
 
-function tokenOf(command: Command): string | undefined {
-  if (command.kind === 'alert_human')
-    return TRACKED_ALERTS.includes(command.reason) ? `alert:${command.reason}:${command.subject}` : undefined;
-  if (!TRACKED_KINDS.includes(command.kind)) return undefined;
-  if (command.kind === 'dispatch_truck') return `dispatch:${command.shipment}`;
-  if (command.kind === 'request_review') return `request_review:${command.task}:${command.reviewer}`;
-  if (command.kind === 'start_cage' || command.kind === 'release_cage') return undefined;
-  return `${command.kind}:${command.task}`;
+type Shape = Record<string, string | null>;
+
+interface Snap {
+  readonly station: string;
+  readonly worker: string | null;
+  readonly reviewer: string | null;
+  readonly flagged: boolean;
+  readonly pr: string | null;
+  readonly reason: string | null;
 }
 
-function expectedCommands(before: State, after: State): string[] {
-  const wanted: string[] = [];
-  for (const box of Object.values(after.boxes)) {
-    const prev = before.boxes[box.id];
-    if (prev?.state === 'building' && box.state === 'belt') wanted.push(`alert:worker_ended_without_pr:${box.id}`);
-    if (box.state === 'qc') {
-      const entering = prev?.state !== 'qc';
-      const reassigned = prev?.state === 'qc' && prev.reviewer !== box.reviewer;
-      if ((entering || reassigned) && box.reviewer !== null) wanted.push(`request_review:${box.id}:${box.reviewer}`);
-      if (entering && box.reviewer === null) wanted.push(`alert:no_peer_reviewer:${box.id}`);
-      const wasFlagged = prev?.state === 'qc' && prev.changesRequested;
-      if (box.changesRequested && !wasFlagged) wanted.push(`send_review_to_author:${box.id}`);
+type Status = 'loading' | 'blocked' | 'departed';
+
+const NOTHING: Snap = { station: 'none', worker: null, reviewer: null, flagged: false, pr: null, reason: null };
+const alertShape = (reason: string, subject: string): Shape => ({ kind: 'alert_human', reason, subject });
+const leftTheFactory = (station: string) => station === 'shipping' || station === 'shipped';
+
+export function canon(value: unknown): string {
+  return JSON.stringify(value, (_key, inner) => {
+    if (inner === undefined) return '<undefined>';
+    if (inner === null || typeof inner !== 'object' || Array.isArray(inner)) return inner;
+    return Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  });
+}
+
+const sameBag = (wanted: readonly unknown[], got: readonly unknown[]): boolean =>
+  wanted.map(canon).sort().join('\n') === got.map(canon).sort().join('\n');
+
+export function transitionCommands(
+  prior: ReadonlyMap<string, Snap>,
+  next: ReadonlyMap<string, Snap>,
+  priorShips: ReadonlyMap<string, Status>,
+  nextShips: ReadonlyMap<string, Status>,
+): Shape[] {
+  const out: Shape[] = [];
+  for (const [task, now] of next) {
+    const was = prior.get(task) ?? NOTHING;
+    if (was.station === 'building' && now.station !== 'building') out.push({ kind: 'release_cage', task });
+    if (was.station === 'building' && now.station === 'belt') out.push(alertShape('worker_ended_without_pr', task));
+    if (now.station === 'building' && was.station !== 'building')
+      out.push({ kind: 'start_cage', task, worker: now.worker });
+    if (now.station === 'qc') {
+      const fresh = was.station !== 'qc';
+      if (now.reviewer !== null && (fresh || was.reviewer !== now.reviewer))
+        out.push({ kind: 'request_review', task, pr: now.pr, reviewer: now.reviewer });
+      if (fresh && now.reviewer === null) out.push(alertShape('no_peer_reviewer', task));
+      if (now.flagged && !(was.station === 'qc' && was.flagged))
+        out.push({ kind: 'send_review_to_author', task, pr: now.pr });
     }
-    if (box.state === 'merge' && prev?.state !== 'merge') wanted.push(`notify_ready:${box.id}`);
-    const shipping = (state: string | undefined) => state === 'shipping' || state === 'shipped';
-    if (shipping(box.state) && !shipping(prev?.state)) wanted.push(`close_task:${box.id}`);
-    if (box.state === 'cancelled' && box.reason === 'closed' && prev?.state !== 'cancelled')
-      wanted.push(`alert:change_closed_unmerged:${box.id}`);
+    if (now.station === 'merge' && was.station !== 'merge') out.push({ kind: 'notify_ready', task, pr: now.pr });
+    if (leftTheFactory(now.station) && !leftTheFactory(was.station)) out.push({ kind: 'close_task', task, pr: now.pr });
+    if (now.station === 'cancelled' && now.reason === 'closed' && was.station !== 'cancelled')
+      out.push(alertShape('change_closed_unmerged', task));
   }
-  for (const shipment of Object.values(after.shipments)) {
-    const prev = before.shipments[shipment.id];
-    if (prev?.state === shipment.state) continue;
-    if (shipment.state === 'departed') wanted.push(`dispatch:${shipment.id}`);
-    if (shipment.state === 'blocked') wanted.push(`alert:shipment_blocked:${shipment.id}`);
+  for (const [id, status] of nextShips) {
+    const was = priorShips.get(id) ?? 'none';
+    if (was === status) continue;
+    if (status === 'departed') out.push({ kind: 'dispatch_truck', shipment: id });
+    if (status === 'blocked') out.push(alertShape('shipment_blocked', id));
   }
-  return wanted;
+  return out;
+}
+
+function snapshotOfState(state: State): { boxes: Map<string, Snap>; ships: Map<string, Status> } {
+  const boxes = new Map<string, Snap>();
+  for (const box of Object.values(state.boxes as Record<string, Box>)) {
+    boxes.set(box.id, {
+      station: box.state,
+      worker: box.worker,
+      reviewer: box.state === 'qc' ? box.reviewer : null,
+      flagged: box.state === 'qc' && box.changesRequested,
+      pr: 'pr' in box ? box.pr : null,
+      reason: box.state === 'cancelled' ? box.reason : null,
+    });
+  }
+  const ships = new Map<string, Status>();
+  for (const shipment of Object.values(state.shipments)) ships.set(shipment.id, shipment.state);
+  return { boxes, ships };
 }
 
 export class StreamMonitor {
-  private readonly cages = new Set<string>();
+  private readonly cages = new Map<string, string | null>();
   private readonly dispatched = new Map<string, number>();
   private readonly closed = new Map<string, number>();
 
@@ -148,7 +199,7 @@ export class StreamMonitor {
         add('no-merge', `command points at a change that does not exist: ${command.pr}`);
       if (command.kind === 'start_cage') {
         if (this.cages.has(command.task)) add('cage-stream', `start_cage for ${command.task}, already running`);
-        this.cages.add(command.task);
+        this.cages.set(command.task, command.worker);
         if (this.cages.size > this.budget)
           add(
             'cage-stream',
@@ -180,8 +231,17 @@ export class StreamMonitor {
       .filter((box) => box.state === 'building')
       .map((box) => box.id);
     const same = building.length === this.cages.size && building.every((id) => this.cages.has(id));
+    for (const id of building) {
+      const running = this.cages.get(id);
+      const named = after.boxes[id]?.worker;
+      if (running !== undefined && running !== named)
+        add('cage-stream', `cage of ${id} runs for ${running}, the box now names ${named}`);
+    }
     if (!same)
-      add('cage-stream', `commands leave cages [${[...this.cages].sort()}], boxes building [${building.sort()}]`);
+      add(
+        'cage-stream',
+        `commands leave cages [${[...this.cages.keys()].sort()}], boxes building [${building.sort()}]`,
+      );
     if (building.length > this.budget) add('budget', `${building.length} cages running, budget ${this.budget}`);
 
     for (const box of Object.values(after.boxes)) {
@@ -204,10 +264,25 @@ export class StreamMonitor {
           );
       }
     }
-    const wanted = expectedCommands(before, after);
-    const got = commands.flatMap((command) => tokenOf(command) ?? []);
-    if (wanted.sort().join('\n') !== got.sort().join('\n'))
-      add('transition', `commands differ from the state change: wanted [${wanted.sort()}], got [${got.sort()}]`);
+    if (event.source === 'human' && (event.kind === 'hire' || event.kind === 'cancel')) {
+      const was = before.boxes[event.task];
+      const now = after.boxes[event.task];
+      if (event.kind === 'hire' && was && was.state !== 'belt' && now) {
+        if (now.worker !== was.worker || now.builders.join() !== was.builders.join())
+          add('transition', `a hire changed ${event.task}, which was at ${was.state}, not on the belt`);
+      }
+      if (event.kind === 'cancel' && was && leftTheFactory(was.state) && now && now.cancelled !== was.cancelled)
+        add('transition', `a cancel changed ${event.task}, which was already ${was.state}`);
+    }
+    const prior = snapshotOfState(before);
+    const next = snapshotOfState(after);
+    const wanted = transitionCommands(prior.boxes, next.boxes, prior.ships, next.ships);
+    const got = commands.filter((command) => command.kind !== 'alert_human' || !EVENT_ALERTS.includes(command.reason));
+    if (!sameBag(wanted, got))
+      add(
+        'transition',
+        `commands differ from the state change: wanted ${wanted.map(canon).sort().join(' ')}, got ${got.map(canon).sort().join(' ')}`,
+      );
     return found;
   }
 }
@@ -244,21 +319,25 @@ interface Entity {
   readonly author: string;
   readonly head: string;
   readonly life: 'open' | 'closed' | 'merged';
+  readonly first: number;
 }
 interface LedgerBox {
   readonly task: string;
   readonly shipment: string;
   worker: string | null;
-  builder: string | null;
+  readonly builders: Set<string>;
   cancelled: boolean;
   station: string;
+  reviewer: string | null;
+  flagged: boolean;
   pr?: string;
+  reason?: string;
 }
 interface LedgerShipment {
   readonly id: string;
   readonly size: number;
   readonly members: string[];
-  departed: boolean;
+  status: Status;
 }
 interface Expected {
   station: string;
@@ -267,12 +346,26 @@ interface Expected {
   changesRequested?: boolean;
   reason?: string;
 }
+interface Alert {
+  readonly reason: string;
+  readonly subject: string;
+}
 
 const newest = <T>(items: readonly T[], at: (item: T) => number, tie: (item: T) => string): T =>
   items.reduce((a, b) => (at(b) > at(a) || (at(b) === at(a) && tie(b) > tie(a)) ? b : a));
 
 const LIFE_ORDER = { open: 0, closed: 1, merged: 2 } as const;
-const PREFERENCE = { merged: 0, open: 1, closed: 2 } as const;
+
+const earlier = (a: Entity, b: Entity): boolean =>
+  a.first < b.first || (a.first === b.first && (a.repo < b.repo || (a.repo === b.repo && a.number < b.number)));
+
+const firstOf = (entities: readonly Entity[]): Entity | undefined =>
+  entities.reduce<Entity | undefined>(
+    (best, one) => (best === undefined || earlier(one, best) ? one : best),
+    undefined,
+  );
+
+const entityKey = (entity: Entity) => `${entity.repo}#${entity.number}@${entity.branch}`;
 
 export class Oracle {
   private readonly stream: StreamMonitor;
@@ -290,120 +383,87 @@ export class Oracle {
   step(event: Event, before: State, after: State, commands: readonly Command[]): Problem[] {
     const found = this.stream.step(event, before, after, commands);
     const entitiesBefore = this.entities();
-    this.record(event);
-    this.checkChangeAlerts(entitiesBefore, commands, found);
+    const prior = this.snapshot();
+    const refused = this.record(event);
     const expected = this.expect();
+    const next = this.snapshot();
+    const wanted: Shape[] = [
+      ...transitionCommands(prior.boxes, next.boxes, prior.ships, next.ships),
+      ...refused.map((one) => alertShape(one.reason, one.subject)),
+      ...this.changeAlerts(entitiesBefore),
+    ];
+    if (!sameBag(wanted, commands))
+      found.push({
+        invariant: 'transition',
+        detail: `commands differ from the oracle's: wanted ${wanted.map(canon).sort().join(' ')}, got ${commands.map(canon).sort().join(' ')}`,
+      });
     this.compare(expected, after, found);
     this.checkInvariants(after, found);
     return found;
   }
 
-  private checkChangeAlerts(entitiesBefore: readonly Entity[], commands: readonly Command[], found: Problem[]): void {
-    const keyOf = (entity: Entity) => `${entity.repo}#${entity.number}@${entity.branch}`;
-    const strays = (entities: readonly Entity[]) =>
-      new Set(
-        [...new Set(entities.map((entity) => entity.branch))].flatMap((branch) =>
-          entities
-            .filter((entity) => entity.branch === branch)
-            .sort(
-              (a, b) =>
-                PREFERENCE[a.life] - PREFERENCE[b.life] ||
-                (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0) ||
-                a.number - b.number,
-            )
-            .slice(1)
-            .filter((entity) => entity.life !== 'closed')
-            .map(keyOf),
-        ),
-      );
+  private snapshot(): { boxes: Map<string, Snap>; ships: Map<string, Status> } {
+    const boxes = new Map<string, Snap>();
+    for (const box of this.boxes) {
+      boxes.set(box.task, {
+        station: box.station,
+        worker: box.worker,
+        reviewer: box.reviewer,
+        flagged: box.flagged,
+        pr: box.pr ?? null,
+        reason: box.reason ?? null,
+      });
+    }
+    const ships = new Map<string, Status>();
+    for (const shipment of this.shipments) ships.set(shipment.id, shipment.status);
+    return { boxes, ships };
+  }
+
+  private changeAlerts(entitiesBefore: readonly Entity[]): Shape[] {
+    const strays = (entities: readonly Entity[]) => {
+      const result = new Set<string>();
+      for (const branch of new Set(entities.map((entity) => entity.branch))) {
+        const open = entities.filter((entity) => entity.branch === branch && entity.life !== 'closed');
+        const followed = firstOf(open);
+        for (const entity of open) if (entity !== followed) result.add(entityKey(entity));
+      }
+      return result;
+    };
     const entitiesAfter = this.entities();
     const known = strays(entitiesBefore);
-    const duplicates = [...strays(entitiesAfter)].filter((key) => !known.has(key)).map((key) => `duplicate_pr:${key}`);
-    const existed = new Set(entitiesBefore.map(keyOf));
+    const duplicates = [...strays(entitiesAfter)]
+      .filter((key) => !known.has(key))
+      .map((key) => alertShape('duplicate_pr', key));
+    const existed = new Set(entitiesBefore.map(entityKey));
     const moved = entitiesAfter
       .filter(
         (entity) =>
-          !existed.has(keyOf(entity)) &&
+          !existed.has(entityKey(entity)) &&
           entitiesAfter.some(
             (other) => other.repo === entity.repo && other.number === entity.number && other.branch !== entity.branch,
           ),
       )
-      .map((entity) => `change_branch_moved:${keyOf(entity)}`);
-    const wanted = [...duplicates, ...moved].sort();
-    const got = commands
-      .flatMap((command) =>
-        command.kind === 'alert_human' &&
-        (command.reason === 'duplicate_pr' || command.reason === 'change_branch_moved')
-          ? [`${command.reason}:${command.subject}`]
-          : [],
-      )
-      .sort();
-    if (wanted.join() !== got.join())
-      found.push({ invariant: 'transition', detail: `change alerts differ: wanted [${wanted}], got [${got}]` });
+      .map((entity) => alertShape('change_branch_moved', entityKey(entity)));
+    return [...duplicates, ...moved];
   }
 
   private box(task: string): LedgerBox | undefined {
     return this.boxes.find((box) => box.task === task);
   }
 
-  private record(event: Event): void {
-    if (event.source === 'human') {
-      if (event.kind === 'add_worker') {
-        if (!this.staff.includes(lower(event.worker))) this.staff.push(lower(event.worker));
-        return;
-      }
-      if (!TASK_NAME.test(event.task)) return;
-      const box = this.box(event.task);
-      if (event.kind === 'order') {
-        if (box) return;
-        const spec = event.shipment ?? { id: event.task, size: 1 };
-        if (!Number.isInteger(spec.size) || spec.size < 1) return;
-        const shipment = this.shipments.find((entry) => entry.id === spec.id);
-        if (shipment && (shipment.size !== spec.size || shipment.members.length >= shipment.size)) return;
-        if (shipment) shipment.members.push(event.task);
-        else this.shipments.push({ id: spec.id, size: spec.size, members: [event.task], departed: false });
-        this.boxes.push({
-          task: event.task,
-          shipment: spec.id,
-          worker: null,
-          builder: null,
-          cancelled: false,
-          station: 'belt',
-        });
-        return;
-      }
-      if (!box) return;
-      if (event.kind === 'cancel') {
-        box.cancelled = true;
-        return;
-      }
-      const worker = lower(event.worker);
-      if (!this.staff.includes(worker)) this.staff.push(worker);
-      if (box.station === 'belt' && box.worker !== worker) {
-        box.worker = worker;
-        box.builder = worker;
-      }
-      return;
-    }
+  private record(event: Event): Alert[] {
+    if (event.source === 'human') return this.recordHuman(event);
     if (event.source === 'hook') {
       const box = this.box(event.task);
-      if (box && box.worker === lower(event.worker)) box.worker = null;
-      return;
+      if (!box) return [{ reason: 'unknown_task', subject: event.task }];
+      if (box.worker === lower(event.worker)) box.worker = null;
+      return [];
     }
     if (event.source === 'poll') {
-      this.changeFacts.push({
-        repo: event.repo,
-        headRepo: event.headRepo,
-        number: event.number,
-        branch: event.branch,
-        author: lower(event.author),
-        life: event.state,
-        head: event.headSha,
-        at: event.at,
-      });
+      this.recordChange(event);
       for (const check of event.checks)
         this.checkFacts.push({
-          repo: event.repo,
+          repo: lower(event.repo),
           head: event.headSha,
           name: check.name,
           state: check.state,
@@ -411,29 +471,18 @@ export class Oracle {
         });
       for (const review of event.reviews)
         this.reviewFacts.push({
-          repo: event.repo,
+          repo: lower(event.repo),
           number: event.number,
           head: event.headSha,
           reviewer: lower(review.reviewer),
           verdict: review.verdict,
           at: event.at,
         });
-      return;
-    }
-    if (event.kind === 'change') {
-      this.changeFacts.push({
-        repo: event.repo,
-        headRepo: event.headRepo,
-        number: event.number,
-        branch: event.branch,
-        author: lower(event.author),
-        life: event.state,
-        head: event.headSha,
-        at: event.at,
-      });
+    } else if (event.kind === 'change') {
+      this.recordChange(event);
     } else if (event.kind === 'review') {
       this.reviewFacts.push({
-        repo: event.repo,
+        repo: lower(event.repo),
         number: event.number,
         head: event.headSha,
         reviewer: lower(event.reviewer),
@@ -442,19 +491,88 @@ export class Oracle {
       });
     } else {
       this.checkFacts.push({
-        repo: event.repo,
+        repo: lower(event.repo),
         head: event.headSha,
         name: event.name,
         state: event.state,
         at: event.at,
       });
     }
+    return [];
+  }
+
+  private recordChange(event: {
+    repo: string;
+    headRepo: string;
+    number: number;
+    branch: string;
+    author: string;
+    headSha: string;
+    state: 'open' | 'closed' | 'merged';
+    at: number;
+  }): void {
+    this.changeFacts.push({
+      repo: lower(event.repo),
+      headRepo: lower(event.headRepo),
+      number: event.number,
+      branch: event.branch,
+      author: lower(event.author),
+      life: event.state,
+      head: event.headSha,
+      at: event.at,
+    });
+  }
+
+  private recordHuman(event: Extract<Event, { source: 'human' }>): Alert[] {
+    if (event.kind === 'add_worker') {
+      if (!this.staff.includes(lower(event.worker))) this.staff.push(lower(event.worker));
+      return [];
+    }
+    if (!TASK_NAME.test(event.task)) return [{ reason: 'invalid_task', subject: event.task }];
+    const box = this.box(event.task);
+    if (event.kind === 'order') return this.recordOrder(event, box);
+    if (!box) return [{ reason: 'unknown_task', subject: event.task }];
+    if (event.kind === 'cancel') {
+      if (box.station === 'shipping' || box.station === 'shipped')
+        return [{ reason: 'cancel_refused', subject: box.task }];
+      box.cancelled = true;
+      return [];
+    }
+    const worker = lower(event.worker);
+    if (box.worker === worker) return [];
+    if (box.station !== 'belt') return [{ reason: 'hire_refused', subject: box.task }];
+    box.worker = worker;
+    box.builders.add(worker);
+    if (!this.staff.includes(worker)) this.staff.push(worker);
+    return [];
+  }
+
+  private recordOrder(event: Extract<Event, { kind: 'order' }>, box: LedgerBox | undefined): Alert[] {
+    const spec = event.shipment ?? { id: event.task, size: 1 };
+    const conflict: Alert[] = [{ reason: 'order_conflict', subject: event.task }];
+    if (box) return box.shipment === spec.id ? [] : conflict;
+    if (!Number.isInteger(spec.size) || spec.size < 1) return conflict;
+    const shipment = this.shipments.find((entry) => entry.id === spec.id);
+    if (shipment && (shipment.size !== spec.size || shipment.members.length >= shipment.size)) return conflict;
+    if (shipment) shipment.members.push(event.task);
+    else this.shipments.push({ id: spec.id, size: spec.size, members: [event.task], status: 'loading' });
+    this.boxes.push({
+      task: event.task,
+      shipment: spec.id,
+      worker: null,
+      builders: new Set(),
+      cancelled: false,
+      station: 'belt',
+      reviewer: null,
+      flagged: false,
+    });
+    return [];
   }
 
   private entities(): Entity[] {
     const groups: { repo: string; number: number; branch: string; facts: ChangeFact[] }[] = [];
     for (const fact of this.changeFacts) {
-      if (!TASK_BRANCH.test(fact.branch) || lower(fact.headRepo) !== lower(fact.repo)) continue;
+      if (!TASK_BRANCH.test(fact.branch) || fact.headRepo !== fact.repo) continue;
       const group = groups.find(
         (entry) => entry.repo === fact.repo && entry.number === fact.number && entry.branch === fact.branch,
       );
@@ -483,6 +601,7 @@ export class Oracle {
           (fact) => fact.at,
           (fact) => fact.head,
         ).head,
+        first: Math.min(...group.facts.map((fact) => fact.at)),
         life,
       };
     });
@@ -526,16 +645,11 @@ export class Oracle {
 
   private chosen(task: string, entities: readonly Entity[]): Entity | undefined {
     const candidates = entities.filter((entity) => entity.branch === `aw/${task}`);
-    return [...candidates].sort(
-      (a, b) =>
-        PREFERENCE[a.life] - PREFERENCE[b.life] ||
-        (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0) ||
-        a.number - b.number,
-    )[0];
+    return firstOf(candidates.filter((entity) => entity.life !== 'closed')) ?? firstOf(candidates);
   }
 
   private eligible(login: string, entity: Entity, box: LedgerBox): boolean {
-    return login !== entity.author && login !== box.builder;
+    return login !== entity.author && !box.builders.has(login);
   }
 
   private expect(): Map<string, Expected> {
@@ -543,13 +657,13 @@ export class Oracle {
     const result = new Map<string, Expected>();
     const wanting: LedgerBox[] = [];
     for (const box of this.boxes) {
-      if (box.station === 'shipped') {
-        result.set(box.task, { station: 'shipped', pr: box.pr });
+      if (box.station === 'shipping' || box.station === 'shipped') {
+        result.set(box.task, { station: box.station, pr: box.pr });
         continue;
       }
       const entity = this.chosen(box.task, entities);
       if (entity) {
-        const pr = `${entity.repo}#${entity.number}@${entity.branch}`;
+        const pr = entityKey(entity);
         if (entity.life === 'merged') result.set(box.task, { station: 'shipping', pr });
         else if (box.cancelled) result.set(box.task, { station: 'cancelled', reason: 'human' });
         else if (entity.life === 'closed') result.set(box.task, { station: 'cancelled', reason: 'closed' });
@@ -578,18 +692,25 @@ export class Oracle {
       } else result.set(box.task, { station: 'belt' });
     }
     for (const shipment of this.shipments) {
-      if (shipment.departed) continue;
+      if (shipment.status === 'departed') continue;
       const members = shipment.members.map((task) => result.get(task)?.station);
       const complete = members.length === shipment.size;
-      if (complete && members.every((station) => station === 'shipping' || station === 'shipped'))
-        shipment.departed = true;
+      shipment.status =
+        complete && members.every((station) => station === 'shipping' || station === 'shipped')
+          ? 'departed'
+          : members.includes('cancelled')
+            ? 'blocked'
+            : 'loading';
     }
     for (const box of this.boxes) {
       const entry = result.get(box.task);
       const shipment = this.shipments.find((candidate) => candidate.id === box.shipment);
-      if (entry && entry.station === 'shipping' && shipment?.departed) entry.station = 'shipped';
+      if (entry && entry.station === 'shipping' && shipment?.status === 'departed') entry.station = 'shipped';
       box.station = entry?.station ?? box.station;
+      box.reviewer = entry?.station === 'qc' ? (entry.reviewer ?? null) : null;
+      box.flagged = entry?.station === 'qc' && entry.changesRequested === true;
       if (entry?.pr !== undefined) box.pr = entry.pr;
+      if (entry?.station === 'cancelled') box.reason = entry.reason as string;
     }
     return result;
   }
@@ -606,7 +727,8 @@ export class Oracle {
       const here = `${box.task}`;
       if (actual.state !== should.station) add(`${here} is ${actual.state}, spec says ${should.station}`);
       if (actual.worker !== box.worker) add(`${here} worker ${actual.worker}, spec says ${box.worker}`);
-      if (actual.builder !== box.builder) add(`${here} builder ${actual.builder}, spec says ${box.builder}`);
+      if (actual.builders.join() !== [...box.builders].sort().join())
+        add(`${here} builders [${actual.builders}], spec says [${[...box.builders].sort()}]`);
       if (actual.cancelled !== box.cancelled) add(`${here} cancelled ${actual.cancelled}, spec says ${box.cancelled}`);
       if (actual.shipment !== box.shipment) add(`${here} ships in ${actual.shipment}, spec says ${box.shipment}`);
       if ('pr' in actual && should.pr !== undefined && actual.pr !== should.pr)
@@ -629,9 +751,22 @@ export class Oracle {
         add(
           `shipment ${shipment.id} lists [${actual.members}] of ${actual.size}, spec says [${shipment.members}] of ${shipment.size}`,
         );
-      const members = shipment.members.map((task) => expected.get(task)?.station);
-      const state = shipment.departed ? 'departed' : members.includes('cancelled') ? 'blocked' : 'loading';
-      if (actual.state !== state) add(`shipment ${shipment.id} is ${actual.state}, spec says ${state}`);
+      if (actual.state !== shipment.status)
+        add(`shipment ${shipment.id} is ${actual.state}, spec says ${shipment.status}`);
+    }
+    const entities = this.entities();
+    const keys = Object.keys(after.changes).sort();
+    const wantKeys = entities.map(entityKey).sort();
+    if (keys.join() !== wantKeys.join()) add(`changes [${keys}] but facts describe [${wantKeys}]`);
+    for (const entity of entities) {
+      const actual = after.changes[entityKey(entity)];
+      if (!actual) continue;
+      const same =
+        actual.author.v === entity.author &&
+        actual.head.v === entity.head &&
+        actual.state === entity.life &&
+        actual.first === entity.first;
+      if (!same) add(`change ${entityKey(entity)} differs from the facts: ${JSON.stringify(actual)}`);
     }
   }
 
@@ -659,14 +794,15 @@ export class Oracle {
         add('one-to-one', `${box.id} follows ${box.pr}, which no accepted fact describes`);
         continue;
       }
-      if (box.state === 'qc' && box.reviewer !== null && ledger && !this.eligible(box.reviewer, entity, ledger))
-        add('author-never-reviews', `${box.id} assigns ${box.reviewer}, the author or the builder, as reviewer`);
-      if (box.state === 'merge' && ledger) {
-        const votes = this.votes(entity).filter((vote) => this.eligible(vote.reviewer, entity, ledger));
-        if (votes.filter((vote) => vote.verdict === 'approve').length < this.config.approvals)
+      if (!ledger) continue;
+      const barred = new Set([entity.author, ...ledger.builders]);
+      if (box.state === 'qc' && box.reviewer !== null && barred.has(box.reviewer))
+        add('author-never-reviews', `${box.id} assigns ${box.reviewer}, the author or a builder, as reviewer`);
+      if (box.state === 'merge') {
+        const tally = this.tally(entity, barred);
+        if (tally.approvals < this.config.approvals)
           add('author-never-reviews', `${box.id} is ready on fewer than ${this.config.approvals} peer approvals`);
-        if (votes.some((vote) => vote.verdict === 'changes'))
-          add('author-never-reviews', `${box.id} is ready past a peer's changes request`);
+        if (tally.changes > 0) add('author-never-reviews', `${box.id} is ready past a peer's changes request`);
       }
       if (box.state === 'shipped' && after.shipments[box.shipment]?.state !== 'departed')
         add('shipment', `${box.id} is shipped but shipment ${box.shipment} has not left`);
@@ -680,6 +816,24 @@ export class Oracle {
         if (!merged) add('shipment', `${shipment.id} left but ${task} has no merged change`);
       }
     }
+  }
+
+  private tally(entity: Entity, barred: ReadonlySet<string>): { approvals: number; changes: number } {
+    const latest = new Map<string, ReviewFact>();
+    for (const fact of this.reviewFacts) {
+      if (fact.repo !== entity.repo || fact.number !== entity.number || fact.head !== entity.head) continue;
+      if (barred.has(fact.reviewer)) continue;
+      const held = latest.get(fact.reviewer);
+      if (!held || fact.at > held.at || (fact.at === held.at && fact.verdict > held.verdict))
+        latest.set(fact.reviewer, fact);
+    }
+    let approvals = 0;
+    let changes = 0;
+    for (const fact of latest.values()) {
+      if (fact.verdict === 'approve') approvals += 1;
+      if (fact.verdict === 'changes') changes += 1;
+    }
+    return { approvals, changes };
   }
 }
 

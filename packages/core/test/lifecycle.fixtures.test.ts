@@ -201,12 +201,12 @@ describe('replays of the P0-4 recorded GitHub fixtures', () => {
     ];
     const afterRecorded = result.trace[7];
     const box = result.state.boxes['alpha/t1'];
-    const change = result.state.changes['FiatFour/agent-works-scratch#1@aw/alpha/t1'];
+    const change = result.state.changes['fiatfour/agent-works-scratch#1@aw/alpha/t1'];
     record('replay-github', [
       ...header,
       ...result.lines,
       '',
-      `end state: box alpha/t1 = ${box?.state}, change FiatFour/agent-works-scratch#1@aw/alpha/t1 = ${change?.state}, shipment alpha/t1 = ${result.state.shipments['alpha/t1']?.state}`,
+      `end state: box alpha/t1 = ${box?.state}, change fiatfour/agent-works-scratch#1@aw/alpha/t1 = ${change?.state}, shipment alpha/t1 = ${result.state.shipments['alpha/t1']?.state}`,
       `PASS=${box?.state === 'shipped' && change?.state === 'merged'}`,
     ]);
     expect(afterRecorded?.state.boxes['alpha/t1']).toMatchObject({
@@ -218,7 +218,7 @@ describe('replays of the P0-4 recorded GitHub fixtures', () => {
     expect(result.trace[8]?.commands).toContainEqual({
       kind: 'notify_ready',
       task: 'alpha/t1',
-      pr: 'FiatFour/agent-works-scratch#1@aw/alpha/t1',
+      pr: 'fiatfour/agent-works-scratch#1@aw/alpha/t1',
     });
     expect(box).toMatchObject({ state: 'shipped' });
     expect(change?.state).toBe('merged');
@@ -288,7 +288,7 @@ describe('replays of the P0-4 recorded GitHub fixtures', () => {
     ]);
     expect(Object.keys(result.state.boxes)).toEqual([]);
     expect(Object.keys(result.state.checks)).toEqual([
-      `FiatFour/ai-office|${dig(checkRun.body, 'check_run.head_sha')}`,
+      `fiatfour/ai-office|${dig(checkRun.body, 'check_run.head_sha')}`,
     ]);
   });
 

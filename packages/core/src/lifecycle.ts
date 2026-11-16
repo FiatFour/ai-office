@@ -31,7 +31,7 @@ interface BoxBase {
   readonly shipment: ShipmentId;
   readonly seq: number;
   readonly worker: Login | null;
-  readonly builder: Login | null;
+  readonly builders: readonly Login[];
   readonly cancelled: boolean;
 }
 
@@ -53,6 +53,7 @@ export type Change = {
   readonly branch: string;
   readonly author: Stamped<Login>;
   readonly head: Stamped<string>;
+  readonly first: number;
   readonly at: number;
 } & ({ readonly state: 'open' } | { readonly state: 'closed' } | { readonly state: 'merged' });
 
@@ -161,6 +162,8 @@ export const ALERT_REASONS = [
   'duplicate_pr',
   'change_branch_moved',
   'shipment_blocked',
+  'hire_refused',
+  'cancel_refused',
 ] as const;
 export type AlertReason = (typeof ALERT_REASONS)[number];
 
@@ -217,16 +220,21 @@ function canonical(event: Event): Event<Login> {
     return event.kind === 'add_worker' || event.kind === 'hire' ? { ...event, worker: toLogin(event.worker) } : event;
   }
   if (event.source === 'hook') return { ...event, worker: toLogin(event.worker) };
+  const repo = event.repo.toLowerCase();
   if (event.source === 'poll') {
     return {
       ...event,
+      repo,
+      headRepo: event.headRepo.toLowerCase(),
       author: toLogin(event.author),
       reviews: event.reviews.map((review) => ({ ...review, reviewer: toLogin(review.reviewer) })),
     };
   }
-  if (event.kind === 'change') return { ...event, author: toLogin(event.author) };
-  if (event.kind === 'review') return { ...event, reviewer: toLogin(event.reviewer) };
-  return event;
+  if (event.kind === 'change') {
+    return { ...event, repo, headRepo: event.headRepo.toLowerCase(), author: toLogin(event.author) };
+  }
+  if (event.kind === 'review') return { ...event, repo, reviewer: toLogin(event.reviewer) };
+  return { ...event, repo };
 }
 
 const joinStamped = <T extends string>(a: Stamped<T> | undefined, b: Stamped<T>): Stamped<T> => {
@@ -245,22 +253,24 @@ const joinLife = (a: Change, state: HostChangeState, at: number): Pick<Change, '
 
 function observeChange(state: State, fact: Extract<HostFact<Login>, { kind: 'change' }>): State {
   if (taskOfBranch(fact.branch) === null) return state;
-  if (fact.headRepo.toLowerCase() !== fact.repo.toLowerCase()) return state;
+  if (fact.headRepo !== fact.repo) return state;
   const key = changeKey(fact.repo, fact.number, fact.branch);
   const before = get(state.changes, key);
   const author = joinStamped(before?.author, { v: fact.author, at: fact.at });
   const head = joinStamped(before?.head, { v: fact.headSha, at: fact.at });
   const life = before ? joinLife(before, fact.state, fact.at) : { state: fact.state, at: fact.at };
+  const first = before ? Math.min(before.first, fact.at) : fact.at;
   if (
     before &&
     author === before.author &&
     head === before.head &&
+    first === before.first &&
     life.state === before.state &&
     life.at === before.at
   ) {
     return state;
   }
-  const change: Change = { repo: fact.repo, number: fact.number, branch: fact.branch, author, head, ...life };
+  const change: Change = { repo: fact.repo, number: fact.number, branch: fact.branch, author, head, first, ...life };
   return { ...state, changes: put(state.changes, key, change) };
 }
 
@@ -342,15 +352,17 @@ function applyHuman(state: State, event: HumanEvent<Login>): Reduced {
   if (event.kind === 'order') return applyOrder(state, event, box);
   if (box === undefined) return { state, commands: [alert('unknown_task', event.task)] };
   if (event.kind === 'cancel') {
+    if (box.state === 'shipping' || box.state === 'shipped')
+      return { state, commands: [alert('cancel_refused', box.id)] };
     return box.cancelled
       ? { state, commands: [] }
       : { state: withBox(state, { ...box, cancelled: true }), commands: [] };
   }
+  if (box.worker === event.worker) return { state, commands: [] };
+  if (box.state !== 'belt') return { state, commands: [alert('hire_refused', box.id)] };
+  const builders = [...new Set([...box.builders, event.worker])].sort();
+  const hired = withBox(state, { ...box, worker: event.worker, builders });
   const staff = Object.hasOwn(state.staff, event.worker) ? state.staff : put(state.staff, event.worker, true);
-  const hired =
-    box.state === 'belt' && box.worker !== event.worker
-      ? withBox(state, { ...box, worker: event.worker, builder: event.worker })
-      : state;
   return { state: staff === state.staff ? hired : { ...hired, staff }, commands: [] };
 }
 
@@ -377,7 +389,7 @@ function applyOrder(
     shipment: spec.id,
     seq: state.seq,
     worker: null,
-    builder: null,
+    builders: [],
     cancelled: false,
     state: 'belt',
   };
@@ -408,12 +420,13 @@ const sameShallow = (a: object, b: object): boolean => {
   );
 };
 
-const LIFE_PREFERENCE: Record<HostChangeState, number> = { merged: 0, open: 1, closed: 2 };
-
 const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 const compareChange = (a: Change, b: Change): number =>
-  LIFE_PREFERENCE[a.state] - LIFE_PREFERENCE[b.state] || compareText(a.repo, b.repo) || a.number - b.number;
+  Number(a.state === 'closed') - Number(b.state === 'closed') ||
+  a.first - b.first ||
+  compareText(a.repo, b.repo) ||
+  a.number - b.number;
 
 function changesByBranch(changes: State['changes'], branches: ReadonlySet<string>): Map<string, Change[]> {
   const index = new Map<string, Change[]>();
@@ -446,7 +459,7 @@ function placeOnChange(state: State, rules: Rules, base: BoxBase, change: Change
   if (checks.length === 0 || !checks.every((check) => check.v === 'success'))
     return { ...base, state: 'test', pr: key };
   const author = change.author.v;
-  const eligible = (login: Login) => login !== base.builder && rules.canReview(login, author);
+  const eligible = (login: Login) => !base.builders.includes(login) && rules.canReview(login, author);
   const votes = Object.entries(
     get(state.reviews, `${hostRef(change.repo, change.number)}|${change.head.v}`) ?? {},
   ).filter(([reviewer]) => eligible(reviewer as Login));
@@ -462,13 +475,13 @@ const baseOf = (box: Box): BoxBase => ({
   shipment: box.shipment,
   seq: box.seq,
   worker: box.worker,
-  builder: box.builder,
+  builders: box.builders,
   cancelled: box.cancelled,
 });
 
 function settle(state: State, rules: Rules): State {
   const live = Object.values(state.boxes)
-    .filter((box) => box.state !== 'shipped')
+    .filter((box) => box.state !== 'shipping' && box.state !== 'shipped')
     .sort((a, b) => a.seq - b.seq);
   const index = changesByBranch(state.changes, new Set(live.map((box) => branchOf(box.id))));
   const placed = new Map<TaskId, Box | 'wants_cage'>();

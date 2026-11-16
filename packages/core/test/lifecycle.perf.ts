@@ -5,6 +5,9 @@ import { record } from './harness.js';
 import { initialState, reduce } from './subject.js';
 
 const MINIMUM = 10_000;
+const MIN_SMALL_EVENTS = 200_000;
+const MIN_LARGE_EVENTS = 20_000;
+const MIN_LARGE_CHUNKS = 4;
 
 function xorshift(seed: number) {
   let x = seed;
@@ -16,7 +19,14 @@ function xorshift(seed: number) {
   };
 }
 
-const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
+const median = (values: number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length === 0) return 0;
+  return sorted.length % 2 === 1
+    ? (sorted[middle] as number)
+    : ((sorted[middle - 1] as number) + (sorted[middle] as number)) / 2;
+};
 
 describe('throughput', () => {
   it('small states: one million random events in 5,000 runs of 200, reset to empty each run, three runs', () => {
@@ -45,7 +55,7 @@ describe('throughput', () => {
       const seconds = (performance.now() - started) / 1000;
       rates.push(events / seconds);
       process.stdout.write(
-        `throughput small run ${run + 1}: ${events} events, ${commands} commands, ${seconds.toFixed(2)} s, ${Math.round(events / seconds)} events/s\n`,
+        `throughput small run ${run + 1}: ${events} events, ${sequences.length} sequences, ${commands} commands, ${seconds.toFixed(2)} s, ${Math.round(events / seconds)} events/s\n`,
       );
     }
     record('throughput-small', [
@@ -54,6 +64,7 @@ describe('throughput', () => {
       `median ${Math.round(median(rates))} events/s, minimum allowed ${MINIMUM}`,
       Math.min(...rates) >= MINIMUM ? 'PASS' : 'FAIL',
     ]);
+    expect(sequences.length * SEQUENCE).toBeGreaterThanOrEqual(MIN_SMALL_EVENTS);
     expect(Math.min(...rates)).toBeGreaterThanOrEqual(MINIMUM);
   });
 
@@ -132,15 +143,16 @@ describe('throughput', () => {
       }
     }
     const shipped = Object.values(state.boxes).filter((box) => box.state === 'shipped').length;
-    const picks = [0, Math.floor(curve.length / 4), Math.floor(curve.length / 2), curve.length - 1];
     record('throughput-large', [
       `throughput large state: ${events} events, ${spawned} tasks ordered and merged in a window of ${WINDOW}, state never reset, nothing pruned`,
-      ...picks.map(
-        (i) =>
-          `chunk ${i + 1} of ${curve.length}: ${curve[i]?.boxes} boxes, ${curve[i]?.changes} changes, ${Math.round(curve[i]?.rate ?? 0)} events/s`,
+      ...curve.map(
+        (point, i) =>
+          `chunk ${i + 1} of ${curve.length}: ${point.boxes} boxes, ${point.changes} changes, ${Math.round(point.rate)} events/s`,
       ),
       `median ${Math.round(median(curve.map((point) => point.rate)))} events/s over ${curve.length} chunks, end state ${Object.keys(state.boxes).length} boxes of which ${shipped} shipped`,
     ]);
+    expect(events).toBeGreaterThanOrEqual(MIN_LARGE_EVENTS);
+    expect(curve.length).toBeGreaterThanOrEqual(MIN_LARGE_CHUNKS);
     expect(shipped).toBeGreaterThan(spawned * 0.9);
   });
 });

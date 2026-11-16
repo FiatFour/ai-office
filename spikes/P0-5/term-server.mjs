@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
@@ -112,7 +113,7 @@ export function parseClientMessage(raw) {
     return undefined;
   }
   if (message?.type === 'input' && typeof message.data === 'string') return message;
-  const isSize = (/** @type {unknown} */ n) => Number.isInteger(n) && Number(n) >= 1 && Number(n) <= MAX_SIZE;
+  const isSize = (/** @type {unknown} */ n) => Number.isInteger(n) && Number(n) > 0 && Number(n) <= MAX_SIZE;
   if (message?.type === 'resize' && isSize(message.cols) && isSize(message.rows)) return message;
   return undefined;
 }
@@ -149,11 +150,9 @@ async function waitFor(probe, timeoutMs = 30_000) {
 export async function serveTerminal({ port, attach, assets }) {
   const { spawn: spawnPty } = await import('@lydell/node-pty');
   const { WebSocketServer } = await import('ws');
-  const ownHosts = () => {
-    const { port: bound } = /** @type {import('node:net').AddressInfo} */ (server.address());
-    return [`127.0.0.1:${bound}`, `localhost:${bound}`];
-  };
-  const isOwnHost = (/** @type {string | undefined} */ host) => ownHosts().includes(host ?? '');
+  /** @type {string[]} */
+  let ownHosts = [];
+  const isOwnHost = (/** @type {string | undefined} */ host) => ownHosts.includes(host ?? '');
   const server = createServer((req, res) => {
     if (!isOwnHost(req.headers.host)) return res.writeHead(403).end();
     const asset = assets[new URL(req.url ?? '/', 'http://localhost').pathname];
@@ -167,7 +166,7 @@ export async function serveTerminal({ port, attach, assets }) {
     server,
     path: '/term',
     verifyClient: (/** @type {{ origin: string, req: import('node:http').IncomingMessage }} */ { origin, req }) =>
-      isOwnHost(req.headers.host) && ownHosts().some((host) => origin === `http://${host}`),
+      isOwnHost(req.headers.host) && ownHosts.some((host) => origin === `http://${host}`),
   });
   wss.on('connection', (ws, req) => {
     const query = new URL(req.url ?? '/', 'http://localhost').searchParams;
@@ -182,6 +181,8 @@ export async function serveTerminal({ port, attach, assets }) {
     pty.onData((data) => send({ type: 'output', data }));
     pty.onExit(({ exitCode }) => {
       ptys.delete(pty);
+      // ConPTY keeps its conhost.exe alive until ClosePseudoConsole, which node-pty calls only from kill().
+      if (process.platform === 'win32') pty.kill();
       if (ws.readyState !== ws.OPEN) return;
       send({ type: 'exit', code: exitCode });
       ws.close(CLOSE_PTY_EXITED, 'pty exited');
@@ -196,9 +197,11 @@ export async function serveTerminal({ port, attach, assets }) {
     });
   });
 
-  await new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(undefined)));
+  await once(server.listen(port, '127.0.0.1'), 'listening');
+  const { port: bound } = /** @type {import('node:net').AddressInfo} */ (server.address());
+  ownHosts = [`127.0.0.1:${bound}`, `localhost:${bound}`];
   return {
-    url: `http://${ownHosts()[0]}/`,
+    url: `http://${ownHosts[0]}/`,
     close: () => {
       for (const pty of ptys) pty.kill();
       wss.close();

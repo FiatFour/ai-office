@@ -279,13 +279,14 @@ const LANES = [
       const deadline = Date.now() + 10_000;
       let processes = listProcesses();
       while (processes.some(isOrphan) && Date.now() < deadline) {
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(1000);
         processes = listProcesses();
       }
-      const orphans = processes.filter(isOrphan).map((p) => `${p.pid} ${p.ppid} ${p.args}`);
+      const line = (/** @type {HostProcess} */ p) => `${p.pid} ${p.ppid} ${p.args}`;
+      const orphans = processes.filter(isOrphan).map(line);
       writeFileSync(
         path.join(out, 'cage-stop.txt'),
-        `pid ppid args\n${processes.map((p) => `${p.pid} ${p.ppid} ${p.args}`).join('\n')}\n\norphans (exec -it ${cage}, or conhost/OpenConsole under server pid ${serverPid}):\n${orphans.join('\n')}\n`,
+        `pid ppid args\n${processes.map(line).join('\n')}\n\norphans (exec -it ${cage}, or conhost/OpenConsole under server pid ${serverPid}):\n${orphans.join('\n')}\n`,
       );
       const status = await page.locator('#status').textContent();
       return {
@@ -374,7 +375,16 @@ async function main() {
     };
     for (const lane of lanes) {
       const result = await lane
-        .run({ page, url, out, label: values.label, engineFile, cage: values.cage, serverPid: server.pid ?? -1, shot })
+        .run({
+          page,
+          url,
+          out,
+          label: values.label,
+          engineFile,
+          cage: values.cage,
+          serverPid: Number(server.pid),
+          shot,
+        })
         .catch((/** @type {Error} */ error) => ({ pass: false, detail: `threw ${error.message}` }));
       if (!result.pass) failed++;
       const line = `${result.pass ? 'PASS' : 'FAIL'} ${values.label} ${lane.slug}: ${result.detail}`;

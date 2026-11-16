@@ -13,7 +13,7 @@ node spikes/P0-5/lanes.mjs --label <host> --out /tmp/swarm-P0-5/owner
 
 `lanes.mjs` builds the cage image from `Containerfile` (Debian trixie slim with tmux), starts `term-server.mjs`, drives each lane through Playwright, saves `<slug>.png` and `lanes-<label>.txt`, and removes the cage. To view the terminal by hand, run `node spikes/P0-5/term-server.mjs --engine docker` and open `http://127.0.0.1:7681/`.
 
-The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `ubuntu-latest`, `windows-latest` and `macos-15-intel`, and uploads the screenshots as artifacts. It also runs on pushes to `aw/p0-5`, because GitHub does not run `pull_request` workflows while the PR conflicts with its base. The CI evidence below is from [run 43754183740](https://github.com/FiatFour/ai-office/actions/runs/43754183740) at 4e31fa5.
+The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `ubuntu-latest`, `windows-latest` and `macos-15-intel`, and uploads the screenshots as artifacts. It also runs on pushes to `aw/p0-5`, because GitHub does not run `pull_request` workflows while the PR conflicts with its base. The CI evidence below is from [run 43754183740](https://github.com/FiatFour/ai-office/actions/runs/43754183740) at 4e31fa5 and [run 43787563689](https://github.com/FiatFour/ai-office/actions/runs/43787563689) at 7ed49bc.
 
 ## Wire shape
 
@@ -30,7 +30,7 @@ The CI workflow `.github/workflows/p0-5-terminal.yml` runs the same command on `
 | 3. `echo hi` on macOS | `macos-latest` | not run | arm64, `kern.hv_support: 0`, no Docker binary (S-49, S-50, S-58). No VM can start, so no Linux engine can run. |
 | 3. `echo hi` on macOS | `macos-15-intel`, Colima | PASS | `macos-intel-echo.png` in CI artifact `p0-5-macos-intel` |
 | 4. `echo hi` with `docker.exe` under PowerShell 7 | `windows-latest`, ConPTY | PASS | `windows-echo.png` in CI artifact `p0-5-windows`. The runner's own daemon runs Windows containers only (S-59), so the lane points `docker.exe` at a Linux daemon in WSL 2 Debian (S-60) and mounts with `--mount-style wsl`. |
-| 5. Resize | WSL2, Linux, macOS Intel, Windows | PASS | `tput cols` matched xterm's cols after 175 ms (Linux), 539 ms (macOS Intel) and 423 ms (Windows). An earlier Windows run read `tput cols` only once, right after the resize, and saw the old width, so the lane now polls for up to 5 s. |
+| 5. Resize | WSL2, Linux, macOS Intel, Windows | PASS | `tput cols` matched xterm's cols after 165 to 175 ms on Linux, 299 to 539 ms on macOS Intel and 184 to 423 ms on Windows, over two CI runs. An earlier Windows run read `tput cols` only once, right after the resize, and saw the old width, so the lane now polls for up to 5 s. |
 | 6. Drop and reconnect | WSL2, Linux, macOS Intel, Windows | PASS | Same shell PID, marker still in tmux scrollback and in the viewer |
 | 7. Two tabs | WSL2, Linux, macOS Intel, Windows | PASS | Both tabs show the line typed in one |
 | 8. Thai | WSL2, Linux, macOS Intel, Windows | PASS | `สวัสดีครับ ภาษาไทย` comes back as the same 18 code points, `thai.png` |
@@ -57,7 +57,7 @@ On Linux, WSL2 and Windows the round trip through the WebSocket, `docker exec` a
 - node-pty 1.1.0 ships no `linux-x64` prebuild. It needs node-gyp, a C++ compiler and a pnpm build-script approval. The spike uses `@lydell/node-pty`, the same node-pty code with prebuilt binaries for six targets and no install script (S-57).
 - The bind-mount source depends on where the daemon runs, not on the client. `docker.exe` talking to Docker Desktop takes `C:\...`. `docker.exe` talking to a daemon inside WSL needs `/mnt/c/...`. `mountSource` takes a `MountStyle` of `posix`, `windows` or `wsl`.
 - tmux needs a UTF-8 locale for Thai. The image sets `LANG=C.UTF-8` and the attach passes `-u`.
-- On Windows and on Colima a resize reaches the cage 400 to 550 ms after xterm sees it, against under 200 ms on Linux. A guess, not measured: `docker.exe` has no SIGWINCH on Windows and polls the console size. HQ should not assume a resize is applied when the WebSocket frame is sent.
+- On Windows and on Colima a resize can reach the cage up to about 550 ms after xterm sees it, against under 200 ms on Linux. A guess, not measured: `docker.exe` has no SIGWINCH on Windows and polls the console size. HQ should not assume a resize is applied when the WebSocket frame is sent.
 - `docker stop` ends the `docker exec` client with code 137. The server forwards that as the exit frame, and the page stops reconnecting.
 
 ## Local setup notes

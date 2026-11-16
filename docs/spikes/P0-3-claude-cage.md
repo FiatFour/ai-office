@@ -83,7 +83,12 @@ All measured. No baseline, because trunk has no cage.
 | Cage cold start to `claude --version` output, docker, 10 runs | median 301 ms, max 331 ms | median under 30 s |
 | Headless one-edit task, 3 turns | 3.06 s | none |
 
-The hook number is the HTTP round trip to the server only. It leaves out Claude Code's own hook dispatch. The cold start leaves out the first model call. Podman numbers are in the CI artifacts of the PR.
+The hook number is the HTTP round trip to the server only. It leaves out Claude Code's own hook dispatch. The cold start leaves out the first model call. The same lanes ran in CI on `ubuntu-latest` (run 43872963615, Docker 29.4.2, Podman 5.7.0, crun 1.21, rootless). Every model-free lane passed on both engines, including the mask on rootless podman.
+
+| CI metric (measured) | docker | podman |
+| --- | --- | --- |
+| Hook round trip, 100 POSTs | p50 1.12 ms, p95 3.11 ms | p50 1.01 ms, p95 2.32 ms |
+| Cold start, 10 runs | median 255 ms | median 138 ms |
 
 ## What is best effort
 
@@ -100,3 +105,4 @@ The hook number is the HTTP round trip to the server only. It leaves out Claude 
 - The image is Node 24 on bookworm slim, not Node 20, as the operator built it (C-1 says Node 20 is end-of-life). The user is `node`, not `agent`.
 - The plan checkboxes are untouched. P0-2 did not tick its own either.
 - Codex lane 7 and the host permission lane 10 are not run.
+- The unit tests that read a real directory or start the hook server skip on Windows. The cage paths are posix, and the Windows runner has no cage.

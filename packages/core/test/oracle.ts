@@ -87,7 +87,7 @@ const NOTHING: Snap = { station: 'none', worker: null, reviewer: null, flagged: 
 const alertShape = (reason: string, subject: string): Shape => ({ kind: 'alert_human', reason, subject });
 const leftTheFactory = (station: string) => station === 'shipping' || station === 'shipped';
 
-export function canon(value: unknown): string {
+function canon(value: unknown): string {
   return JSON.stringify(value, (_key, inner) => {
     if (inner === undefined) return '<undefined>';
     if (inner === null || typeof inner !== 'object' || Array.isArray(inner)) return inner;
@@ -98,7 +98,7 @@ export function canon(value: unknown): string {
 const sameBag = (wanted: readonly unknown[], got: readonly unknown[]): boolean =>
   wanted.map(canon).sort().join('\n') === got.map(canon).sort().join('\n');
 
-export function transitionCommands(
+function transitionCommands(
   prior: ReadonlyMap<string, Snap>,
   next: ReadonlyMap<string, Snap>,
   priorShips: ReadonlyMap<string, Status>,

@@ -55,7 +55,8 @@ const FORBIDDEN_FILES = [
 const GIT_SHAPE = ['HEAD', 'objects', 'refs'];
 const HEX2 = /^[0-9a-f]{2}$/;
 const HEX38 = /^[0-9a-f]{38}$/;
-const TMP_NAME = /^tmp_(obj|pack|idx|rev|bitmap|mtimes)_\w+$/;
+const TMP_NAME = /^(tmp_(obj|pack|idx|rev|bitmap|mtimes|midx)_\w+|\.tmp-\d+-pack-[0-9a-f]+\.\w+)$/;
+const LOCK_NAME = /\.lock$/;
 const PACK_NAME = /^pack-[0-9a-f]{40,64}\.(pack|idx|rev|bitmap|mtimes|keep|promisor)$/;
 const TOP_FILES = new Set([
   'HEAD',
@@ -67,6 +68,8 @@ const TOP_FILES = new Set([
   'commondir',
   'gitdir',
   'shallow',
+  'gc.log',
+  'gc.pid',
   'FETCH_HEAD',
   'ORIG_HEAD',
   'AUTO_MERGE',
@@ -87,7 +90,7 @@ const TOP_FILES = new Set([
   'BISECT_ANCESTORS_OK',
   'BISECT_NAMES',
 ]);
-const TOP_FILE_PATTERNS = [/\.lock$/, /^sharedindex\.[0-9a-f]+$/];
+const TOP_FILE_PATTERNS = [/^sharedindex\.[0-9a-f]+$/];
 const TOP_DIRS = new Set([
   'hooks',
   'info',
@@ -137,7 +140,8 @@ const unknownEntries = (gitDir, list) => {
   /** @param {string} path @param {import('node:fs').Dirent[] | null} entries @param {(entry: import('node:fs').Dirent) => boolean} accepts */
   const check = (path, entries, accepts) => {
     for (const entry of entries ?? []) {
-      if (!accepts(entry)) unknown.push(`${relative(gitDir, join(path, entry.name))}`);
+      if (!(entry.isFile() && LOCK_NAME.test(entry.name)) && !accepts(entry))
+        unknown.push(`${relative(gitDir, join(path, entry.name))}`);
     }
   };
   const file = (/** @type {import('node:fs').Dirent} */ entry) => entry.isFile();

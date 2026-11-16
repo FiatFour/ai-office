@@ -165,6 +165,18 @@ describePosix('G structural git dir walk: any unknown entry inside a git dir is 
     expect(scanRepo(repo).clean).toBe(false);
   });
 
+  it('control: the lock, gc and tmp files git writes while it runs stay clean', () => {
+    const { repo } = cleanRepo('g-control-tmp');
+    const dot = join(repo, '.git');
+    writeFileSync(join(dot, 'objects', 'maintenance.lock'), '');
+    writeFileSync(join(dot, 'objects', 'pack', 'tmp_pack_abc123'), '');
+    writeFileSync(join(dot, 'objects', 'pack', `.tmp-123-pack-${'a'.repeat(40)}.idx`), '');
+    writeFileSync(join(dot, 'gc.pid'), '1 host');
+    writeFileSync(join(dot, 'gc.log'), '');
+    writeFileSync(join(dot, 'index.lock'), '');
+    expect(scanRepo(repo).clean).toBe(true);
+  });
+
   it('control: fresh, cloned, gc-packed, repacked and submodule layouts stay clean', () => {
     const { repo } = cleanRepo('g-control');
     expect(scanRepo(repo).clean).toBe(true);

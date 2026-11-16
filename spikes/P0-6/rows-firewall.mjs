@@ -203,8 +203,8 @@ export const FIREWALL_ROWS = {
       const canary = `CANARY_TOKEN_${randomUUID().slice(0, 8)}`;
       const result = fw.probe(['https', GITHUB_HOST, `/zen?d=${canary}`]);
       return {
-        observed: result.ok === true && result.status === 200 ? [] : ['stopped'],
-        detail: `a request to the allowlisted ${GITHUB_HOST} with a canary in the query string reached the host and got ${result.status}; any allowlisted name that accepts data is an exfiltration channel`,
+        observed: result.ok === true && result.connectStatus === 200 ? [] : ['stopped'],
+        detail: `a request to the allowlisted ${GITHUB_HOST} with a canary in the query string reached the host through an allowed CONNECT (${result.connectStatus}) and the host answered ${result.status}, whatever the status; any allowlisted name that accepts data is an exfiltration channel`,
       };
     }),
   },

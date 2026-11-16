@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -240,7 +240,7 @@ describePosix('commit forms that build their own index', () => {
 });
 
 describe('locationEnv', () => {
-  const root = mkdtempSync(join(tmpdir(), 'p0-6-guard5-loc-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'p0-6-guard5-loc-')));
   const outside = mkdtempSync(join(tmpdir(), 'p0-6-guard5-loc-out-'));
   mkdirSync(join(root, '.git'));
   symlinkSync(outside, join(root, 'link'));

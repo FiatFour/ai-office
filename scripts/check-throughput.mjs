@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 const MINIMUM = 10_000;
 const file = process.argv[2];
 if (!file) throw new Error('usage: check-throughput.mjs <vitest output file>');
-const text = readFileSync(file, 'utf8');
+const text = readFileSync(file, 'utf8').replace(/\u001b\[[0-9;]*m/g, '');
 
 const small = [...text.matchAll(/^throughput small run (\d+): .* (\d+) events\/s$/gm)].map((match) => Number(match[2]));
 const large = /^median (\d+) events\/s over (\d+) chunks/m.exec(text);

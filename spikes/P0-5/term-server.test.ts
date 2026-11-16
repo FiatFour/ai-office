@@ -1,6 +1,7 @@
 import { get } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { serveTerminal } from './term-server.mjs';
@@ -34,7 +35,7 @@ function connect(query: string, options: WebSocket.ClientOptions): Promise<Outco
     ws.on('error', () => resolve({ opened: false, status: undefined }));
     ws.on('message', (raw) => {
       const message = JSON.parse(raw.toString());
-      if (message.type === 'output') output += message.data;
+      if (message.type === 'output') output += stripVTControlCharacters(message.data).replace(/\s/g, '');
       if (/size=\d+x\d+/.test(output)) {
         ws.close();
         resolve({ opened: true, output });
@@ -91,9 +92,11 @@ describe('serveTerminal', () => {
     expect(await status(`rebind.example:${url.port}`)).toBe(403);
   });
 
-  it('clamps the initial terminal size to 1..1000', async () => {
-    const origin = `http://${url.host}`;
-    expect(sizeOf(await connect('?cols=99999&rows=99999', { origin }))).toBe('1000x1000');
-    expect(sizeOf(await connect('?cols=-5&rows=abc', { origin }))).toBe('1x24');
+  it('clamps an oversized initial terminal size to 1000', async () => {
+    expect(sizeOf(await connect('?cols=99999&rows=99999', { origin: `http://${url.host}` }))).toBe('1000x1000');
+  });
+
+  it('clamps a negative initial size to 1 and ignores a non-number', async () => {
+    expect(sizeOf(await connect('?cols=-5&rows=abc', { origin: `http://${url.host}` }))).toBe('1x24');
   });
 });

@@ -437,6 +437,16 @@ describePosix('D honesty fixes', () => {
     }
   })();
   const itPermission = permission ? it : it.skip;
+  const netFlag = (() => {
+    try {
+      execFileSync(process.execPath, ['--permission', '--allow-fs-read=*', '--allow-net', '-e', '1'], {
+        stdio: 'ignore',
+      });
+      return ['--allow-net'];
+    } catch {
+      return [];
+    }
+  })();
 
   itPermission('control: under node --permission a child process cannot start, even through a joined import', () => {
     const script = `
@@ -463,6 +473,7 @@ describePosix('D honesty fixes', () => {
         '--permission',
         '--allow-fs-read=*',
         `--allow-fs-write=${log}`,
+        ...netFlag,
         new URL('./hooks/guard-server.mjs', import.meta.url).pathname,
         '--log',
         log,

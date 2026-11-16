@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { once } from 'node:events';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -27,9 +28,9 @@ import { parseArgs } from 'node:util';
  */
 
 export class PayloadError extends Error {
-  /** @param {string} path */
-  constructor(path) {
-    super(`payload is missing ${path}`);
+  /** @param {string} path @param {string} [problem] */
+  constructor(path, problem = 'is missing or has the wrong type') {
+    super(`payload ${path} ${problem}`);
     this.path = path;
   }
 }
@@ -43,7 +44,7 @@ function field(body, path) {
   /** @type {unknown} */
   let value = body;
   for (const key of path.split('.')) {
-    if (typeof value !== 'object' || value === null || !(key in value)) throw new PayloadError(path);
+    if (typeof value !== 'object' || value === null || !Object.hasOwn(value, key)) throw new PayloadError(path);
     value = /** @type {Record<string, unknown>} */ (value)[key];
   }
   return value;
@@ -59,15 +60,13 @@ function str(body, path) {
 /** @param {unknown} body @param {string} path */
 function num(body, path) {
   const value = field(body, path);
-  if (typeof value !== 'number') throw new PayloadError(path);
-  return value;
+  if (!Number.isInteger(value)) throw new PayloadError(path);
+  return /** @type {number} */ (value);
 }
 
 /** @param {unknown} body @param {string} path */
 function nullableNum(body, path) {
-  const value = field(body, path);
-  if (value !== null && typeof value !== 'number') throw new PayloadError(path);
-  return value;
+  return field(body, path) === null ? null : num(body, path);
 }
 
 /** @param {unknown} body @param {string} path */
@@ -77,33 +76,77 @@ function bool(body, path) {
   return value;
 }
 
-/** @param {string | null} conclusion @returns {CheckState} */
-function githubConclusion(conclusion) {
-  if (conclusion === null) return 'pending';
-  return ['success', 'neutral', 'skipped'].includes(conclusion) ? 'success' : 'failure';
+/**
+ * @template T
+ * @param {unknown} body
+ * @param {string} path
+ * @param {Record<string, T>} table
+ * @returns {T}
+ */
+function oneOf(body, path, table) {
+  const value = str(body, path);
+  if (!Object.hasOwn(table, value)) throw new PayloadError(path, `has unknown value ${JSON.stringify(value)}`);
+  return /** @type {T} */ (table[value]);
 }
 
-/** @param {string} status @returns {CheckState} */
-function gitlabPipeline(status) {
-  if (status === 'success') return 'success';
-  return ['failed', 'canceled'].includes(status) ? 'failure' : 'pending';
+/** @type {Record<string, CheckState>} */
+const GITHUB_CONCLUSION = {
+  success: 'success',
+  neutral: 'success',
+  skipped: 'success',
+  failure: 'failure',
+  cancelled: 'failure',
+  timed_out: 'failure',
+  action_required: 'failure',
+  stale: 'failure',
+  startup_failure: 'failure',
+};
+
+/** @type {Record<string, boolean>} */
+const GITHUB_RUN_COMPLETED = {
+  requested: false,
+  queued: false,
+  waiting: false,
+  pending: false,
+  in_progress: false,
+  completed: true,
+};
+
+/** @type {Record<string, CheckState>} */
+const GITHUB_STATUS = { pending: 'pending', success: 'success', failure: 'failure', error: 'failure' };
+
+/** @type {Record<string, ChangeState>} */
+const GITHUB_STATE = { open: 'open', closed: 'closed' };
+
+/** @type {Record<string, ChangeState>} */
+const GITLAB_STATE = { opened: 'open', locked: 'open', closed: 'closed', merged: 'merged' };
+
+/** @type {Record<string, CheckState>} */
+const GITLAB_PIPELINE = {
+  created: 'pending',
+  waiting_for_resource: 'pending',
+  preparing: 'pending',
+  pending: 'pending',
+  running: 'pending',
+  scheduled: 'pending',
+  manual: 'pending',
+  skipped: 'success',
+  canceling: 'pending',
+  success: 'success',
+  failed: 'failure',
+  canceled: 'failure',
+};
+
+/** @param {unknown} body @param {string} prefix @returns {ChangeState} */
+function githubState(body, prefix) {
+  return bool(body, `${prefix}merged`) ? 'merged' : oneOf(body, `${prefix}state`, GITHUB_STATE);
 }
 
-/** @param {boolean} merged @param {string} state @returns {ChangeState} */
-function githubState(merged, state) {
-  if (merged) return 'merged';
-  return state === 'open' ? 'open' : 'closed';
-}
-
-/** @param {string} state @returns {CheckState} */
-function githubStatus(state) {
-  return state === 'pending' || state === 'success' ? state : 'failure';
-}
-
-/** @param {string} state @returns {ChangeState} */
-function gitlabState(state) {
-  if (state === 'merged') return 'merged';
-  return state === 'closed' ? 'closed' : 'open';
+/** @param {unknown} body @param {string} prefix @returns {CheckState} */
+function githubCheckRun(body, prefix) {
+  return oneOf(body, `${prefix}status`, GITHUB_RUN_COMPLETED)
+    ? oneOf(body, `${prefix}conclusion`, GITHUB_CONCLUSION)
+    : 'pending';
 }
 
 /** @typedef {GitHostEvent extends infer E ? E extends GitHostEvent ? Omit<E, 'host' | 'repo'> : never : never} EventFields */
@@ -111,7 +154,7 @@ function gitlabState(state) {
 /** @type {Record<Host, string>} */
 const REPO_PATH = { github: 'repository.full_name', gitlab: 'project.path_with_namespace' };
 
-/** @type {Record<Host, Record<string, (body: unknown) => EventFields>>} */
+/** @type {Record<Host, Record<string, (body: unknown) => EventFields | null>>} */
 const PARSERS = {
   github: {
     push: (b) => ({
@@ -123,7 +166,7 @@ const PARSERS = {
       kind: 'change',
       number: num(b, 'number'),
       action: str(b, 'action'),
-      state: githubState(bool(b, 'pull_request.merged'), str(b, 'pull_request.state')),
+      state: githubState(b, 'pull_request.'),
       branch: str(b, 'pull_request.head.ref'),
       headSha: str(b, 'pull_request.head.sha'),
     }),
@@ -142,13 +185,13 @@ const PARSERS = {
       kind: 'check',
       headSha: str(b, 'sha'),
       name: str(b, 'context'),
-      state: githubStatus(str(b, 'state')),
+      state: oneOf(b, 'state', GITHUB_STATUS),
     }),
     check_run: (b) => ({
       kind: 'check',
       headSha: str(b, 'check_run.head_sha'),
       name: str(b, 'check_run.name'),
-      state: str(b, 'check_run.status') === 'completed' ? githubConclusion(str(b, 'check_run.conclusion')) : 'pending',
+      state: githubCheckRun(b, 'check_run.'),
     }),
   },
   gitlab: {
@@ -161,12 +204,13 @@ const PARSERS = {
       kind: 'change',
       number: num(b, 'object_attributes.iid'),
       action: str(b, 'object_attributes.action'),
-      state: gitlabState(str(b, 'object_attributes.state')),
+      state: oneOf(b, 'object_attributes.state', GITLAB_STATE),
       branch: str(b, 'object_attributes.source_branch'),
       headSha: str(b, 'object_attributes.last_commit.id'),
     }),
     'Note Hook': (b) => {
       const attributes = /** @type {Record<string, unknown>} */ (field(b, 'object_attributes'));
+      if (str(attributes, 'noteable_type') !== 'MergeRequest') return null;
       const position = attributes.position ?? null;
       return {
         kind: 'review_comment',
@@ -179,7 +223,7 @@ const PARSERS = {
       kind: 'check',
       headSha: str(b, 'object_attributes.sha'),
       name: `pipeline ${num(b, 'object_attributes.id')}`,
-      state: gitlabPipeline(str(b, 'object_attributes.status')),
+      state: oneOf(b, 'object_attributes.status', GITLAB_PIPELINE),
     }),
   },
 };
@@ -191,8 +235,10 @@ const PARSERS = {
  * @returns {GitHostEvent | null}
  */
 export function parseEvent(host, event, body) {
-  const parse = PARSERS[host][event];
-  return parse ? /** @type {GitHostEvent} */ ({ host, repo: str(body, REPO_PATH[host]), ...parse(body) }) : null;
+  const parsers = PARSERS[host];
+  const parse = Object.hasOwn(parsers, event) ? parsers[event] : undefined;
+  const fields = parse ? parse(body) : null;
+  return fields ? /** @type {GitHostEvent} */ ({ host, repo: str(body, REPO_PATH[host]), ...fields }) : null;
 }
 
 const BRANCH = /^aw\/([a-z0-9][a-z0-9-]*)\/([a-z0-9][a-z0-9-]*)$/;
@@ -242,7 +288,7 @@ export function githubSignatureValid(secret, raw, header) {
 /** @type {[string, RegExp][]} */
 const LIFECYCLE_WRITES = [
   ['POST', /^\/repos\/[^/]+\/[^/]+\/git\/refs$/],
-  ['PUT', /^\/repos\/[^/]+\/[^/]+\/contents\/[^?]+$/],
+  ['PUT', /^\/repos\/[^/]+\/[^/]+\/contents(?:\/[\w-][\w.-]*)+$/],
   ['POST', /^\/repos\/[^/]+\/[^/]+\/pulls$/],
   ['POST', /^\/repos\/[^/]+\/[^/]+\/statuses\/[0-9a-f]{40}$/],
   ['POST', /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/reviews$/],
@@ -253,7 +299,10 @@ const LIFECYCLE_WRITES = [
  * @param {string} path
  */
 export function lifecycleWriteAllowed(method, path) {
-  return method === 'GET' || LIFECYCLE_WRITES.some(([m, pattern]) => m === method && pattern.test(path));
+  if (method === 'GET') return true;
+  const { pathname } = new URL(path, 'https://api.github.com');
+  if (pathname !== path || /%2e|%2f|%5c/i.test(path)) return false;
+  return LIFECYCLE_WRITES.some(([m, pattern]) => m === method && pattern.test(pathname));
 }
 
 export class HttpError extends Error {
@@ -318,7 +367,7 @@ async function github(client, method, path, body) {
 /** @param {any} pull @returns {PullSnapshot} */
 function snapshot(pull) {
   return {
-    state: githubState(pull.merged, pull.state),
+    state: githubState(pull, ''),
     headSha: pull.head.sha,
     updatedAt: pull.updated_at,
   };
@@ -418,7 +467,7 @@ async function readChecks(client, repo, ref) {
     github(client, 'GET', `/repos/${repo}/commits/${ref}/status`).then((r) => r.body),
   ]);
   for (const run of runs.check_runs) {
-    console.log(`${run.name}\t${run.status}\t${run.conclusion ?? '-'}\t${githubConclusion(run.conclusion)}`);
+    console.log(`${run.name}\t${run.status}\t${run.conclusion ?? '-'}\t${githubCheckRun(run, '')}`);
   }
   for (const status of combined.statuses) console.log(`${status.context}\tstatus\t${status.state}`);
 }
@@ -462,22 +511,35 @@ async function startWebhooks({ repo, port, out, onEvent }) {
       raw,
       /** @type {string | undefined} */ (request.headers['x-hub-signature-256']),
     );
-    response.writeHead(signed ? 202 : 401).end();
     if (!signed) {
+      response.writeHead(401).end();
       console.log(`webhook ${name} rejected: bad signature`);
       return;
     }
-    const body = JSON.parse(raw.toString('utf8'));
     count += 1;
-    writeFileSync(
-      join(deliveries, `${String(count).padStart(3, '0')}-${name}.json`),
-      JSON.stringify({ host: 'github', event: name, delivery: request.headers['x-github-delivery'], body }, null, 2),
-    );
-    const event = parseEvent('github', name, body);
+    /** @type {GitHostEvent | null} */
+    let event;
+    const file = join(deliveries, `${String(count).padStart(3, '0')}-${name}`);
+    try {
+      const body = JSON.parse(raw.toString('utf8'));
+      writeFileSync(
+        `${file}.json`,
+        JSON.stringify({ host: 'github', event: name, delivery: request.headers['x-github-delivery'], body }, null, 2),
+      );
+      event = parseEvent('github', name, body);
+    } catch (error) {
+      if (!(error instanceof PayloadError || error instanceof SyntaxError)) throw error;
+      response.writeHead(400).end();
+      writeFileSync(`${file}.rejected`, raw);
+      console.log(`webhook ${name} rejected: ${error.message}`);
+      return;
+    }
+    response.writeHead(202).end();
     console.log(`webhook ${name} signature=ok ${event ? JSON.stringify(event) : 'ignored'}`);
     if (event) onEvent(event, at);
   });
   await new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(undefined)));
+  const { port: bound } = /** @type {import('node:net').AddressInfo} */ (server.address());
   const events = 'push,pull_request,pull_request_review,pull_request_review_comment,status,check_run';
   const forwarder = spawn(
     'gh',
@@ -486,22 +548,42 @@ async function startWebhooks({ repo, port, out, onEvent }) {
       'forward',
       `--repo=${repo}`,
       `--events=${events}`,
-      `--url=http://127.0.0.1:${port}/`,
+      `--url=http://127.0.0.1:${bound}/`,
       `--secret=${secret}`,
     ],
     { stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' },
   );
-  await untilForwarding(forwarder);
-  const exited = new Promise((resolve) => forwarder.on('exit', resolve));
-  return {
-    async stop() {
-      if (forwarder.pid && process.platform !== 'win32') process.kill(-forwarder.pid, 'SIGINT');
-      else forwarder.kill('SIGINT');
+  const exited = once(forwarder, 'exit');
+  /** @type {Promise<void> | undefined} */
+  let stopping;
+  const stop = () => {
+    stopping ??= (async () => {
+      if (forwarder.exitCode === null && forwarder.signalCode === null) {
+        if (forwarder.pid && process.platform !== 'win32') process.kill(-forwarder.pid, 'SIGINT');
+        else forwarder.kill('SIGINT');
+      }
       await exited;
+      for (const [name, handler] of exits) process.off(name, handler);
       server.closeAllConnections();
       server.close();
-    },
+    })();
+    return stopping;
   };
+  /** @param {number} code */
+  const stopThenExit = (code) => (/** @type {unknown} */ error) => {
+    if (error instanceof Error) console.error(error);
+    void stop().finally(() => process.exit(code));
+  };
+  /** @type {[string, (error: unknown) => void][]} */
+  const exits = [
+    ['SIGINT', stopThenExit(130)],
+    ['SIGTERM', stopThenExit(143)],
+    ['uncaughtException', stopThenExit(1)],
+    ['unhandledRejection', stopThenExit(1)],
+  ];
+  for (const [name, handler] of exits) process.on(name, handler);
+  await untilForwarding(forwarder);
+  return { stop };
 }
 
 /**

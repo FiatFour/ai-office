@@ -83,6 +83,33 @@ describe('parseEvent', () => {
   it('ignores events the lifecycle does not use', () => {
     expect(parseEvent('github', 'ping', { zen: 'hi' })).toBeNull();
   });
+
+  it.each(['constructor', 'toString', '__proto__'])('ignores an event named after the prototype key %s', (event) => {
+    expect(parseEvent('github', event, { repository: { full_name: 'o/r' } })).toBeNull();
+  });
+
+  it.each(['Issue', 'Commit', 'Snippet'])('ignores a GitLab note on a %s', (noteableType) => {
+    const { body } = load('gitlab/note-merge-request.json');
+    edit(body, 'object_attributes.noteable_type', noteableType);
+    edit(body, 'merge_request');
+    expect(parseEvent('gitlab', 'Note Hook', body)).toBeNull();
+  });
+
+  it.each([
+    ['github/pull_request-opened.json', 'number', 1.5],
+    ['github/pull_request-opened.json', 'pull_request.state', 'banana'],
+    ['github/status.json', 'state', 'banana'],
+    ['github/check_run-completed.json', 'check_run.conclusion', 'banana'],
+    ['github/check_run-completed.json', 'check_run.status', 'banana'],
+    ['gitlab/merge_request-open.json', 'object_attributes.state', 'banana'],
+    ['gitlab/merge_request-open.json', 'object_attributes.iid', 2.5],
+    ['gitlab/pipeline.json', 'object_attributes.status', 'banana'],
+  ])('rejects %s with an unknown %s', (name, path, value) => {
+    const { host, event, body } = load(name);
+    edit(body, path, value);
+    const problem = typeof value === 'string' ? `has unknown value "${value}"` : undefined;
+    expect(() => parseEvent(host, event, body)).toThrow(new PayloadError(path, problem));
+  });
 });
 
 describe('routing', () => {
@@ -114,6 +141,19 @@ describe('guards', () => {
     expect(lifecycleWriteAllowed('GET', '/repos/o/r/pulls/4/merge')).toBe(true);
     expect(lifecycleWriteAllowed('POST', '/repos/o/r/pulls/4/reviews')).toBe(true);
     expect(lifecycleWriteAllowed('PUT', '/repos/o/r/contents/spike/perf.txt')).toBe(true);
+  });
+
+  it.each([
+    '/repos/o/r/contents/../pulls/1/merge',
+    '/repos/o/r/contents/%2e%2e/pulls/1/merge',
+    '/repos/o/r/contents/%2E%2E/pulls/1/merge',
+    '/repos/o/r/contents/.%2e/pulls/1/merge',
+    '/repos/o/r/contents/x/../../pulls/1/merge',
+    '/repos/o/r/contents/./../pulls/1/merge',
+    '/repos/o/r/contents/..%2fpulls/1/merge',
+    '/repos/o/r/contents/x\\..\\..\\pulls/1/merge',
+  ])('refuses a write whose path climbs out of contents: %s', (path) => {
+    expect(lifecycleWriteAllowed('PUT', path)).toBe(false);
   });
 
   it('accepts only the matching webhook signature', () => {

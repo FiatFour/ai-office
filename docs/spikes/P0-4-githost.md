@@ -20,10 +20,11 @@ pnpm test spikes/P0-4
 
 ## What the script models
 
-- One `GitHostEvent` union covers what the lifecycle uses: `push`, `change` (PR or MR opened, updated, closed, merged), `review`, `review_comment` and `check`. A registry keyed by host and event name holds one parser per event. An event the lifecycle does not use, such as `ping`, parses to `null`. A used event that lacks a field throws `PayloadError` with the missing path.
+- One `GitHostEvent` union covers what the lifecycle uses: `push`, `change` (PR or MR opened, updated, closed, merged), `review`, `review_comment` and `check`. A registry keyed by host and event name holds one parser per event. An event the lifecycle does not use, such as `ping`, parses to `null`. A GitLab note on an issue, commit or snippet also parses to `null`. A used event that lacks a field, carries a non-integer number, or carries a state or status outside the known set throws `PayloadError` with the field's path.
 - A branch named `aw/<factory>/<task>` routes its PR to that factory. Any other branch routes to no factory.
-- The API client refuses any non-GET call to a `pulls/<n>/merge` or `merge_requests/<n>/merge` path before it sends it. The merge lane therefore depends on code, not on care.
-- The webhook listener rejects a delivery whose `X-Hub-Signature-256` does not match the secret it gave the forwarder (S-31). Every recorded delivery passed.
+- The API client sends a non-GET call only if it matches one of five lifecycle writes: create a ref, put a file under `contents/`, open a pull request, post a commit status, post a review. It first normalizes the path with `new URL`. A path that normalization changes (a `.` or `..` segment, a backslash) or that holds `%2e`, `%2f` or `%5c` is refused. A `contents/` path may only hold segments of letters, digits, `_`, `-` and `.` that do not start with a dot. So `contents/../pulls/1/merge` cannot reach the merge endpoint. No merge call can go out, so the merge lane depends on code, not on care.
+- The webhook listener rejects a delivery whose `X-Hub-Signature-256` does not match the secret it gave the forwarder (S-31). Every recorded delivery passed. A signed delivery that does not parse gets a 400 and the listener keeps running.
+- The forwarder runs in its own process group. On SIGINT, SIGTERM, an uncaught exception or an unhandled rejection the listener stops the forwarder first, so its repo hook is removed, then exits. `gh webhook forward` (cli/gh-webhook v0.2.0) takes the secret only as the `--secret` flag, so the per-run random secret is visible in the local process list while the forwarder runs.
 
 ## Fixtures
 

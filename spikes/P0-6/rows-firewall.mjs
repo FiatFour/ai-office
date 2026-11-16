@@ -114,23 +114,36 @@ export const FIREWALL_ROWS = {
   'fw-dns-exfil': {
     lane: 5,
     run: withFirewall(async (fw) => {
-      const control = `${randomUUID()}-control.${CANARY_ZONE}`;
-      fw.controlOnEgress(['dns', control]);
-      const embedded = `${randomUUID()}.${CANARY_ZONE}`;
-      fw.probe(['dns', embedded]);
-      const direct = `${randomUUID()}.${CANARY_ZONE}`;
-      const directResult = fw.probe(['dns', direct, fw.canaryIp]);
+      const { sink, defaultGateway } = fw.exfil;
+      const sinkControl = `${randomUUID()}-control`;
+      fw.controlOnDefaultBridge(['dns', sinkControl, `${defaultGateway}:${sink.port}`]);
+      const zoneControl = `${randomUUID()}-control.${CANARY_ZONE}`;
+      fw.controlOnEgress(['dns', zoneControl]);
+      const hostAddresses = Object.values(networkInterfaces())
+        .flat()
+        .flatMap((nic) => (nic === undefined || nic.internal || nic.address.startsWith('fe80') ? [] : [nic.address]));
+      const targets = [...new Set([...fw.gateways, defaultGateway, ...hostAddresses])];
+      const direct = randomUUID();
+      fw.script(
+        `${targets.map((ip, index) => `node /probe/probe.mjs dns ${direct}-${index} ${ip}:${sink.port} > /dev/null &`).join('\n')}\nwait\n`,
+      );
       const viaProxy = `${randomUUID()}.${CANARY_ZONE}`;
       const proxied = fw.probe(['https', viaProxy, '/']);
+      await new Promise((resolve) => setTimeout(resolve, 500));
       const log = fw.canaryLog();
-      const controlSeen = log.includes(control);
-      const leaked = [embedded, direct, viaProxy].filter((name) => log.includes(name));
-      const proxyUsesCanary = log.includes(`${ALLOWED_HOST}.`);
-      const stopped =
-        controlSeen && leaked.length === 0 && directResult.resolved === false && proxied.connectStatus === 403;
+      const sinkControlSeen = sink.names.includes(sinkControl);
+      const zoneControlSeen = log.includes(zoneControl);
+      if (!sinkControlSeen || !zoneControlSeen) {
+        return {
+          notRun: `a control lookup did not reach its canary (host sink ${sinkControlSeen}, CoreDNS ${zoneControlSeen}), so a missing lookup from the cage proves nothing`,
+        };
+      }
+      const directSeen = sink.names.filter((name) => name.startsWith(direct));
+      const leaked = [...directSeen, ...(log.includes(viaProxy) ? [viaProxy] : [])];
+      const stopped = leaked.length === 0 && proxied.connectStatus === 403;
       return {
         observed: stopped ? ['F1', 'F2'] : [`canary-saw=${leaked.length}`],
-        detail: `the canary logged the control lookup (${controlSeen}) and the proxy's own lookup of an allowlisted host (${proxyUsesCanary}), and ${leaked.length} of the cage's three unique names (resolver, direct to ${fw.canaryIp}, CONNECT through the proxy gets ${proxied.connectStatus})`,
+        detail: `controls reached both canaries (a host DNS listener from the default bridge, CoreDNS from the egress network). From the cage: lookups sent straight to the host listener on port ${sink.port} at ${targets.length} host addresses (${targets.join(', ')}), ${directSeen.length} reached it; a CONNECT through the proxy for a name in the CoreDNS zone got ${proxied.connectStatus}, seen=${log.includes(viaProxy)}. The cage's own resolver path is not tested here`,
       };
     }),
   },
@@ -212,12 +225,48 @@ export const FIREWALL_ROWS = {
   'fw-proxy-down': {
     lane: null,
     run: withFirewall(async (fw) => {
+      const { address } = await lookup(ALLOWED_HOST);
+      const control = fw.controlOnEgress(['tcp', address, '443']);
+      if (control.connected !== true) {
+        return {
+          notRun: `a container with a route out could not reach ${address}:443 either (${control.error}), so a failure proves nothing`,
+        };
+      }
       fw.killProxy();
-      const result = fw.probe(['https', ALLOWED_HOST, '/']);
-      await fw.restartProxy();
+      /** @type {Record<string, any>} */
+      let viaProxy;
+      /** @type {Record<string, any>} */
+      let direct;
+      try {
+        viaProxy = fw.probe(['https', ALLOWED_HOST, '/']);
+        direct = fw.probe(['tcp', address, '443']);
+      } finally {
+        await fw.restartProxy();
+      }
       return {
-        observed: result.ok === false ? ['F3'] : ['reachable'],
-        detail: `with the proxy container killed, an allowlisted request from the cage: ok=${result.ok} (${String(result.error).slice(0, 80)}); the proxy was restarted after`,
+        observed:
+          viaProxy.ok === false && direct.connected === false
+            ? ['F3']
+            : [`via-proxy-ok=${viaProxy.ok}`, `direct-connected=${direct.connected}`],
+        detail: `with the proxy container killed: an allowlisted HTTPS request from the cage ok=${viaProxy.ok}, and a direct TCP connect to ${ALLOWED_HOST} at ${address}:443 connected=${direct.connected} (${String(direct.error).slice(0, 50)}); the same connect from a container on the egress network connected=${control.connected}; the proxy was restarted after`,
+      };
+    }),
+  },
+  'deny-event-flood': {
+    lane: null,
+    run: withFirewall(async (fw) => {
+      const before = fw.denyEvents().length;
+      const flood = fw.cageProbe(['flood', '100']);
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      const delivered = fw.denyEvents().length - before;
+      const logged = new Set(fw.proxyLog().match(/flood-\d+\.example\.com/g) ?? []).size;
+      const CAP_PER_SECOND = 20;
+      return {
+        observed:
+          flood.denied === 100 && logged === 100 && delivered > 0 && delivered <= 2 * CAP_PER_SECOND
+            ? ['F4r']
+            : [`denied=${flood.denied}`, `logged=${logged}`, `delivered=${delivered}`],
+        detail: `100 denied CONNECTs from the cage in one burst: ${flood.denied} got 403 and ${logged} appear in the proxy's own log, but HQ's deny endpoint received ${delivered} (the proxy posts at most ${CAP_PER_SECOND} a second, so a burst spans at most two windows)`,
       };
     }),
   },

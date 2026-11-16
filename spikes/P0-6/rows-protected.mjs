@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../P0-3/cage.mjs';
 import * as ok from '../P0-3/lane-checks.mjs';
@@ -145,7 +145,8 @@ export const PROTECTED_ROWS = {
       const byPath = await cages.hook.decide('mcp__files__read', { path: `${MOUNT}/.env` });
       return 'observed' in base
         ? {
-            observed: base.observed.length === 1 && !byId.denied && byPath.denied ? ['L2'] : ['unexpected'],
+            observed:
+              base.observed[0] === 'L2' && !byId.denied && byPath.denied ? ['L2'] : [...base.observed, 'unexpected'],
             detail: `${base.detail}; the hook allowed the id-only call (${!byId.denied}) and denied the path-string call (${byPath.denied})`,
           }
         : base;
@@ -200,25 +201,81 @@ export const PROTECTED_ROWS = {
           dirty,
           ...args,
         ]);
+      git(['checkout', '-q', '-b', 'sanitized-away']);
       git(['add', '-f', '.env']);
       git(['commit', '-qm', 'oops']);
-      git(['reset', '-q', '--hard', 'HEAD~1']);
+      git(['checkout', '-q', 'main']);
+      git(['branch', '-q', '-D', 'sanitized-away']);
+      writeFileSync(join(dirty, '.env'), readFileSync(join(cages.fixture.repo, '.env')));
       const scanDirty = cages.preflight(dirty);
-      const readers = [
-        'diff',
-        'diff HEAD',
-        'show HEAD:.env',
-        'cat-file -p HEAD:.env',
-        'grep KEY HEAD',
-        'log -p --all',
-        'show HEAD',
-      ];
-      const out = readers
-        .map((reader) => cages.sh(cages.masked, `cd ${MOUNT} && git -c safe.directory='*' ${reader} 2>&1`).out)
-        .join('\n');
+      const historyCage = cages.maskedOver(dirty, `aw-p0-6-history-${cages.runId}`);
+      const reflogReaders = ['log -p -g', 'reflog show --all -p'];
+      const treeReaders = ['diff --no-index /dev/null .env', 'grep --no-index -I CANARY_ .'];
+      const readIn = (/** @type {string} */ container, /** @type {string[]} */ readers) =>
+        readers
+          .map((reader) => cages.sh(container, `cd ${MOUNT} && git -c safe.directory='*' ${reader} 2>&1`).out)
+          .join('\n');
+      const historyLeaks = cages.leaks(readIn(historyCage, reflogReaders)).length;
+      const maskedTree = cages.leaks(readIn(cages.masked, treeReaders)).length;
+      const openTree = cages.leaks(readIn(cages.local, treeReaders)).length;
+      const pfHolds = clean.clean && !scanDirty.clean && historyLeaks > 0;
+      const l2Holds = maskedTree === 0 && openTree > 0;
       return {
-        observed: clean.clean && !scanDirty.clean && cages.leaks(out).length === 0 ? ['PF', 'L2'] : ['unexpected'],
-        detail: `preflight: fixture clean=${clean.clean}, a repo whose .env survives only in the reflog clean=${scanDirty.clean}; ${readers.length} git readers in the masked cage printed ${cages.leaks(out).length} canaries`,
+        observed: [
+          pfHolds
+            ? 'PF'
+            : `pf-fails(clean=${clean.clean},dirty-clean=${scanDirty.clean},history-leaks=${historyLeaks})`,
+          l2Holds ? 'L2' : `l2-fails(masked=${maskedTree},open=${openTree})`,
+        ],
+        detail: `PF: the fixture scans clean (${clean.clean}); a repo whose .env was committed on a branch that was then deleted scans dirty (${!scanDirty.clean}), and without the preflight a masked cage over it prints the canary through git reflog readers (${historyLeaks}), because the mask hides the file and not the git objects. L2: git readers of the working tree in the masked cage printed ${maskedTree} canaries, the unmasked control ${openTree}`,
+      };
+    }),
+  },
+  'symlink-committed-cage': {
+    lane: 10,
+    run: withCages(async (cages) => {
+      const linked = join(cages.fixture.repo, '..', 'linked');
+      cpSync(cages.fixture.repo, linked, { recursive: true });
+      symlinkSync(`${CAGE_HOME}/.ssh/id_ed25519`, join(linked, 'host-key'));
+      const masked = cages.maskedOver(linked, `aw-p0-6-linked-${cages.runId}`);
+      const open = cages.localOver(linked, `aw-p0-6-linkedopen-${cages.runId}`);
+      const read = (/** @type {string} */ container) => cages.sh(container, `cat ${MOUNT}/host-key 2>&1`).out;
+      const maskedLeaks = cages.leaks(read(masked)).length;
+      const openLeaks = cages.leaks(read(open)).length;
+      return {
+        observed:
+          maskedLeaks === 0 && openLeaks === 1 ? ['L1'] : [`masked-leaks=${maskedLeaks}`, `open-leaks=${openLeaks}`],
+        detail: `a committed symlink host-key -> ${CAGE_HOME}/.ssh/id_ed25519: in the cage the link resolves in the cage's own filesystem, where the host home is not mounted, and printed ${maskedLeaks} canaries; the same link in a cage that has the fixture home mounted printed ${openLeaks}`,
+      };
+    }),
+  },
+  'cage-runtime-flags': {
+    lane: 10,
+    run: withCages(async (cages) => {
+      /** @param {string} container */
+      const violations = (container) => {
+        const info = cages.inspect(container);
+        /** @type {string[]} */
+        const binds = info.HostConfig.Binds ?? [];
+        const volumes = /** @type {{ Type: string }[]} */ (info.Mounts).filter((mount) => mount.Type === 'volume');
+        const capEff = cages.sh(container, 'grep CapEff /proc/self/status').out.trim().split(/\s+/)[1] ?? '';
+        return [
+          ...(info.HostConfig.Privileged ? ['privileged'] : []),
+          ...(binds.some((bind) => bind.includes('docker.sock')) ? ['docker-socket'] : []),
+          ...(volumes.length > 0 ? ['named-volume'] : []),
+          ...(cages.sh(container, 'id -u').out.trim() === '0' ? ['root-agent'] : []),
+          ...(/^0+$/.test(capEff) ? [] : ['capabilities']),
+        ];
+      };
+      const control = cages.privilegedControl(`aw-p0-6-priv-${cages.runId}`);
+      const found = violations(cages.masked);
+      const controlFound = violations(control);
+      return {
+        observed:
+          found.length === 0 && controlFound.includes('privileged') && controlFound.includes('docker-socket')
+            ? ['CG']
+            : [...found, `control=${controlFound.join('+')}`],
+        detail: `the masked cage as started: violations [${found.join(', ')}] (privileged flag, docker socket bind, named volume shared with another cage, root agent, effective capabilities); a control cage started with --privileged and the docker socket shows [${controlFound.join(', ')}]`,
       };
     }),
   },

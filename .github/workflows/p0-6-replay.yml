@@ -5,6 +5,7 @@ on:
     paths:
       - spikes/P0-2/**
       - spikes/P0-3/**
+      - spikes/P0-4/**
       - spikes/P0-5/**
       - spikes/P0-6/**
       - docs/threat-model.md
@@ -63,3 +64,36 @@ jobs:
         with:
           name: p0-6-replay
           path: ${{ runner.temp }}/p0-6
+
+  mutations:
+    name: mutations (docker, one switch per run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Turn each mechanism off and check that the rows the table declares turn to FAIL and no other row does
+        run: |
+          OUT="$RUNNER_TEMP/p0-6-mutations"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          set +e
+          start=$(date +%s)
+          node spikes/P0-6/run-mutations.mjs --out "$OUT" 2>&1 | tee "$OUT/run.txt"
+          status=${PIPESTATUS[0]}
+          echo "mutation job wall seconds: $(( $(date +%s) - start ))"
+          { echo "### mutations"; cat "$OUT/mutations.md"; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Clean up by label
+        if: always()
+        run: node spikes/P0-6/replay.mjs --cleanup
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: p0-6-mutations
+          path: ${{ runner.temp }}/p0-6-mutations

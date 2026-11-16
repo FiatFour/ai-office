@@ -112,7 +112,27 @@ async function hostHeader(host, inner) {
   };
 }
 
+/** @param {number} count */
+async function flood(count) {
+  const proxy = proxyFromEnv(process.env.HTTPS_PROXY);
+  const auth = Buffer.from(`${proxy.user}:x`).toString('base64');
+  const statuses = await Promise.all(
+    Array.from({ length: count }, async (_, index) => {
+      const socket = connect(proxy.port, proxy.host);
+      socket.write(
+        `CONNECT flood-${index}.example.com:443 HTTP/1.1\r\nHost: flood-${index}.example.com:443\r\nProxy-Authorization: Basic ${auth}\r\n\r\n`,
+      );
+      const head = String(await readHead(socket).catch(() => ''));
+      socket.destroy();
+      return Number(/^HTTP\/1\.[01] (\d{3})/.exec(head)?.[1] ?? 0);
+    }),
+  );
+  return { sent: count, denied: statuses.filter((status) => status === 403).length };
+}
+
 const COMMANDS = {
+  /** @param {string[]} args */
+  flood: ([count = '100']) => flood(Number(count)),
   /** @param {string[]} args */
   ech: ([host = '']) => ech(host),
   /** @param {string[]} args */

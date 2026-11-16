@@ -21,7 +21,7 @@ const layerOf = (state) =>
     : state === 'blocked-by-hook'
       ? 'L4'
       : state === 'errored'
-        ? 'L2'
+        ? 'errored'
         : 'executed';
 
 /** @param {(live: Live) => Promise<Outcome>} body @returns {(ctx: Ctx) => Promise<Outcome>} */

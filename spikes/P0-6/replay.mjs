@@ -9,6 +9,7 @@ import { newRunId } from '../P0-3/cage.mjs';
 import { ATTACKS } from './attacks.mjs';
 import { startCages } from './cages.mjs';
 import { startLive } from './live.mjs';
+import { isMutation, MUTATIONS } from './mutations.mjs';
 import { leftOver, removeOwn, startFirewall } from './rig.mjs';
 import { matches, parseThreatModel } from './threat-table.mjs';
 
@@ -43,12 +44,19 @@ const { values: args } = parseArgs({
     out: { type: 'string', default: join(tmpdir(), 'swarm-P0-6', 'replay') },
     only: { type: 'string' },
     live: { type: 'boolean', default: false },
-    'creds-volume': { type: 'string', default: 'aw-p0-3-home' },
+    'creds-volume': { type: 'string', default: '' },
+    mutate: { type: 'string', default: '' },
     table: { type: 'string', default: TABLE },
     cleanup: { type: 'boolean', default: false },
   },
 });
 const out = String(args.out);
+const mutate = String(args.mutate);
+if (mutate !== '' && !isMutation(mutate)) {
+  console.error(`unknown mutation ${mutate}, expected one of ${Object.keys(MUTATIONS).join(', ')}`);
+  process.exit(2);
+}
+if (mutate !== '') console.log(`MUTATION ${mutate}: ${MUTATIONS[mutate]?.switch}`);
 mkdirSync(out, { recursive: true });
 
 if (args.cleanup) {
@@ -70,14 +78,19 @@ const runId = newRunId();
 removeOwn();
 let cagesStarted = false;
 let liveStarted = false;
-const startedCages = once(() => startCages(runId));
-const startedLive = once(() => startLive({ credsVolume: String(args['creds-volume']), out }));
+const startedCages = once(() => startCages(runId, mutate));
+const startedLive = once(() => {
+  const credsVolume = String(args['creds-volume']);
+  if (credsVolume === '') throw new Error('--live needs --creds-volume <volume that holds a claude.ai login>');
+  return startLive({ credsVolume, out });
+});
 const ctx = {
+  mutate,
   cages: () => {
     cagesStarted = true;
     return startedCages();
   },
-  firewall: once(startFirewall),
+  firewall: once(() => startFirewall(mutate)),
   live: args.live
     ? () => {
         liveStarted = true;

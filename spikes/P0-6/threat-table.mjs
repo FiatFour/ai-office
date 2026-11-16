@@ -2,7 +2,7 @@ export const RATINGS = ['stopped', 'stopped-live', 'best-effort', 'open', 'not-r
 
 /**
  * @typedef {{
- *   id: string, attack: string, vector: string, modes: string, expect: string, named: string, rating: string, note: string,
+ *   id: string, attack: string, vector: string, modes: string, expect: string, named: string, rating: string, mutations: string[], note: string,
  * }} ThreatRow
  */
 
@@ -16,6 +16,13 @@ const cells = (line) =>
     .replace(/^\||\|$/g, '')
     .split(' | ')
     .map((cell) => cell.trim());
+
+/** @param {string} cell */
+const mutationList = (cell) =>
+  cell
+    .split(',')
+    .map((id) => unquote(id.trim()))
+    .filter((id) => id !== '' && id !== '-');
 
 /** @param {string} cell */
 const unquote = (cell) => cell.replace(/^`|`$/g, '').trim();
@@ -49,6 +56,7 @@ export const parseThreatModel = (markdown) => {
     expect: column('stopped by'),
     named: column('named'),
     rating: column('rating'),
+    mutation: column('mutation'),
     note: column('note'),
   };
   return lines.slice(header + 2).map((line) => {
@@ -62,6 +70,7 @@ export const parseThreatModel = (markdown) => {
       expect: unquote(get(at.expect)),
       named: get(at.named),
       rating: unquote(get(at.rating)),
+      mutations: mutationList(get(at.mutation)),
       note: get(at.note),
     };
   });
@@ -85,18 +94,22 @@ export const matches = (expect, observed) => {
 
 const ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const MODES = new Set(['C', 'SC', 'SL']);
-const LAYER = /^(L[1-5]|PF|MS|GS|F[1-5][a-z]?|W[1-3])$/;
+const LAYER = /^(L[1-5]|PF|MS|GS|HG|WH|CG|F[1-5][a-z]?|W[1-3])$/;
 
 /**
  * What is wrong with the table, as one sentence per problem. An empty list means every row has one replay id, every id
- * has a row, and every cell the replay reads is well formed.
+ * has a row, every `stopped` row (and every `best-effort` row that names a layer) declares the mutation that turns its
+ * mechanism off, every mutation is declared by a row, and every cell the replay reads is well formed.
  * @param {ThreatRow[]} rows
  * @param {string[]} attackIds the ids `attacks.mjs` can replay
+ * @param {string[]} mutationIds the ids `mutations.mjs` can apply
+ * @param {string[]} [undeclared] ids that no row needs to declare
  */
-export const tableProblems = (rows, attackIds) => {
+export const tableProblems = (rows, attackIds, mutationIds, undeclared = []) => {
   /** @type {string[]} */
   const problems = [];
   const seen = new Set();
+  const declared = new Set();
   rows.forEach((row, index) => {
     const name = row.id === '' ? `row ${index + 1} (${row.attack.slice(0, 40)})` : row.id;
     if (row.id === '') problems.push(`${name} has no replay id`);
@@ -114,8 +127,18 @@ export const tableProblems = (rows, attackIds) => {
     if (modes.length === 0 || modes.some((mode) => !MODES.has(mode))) problems.push(`${name} has modes "${row.modes}"`);
     if (row.rating === 'open' && row.expect !== 'none') problems.push(`${name} is rated open but names a layer`);
     if (row.rating === 'stopped' && row.expect === 'none') problems.push(`${name} is rated stopped but names no layer`);
+    const needsMutation = row.rating === 'stopped' || (row.rating === 'best-effort' && row.expect !== 'none');
+    if (needsMutation && row.mutations.length === 0)
+      problems.push(`${name} is rated ${row.rating} but declares no mutation that turns its mechanism off`);
+    for (const id of row.mutations) {
+      if (!mutationIds.includes(id)) problems.push(`${name} names mutation ${id}, which mutations.mjs does not define`);
+      declared.add(id);
+    }
     if (row.note === '') problems.push(`${name} has no note`);
   });
+  for (const id of mutationIds) {
+    if (!declared.has(id) && !undeclared.includes(id)) problems.push(`mutation ${id} has no row that declares it`);
+  }
   for (const id of attackIds) {
     if (!seen.has(id)) problems.push(`replay id ${id} has no row in the threat model`);
   }

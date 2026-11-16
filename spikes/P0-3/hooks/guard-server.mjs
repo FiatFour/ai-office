@@ -58,13 +58,14 @@ export const startGuardServer = async ({
   port = 0,
   workspace,
   root,
-  gitClean = false,
+  gitClean: initialGitClean = false,
   secret,
   maxBodyBytes = MAX_BODY_BYTES,
   maxLogBytes = MAX_LOG_BYTES,
   maxDenyLogBytes = MAX_DENY_LOG_BYTES,
 }) => {
   writeFileSync(logPath, '');
+  let gitClean = initialGitClean;
   let seq = 0;
   const stats = { events: 0, denies: 0, dropped: 0, deniesDropped: 0 };
   const budgets = {
@@ -186,6 +187,10 @@ export const startGuardServer = async ({
     token: secret,
     port: address.port,
     stats: () => ({ ...stats }),
+    /** @param {boolean} value */
+    setGitClean: (value) => {
+      gitClean = value === true;
+    },
     close: () =>
       new Promise((resolve) => {
         server.close(resolve);

@@ -149,10 +149,19 @@ export const findProtected = (dir, ctx, limit = Number.POSITIVE_INFINITY) => {
  */
 export const directoryHoldsProtected = (dir, ctx) => findProtected(dir, ctx, 1).length > 0;
 
+/**
+ * A search root that is a strict ancestor of the workspace reaches the whole workspace tree and nothing else the
+ * guard can see, so the workspace is what gets scanned for it.
+ * @param {string} dir
+ * @param {PathContext} ctx
+ */
+const searchRoot = (dir, ctx) =>
+  ctx.workspace !== undefined && dir !== ctx.workspace && within(ctx.workspace, dir) ? ctx.workspace : dir;
+
 /** @param {string} path @param {PathContext} ctx */
 const isDirectory = (path, ctx) => {
   const host = hostPath(path, ctx);
-  if (host === null) return false;
+  if (host === null) return ctx.workspace !== undefined && within(ctx.workspace, path);
   try {
     return statSync(host).isDirectory();
   } catch {
@@ -234,7 +243,8 @@ export const parseCommands = (command) => {
     } else if (char === '$' && command[index + 1] === "'") {
       ansi = true;
       index += 1;
-    } else if (char === '"' || char === "'") quote = char;
+    } else if (char === '$' && command[index + 1] === '"') continue;
+    else if (char === '"' || char === "'") quote = char;
     else if (/[;&|()`\n]/.test(char)) endCommand();
     else if (/[\s<>=]/.test(char)) flush();
     else current += char;
@@ -412,7 +422,7 @@ const directoryOperands = (tokens, ctx) =>
  */
 const holds = (dir, ctx) => {
   try {
-    return directoryHoldsProtected(dir, ctx);
+    return directoryHoldsProtected(searchRoot(dir, ctx), ctx);
   } catch (error) {
     if (error instanceof ScanLimitError || error instanceof UnreadableError) return true;
     throw error;
@@ -462,8 +472,8 @@ const GIT_PATH_OPTIONS = new Set(['-C', '--git-dir', '--work-tree']);
 const GIT_VALUE_OPTIONS = new Set([...GIT_PATH_OPTIONS, '-c', '--namespace', '--exec-path']);
 
 /**
- * A git reader runs in the cage and prints what git holds. It is allowed only after the preflight vouched for
- * the repo, only inside the workspace, and never over untracked or unindexed files. The guard never runs git itself.
+ * With a vouched repo a git reader is allowed only inside the workspace and never over untracked or unindexed
+ * files. The guard never runs git itself.
  * @param {string[]} tokens
  * @param {PathContext} ctx
  * @returns {{ path: string, reason: string } | null}
@@ -491,12 +501,6 @@ const gitReaderHit = (tokens, ctx) => {
   if (listsUntracked || flags.some((flag) => flag === '--no-index' || flag === '--untracked')) {
     return hit(subcommand, `git ${subcommand} would read files that git does not track, which the mask may not cover`);
   }
-  if (ctx.gitClean !== true) {
-    return hit(
-      subcommand,
-      'the repo has not passed the git preflight (no protected path in the index, any commit, the reflog, any object or a submodule), so a git reader could print one',
-    );
-  }
   return null;
 };
 
@@ -505,6 +509,52 @@ const embeddedName = (text, ctx) => text.split(/[^\w.\-/~$]+/).find((piece) => p
 
 const SHELLS = /^(sh|bash|zsh|dash|ksh)$/;
 const MAX_SHELL_DEPTH = 4;
+const NOT_VOUCHED =
+  'the repo has not passed the git preflight (every object reachable from a branch or tag commit tree, no protected path, no reflog, stash, notes or replace), so any git command could print one';
+
+/** @param {string} text */
+const namesGit = (text) =>
+  text.split(/[^\w.-]+/).some((piece) => piece === 'git' || piece.startsWith('git-') || piece === '.git') ||
+  /(^|\/)\.git(\/|$)/.test(text);
+
+/**
+ * The command word of each simple command, after leading assignments and wrappers, when it is built from an
+ * expansion the matcher cannot resolve.
+ * @param {string} command
+ */
+const unboundedCommandWord = (command) =>
+  command.split(/[;&|\n]+/).some((segment) => {
+    let words = segment
+      .trim()
+      .replace(/^[({!\s]+/, '')
+      .split(/\s+/);
+    while (words.length > 0 && (/^\w+=/.test(words[0] ?? '') || WRAPPERS.has(basename(words[0] ?? '')))) {
+      words = words.slice(1);
+      while (/^-/.test(words[0] ?? '') || /^\d+$/.test(words[0] ?? '')) words = words.slice(1);
+    }
+    return /^\$|^`|\$[({]/.test(words[0] ?? '');
+  });
+
+/**
+ * With no preflight verdict the guard cannot say what git would print, so it denies every command that names git
+ * (in the raw text, after quote and escape decoding, as a path, a helper binary or a .git path) and every command
+ * word it cannot resolve. A git run through an interpreter's string building is outside this rule.
+ * @param {string} command
+ * @param {string[]} decoded
+ * @returns {Verdict | null}
+ */
+const gitGate = (command, decoded) => {
+  const named = namesGit(command) || decoded.some(namesGit);
+  if (named) return { blocked: true, path: 'git', reason: `the command invokes git, and ${NOT_VOUCHED}` };
+  if (unboundedCommandWord(command)) {
+    return {
+      blocked: true,
+      path: command,
+      reason: `the command word is an expansion the guard cannot resolve, and ${NOT_VOUCHED}`,
+    };
+  }
+  return null;
+};
 
 /**
  * @param {string} command
@@ -515,26 +565,45 @@ const MAX_SHELL_DEPTH = 4;
 const checkBash = (command, ctx, depth = 0) => {
   for (const text of new Set([command, withAssignments(command)])) {
     const commands = parseCommands(text);
+    if (ctx.gitClean !== true) {
+      const gate = gitGate(text, commands.flat());
+      if (gate) return gate;
+    }
     for (const token of commands.flat()) {
       const named =
         candidates(token).find((piece) => isProtectedPath(piece, ctx)) ??
         (globHitsProtected(token, ctx) ? token : undefined);
       if (named) return { blocked: true, path: named, reason: `the command names the protected path ${named}` };
     }
+    let here = ctx;
     for (const raw of commands) {
       const segment = unwrap(raw);
-      if (INTERPRETERS.test(basename(segment[0] ?? ''))) {
+      const program = basename(segment[0] ?? '');
+      if (program === 'cd' || program === 'pushd') {
+        const target = segment.find((token, index) => index > 0 && !token.startsWith('-')) ?? ctx.home;
+        here = { ...here, cwd: expand(target, here) };
+      }
+      if (INTERPRETERS.test(program)) {
         const hidden = segment.map((token) => embeddedName(token, ctx)).find(Boolean);
         if (hidden)
           return { blocked: true, path: hidden, reason: `the script text names the protected path ${hidden}` };
       }
-      if (SHELLS.test(basename(segment[0] ?? '')) && depth < MAX_SHELL_DEPTH) {
+      if (SHELLS.test(program)) {
         const flag = segment.findIndex((token) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(token));
         const inner = flag > 0 ? segment[flag + 1] : undefined;
-        const nested = inner === undefined ? undefined : checkBash(inner, ctx, depth + 1);
-        if (nested?.blocked) return nested;
+        if (inner !== undefined) {
+          if (depth >= MAX_SHELL_DEPTH) {
+            return {
+              blocked: true,
+              path: program,
+              reason: `shells are nested deeper than ${MAX_SHELL_DEPTH} levels, which the matcher cannot follow`,
+            };
+          }
+          const nested = checkBash(inner, here, depth + 1);
+          if (nested.blocked) return nested;
+        }
       }
-      const hit = recursiveSearchHit(segment, ctx);
+      const hit = recursiveSearchHit(segment, here);
       if (hit) {
         return {
           blocked: true,
@@ -542,7 +611,7 @@ const checkBash = (command, ctx, depth = 0) => {
           reason: `a recursive read of ${hit} would reach protected files, or the tree is too large to scan`,
         };
       }
-      const gitHit = gitReaderHit(segment, ctx);
+      const gitHit = gitReaderHit(segment, here);
       if (gitHit) return { blocked: true, ...gitHit };
     }
   }
@@ -583,11 +652,16 @@ const checkFileTool = (tool, input, ctx) => {
     }
   }
   if (tool !== 'Grep' && tool !== 'Glob') return { blocked: false };
+  for (const globText of [glob, tool === 'Glob' ? pattern : undefined]) {
+    if (globText?.includes('\\'))
+      return deny(globText, `${tool} glob ${globText} has a backslash escape the matcher does not model`);
+  }
   const root = expand(path ?? '.', ctx);
   if (!isDirectory(root, ctx)) return { blocked: false };
+  const scanned = searchRoot(root, ctx);
   const restriction = tool === 'Glob' ? pattern : glob;
   try {
-    const found = findProtected(root, ctx);
+    const found = findProtected(scanned, ctx);
     if (found.length === 0) return { blocked: false };
     if (restriction === undefined) return deny(path ?? '.', `${tool} would read protected files under ${root}`);
     if (

@@ -80,7 +80,8 @@ describePosix('F1 the guard never runs git on the host', () => {
     expect(verdict).toMatchObject({ blocked: true });
     expect(verdict.blocked && verdict.reason).toMatch(/preflight/);
     expect(bash('git diff', { cwd: '/w', gitClean: true }).blocked).toBe(false);
-    expect(bash('git status', { cwd: '/w' }).blocked).toBe(false);
+    expect(bash('git status', { cwd: '/w' }).blocked).toBe(true);
+    expect(bash('git status', { cwd: '/w', gitClean: true }).blocked).toBe(false);
   });
 
   it.each([
@@ -210,7 +211,7 @@ describePosix('F2 the preflight scans reflog, every object and submodules', () =
     writeFileSync(join(dir, '.git', 'HEAD'), 'garbage\n');
     const result = scanRepo(dir);
     expect(result.clean).toBe(false);
-    expect(result.issues.join('\n')).toMatch(/could not scan|failed/);
+    expect(result.issues.join('\n')).toMatch(/could not scan|failed|not a git dir/);
   });
 
   it('fails closed when git times out', () => {

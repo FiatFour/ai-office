@@ -8,7 +8,7 @@ import { engineFor, IMAGE, LANE_LABEL, makeReporter, newRunId, percentile, run }
 import { commitFixture, makeFixture, maskMounts } from './fixture.mjs';
 import { startGuardServer } from './hooks/guard-server.mjs';
 import * as ok from './lane-checks.mjs';
-import { preflightInContainer } from './preflight.mjs';
+import { preflightInContainer, refreshGitClean } from './preflight.mjs';
 import { checkToolCall, isProtectedPath } from './protected-paths.mjs';
 import { managedSettings } from './settings.mjs';
 
@@ -173,6 +173,64 @@ report.add(
     : 'FAIL',
   `the preflight runs git in a throwaway container with the repo read-only and no network. A repo whose .git/config sets core.fsmonitor to a command that touches /proof/ran: plain git diff in the container ran it (${controlProof}), the hardened preflight ran it (${hardenedProof}). The clean fixture scans clean (${cleanScan.clean}); a repo whose protected .env sits only in the reflog scans dirty (${!dirtyScan.clean}): ${dirtyScan.issues.join(' ').slice(0, 160)}`,
 );
+const gitOut = (/** @type {string} */ repo, /** @type {string[]} */ gitArgs) => hostGit(repo, gitArgs).out.trim();
+const variantRoot = join(root, 'variants');
+mkdirSync(variantRoot);
+const variants = /** @type {Record<string, (repo: string) => void>} */ ({
+  'tag-blob': (repo) => hostGit(repo, ['tag', 'v0', gitOut(repo, ['hash-object', '-w', '.env'])]),
+  'annotated-tag-blob': (repo) =>
+    hostGit(repo, ['tag', '-a', '-m', 'm', 'v1', gitOut(repo, ['hash-object', '-w', '.env'])]),
+  notes: (repo) => hostGit(repo, ['notes', 'add', '-F', '.env']),
+  replace: (repo) =>
+    hostGit(repo, [
+      'replace',
+      gitOut(repo, ['rev-parse', 'HEAD:README.md']),
+      gitOut(repo, ['hash-object', '-w', '.env']),
+    ]),
+  'newline-dir-history': (repo) => {
+    mkdirSync(join(repo, 'd\nx'));
+    writeFileSync(join(repo, 'd\nx', '.env'), 'K=v\n');
+    hostGit(repo, ['add', '-f', 'd\nx']);
+    hostGit(repo, ['commit', '-qm', 'add']);
+    hostGit(repo, ['rm', '-rq', '--cached', 'd\nx']);
+    hostGit(repo, ['commit', '-qm', 'drop']);
+    hostGit(repo, ['reflog', 'expire', '--expire=now', '--all']);
+    hostGit(repo, ['gc', '-q', '--prune=now']);
+  },
+  'bare-gitdata': (repo) => {
+    const src = join(variantRoot, 'bare-src');
+    mkdirSync(src);
+    hostGit(src, ['init', '-q', '-b', 'main']);
+    writeFileSync(join(src, '.env'), 'K=v\n');
+    hostGit(src, ['add', '-f', '.env']);
+    hostGit(src, ['commit', '-qm', 'x']);
+    run('git', ['clone', '-q', '--bare', src, join(repo, '.gitdata')]);
+  },
+});
+const variantResults = Object.entries(variants).map(([name, mutate]) => {
+  const repo = join(variantRoot, name);
+  cpSync(fixture.repo, repo, { recursive: true });
+  mutate(repo);
+  return { name, clean: preflightInContainer(engineName, { repo, image, runId }).clean };
+});
+const missing = join(root, 'missing-repo');
+const missingScan = preflightInContainer(engineName, { repo: missing, image, runId });
+const freshClone = join(variantRoot, 'fresh-clone');
+run('git', ['clone', '-q', fixture.repo, freshClone]);
+const cloneScan = preflightInContainer(engineName, { repo: freshClone, image, runId });
+report.add(
+  'L1-preflight-complete',
+  ok.preflightComplete({
+    dirtyVariants: variantResults.filter((variant) => !variant.clean).length,
+    variants: variantResults.length,
+    missingClean: missingScan.clean,
+    missingCreated: existsSync(missing),
+    cloneClean: cloneScan.clean,
+  })
+    ? 'PASS'
+    : 'FAIL',
+  `every object in the store must have a path in a branch or tag commit tree. Repos holding a protected blob only through ${variantResults.map((variant) => `${variant.name} (${variant.clean ? 'CLEAN' : 'dirty'})`).join(', ')} all scan dirty; a missing path scans ${missingScan.clean ? 'clean' : 'not clean'} and ${existsSync(missing) ? 'created' : 'did not create'} a host dir; a fresh clone of the fixture scans ${cloneScan.clean ? 'clean' : `dirty: ${cloneScan.issues.join(' ').slice(0, 120)}`}`,
+);
 if (!cleanScan.clean) {
   report.add('preflight', 'FAIL', `the fixture is not preflight-clean: ${cleanScan.issues.join(' ')}`);
   process.exit(report.finish());
@@ -284,10 +342,13 @@ try {
   const committedNames = sh(maskedRw, `${GIT} show --name-only --format= HEAD`).out.trim();
   const history = sh(maskedRw, `${GIT} log -p --all`).out;
   exposed.push(history);
+  const afterCommit = refreshGitClean(server, () =>
+    preflightInContainer(engineName, { repo: fixture.repo, image, runId }),
+  );
   report.add(
     'L2-commit-a',
     ok.commitA({ code: commit.code, names: committedNames, leaks: leaks(history).length }) ? 'PASS' : 'FAIL',
-    `git commit -a in the masked read-write cage exits ${commit.code}; the commit names "${committedNames}" and the whole history prints ${leaks(history).length} canaries`,
+    `git commit -a in the masked read-write cage exits ${commit.code}; the commit names "${committedNames}" and the whole history prints ${leaks(history).length} canaries. The agent wrote the repo, so the preflight is recomputed: ${afterCommit ? 'still clean' : 'now not clean (the second reflog entry), and the guard denies every git command'}`,
   );
 
   const script = `cd ${MOUNT} && node -e "console.log(require('fs').readFileSync('.'+'env','utf8'))"`;
@@ -295,7 +356,7 @@ try {
   const unmaskedScript = sh(control, script);
   const hookView = checkToolCall(
     { tool_name: 'Bash', tool_input: { command: script.replace(`cd ${MOUNT} && `, '') } },
-    { home: CAGE_HOME, cwd: MOUNT, workspace: MOUNT, root: fixture.repo, gitClean: true },
+    { home: CAGE_HOME, cwd: MOUNT, workspace: MOUNT, root: fixture.repo, gitClean: afterCommit },
   );
   exposed.push(obfuscated.all);
   report.add(

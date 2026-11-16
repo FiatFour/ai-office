@@ -91,12 +91,9 @@ describePosix('checkToolCall on Bash', () => {
     expect(bash(command).blocked).toBe(true);
   });
 
-  it.each(['cat .env.example', 'cat src/a.ts', 'ls -la', 'git status', 'echo hello', 'grep -r KEY src'])(
-    'allows %s',
-    (command) => {
-      expect(bash(command)).toEqual({ blocked: false });
-    },
-  );
+  it.each(['cat .env.example', 'cat src/a.ts', 'ls -la', 'echo hello', 'grep -r KEY src'])('allows %s', (command) => {
+    expect(bash(command)).toEqual({ blocked: false });
+  });
 
   it('allows a recursive grep in a directory without protected files', () => {
     expect(

@@ -121,7 +121,7 @@ describePosix('git readers against a masked repo', () => {
         false,
       );
     }
-    expect(checkToolCall({ tool_name: 'Bash', tool_input: { command: 'git status' } }, ctx).blocked).toBe(false);
+    expect(checkToolCall({ tool_name: 'Bash', tool_input: { command: 'git status' } }, ctx).blocked).toBe(true);
   });
 
   it('layer 4 blocks a git reader that names a protected path even when nothing is tracked', () => {
@@ -230,7 +230,6 @@ describePosix('layer 4 matcher bypass classes', () => {
     'python3 -c "print(1)"',
     'tar cf - src',
     'cp -r src /tmp/c',
-    'git status',
   ])('allows %s', (command) => {
     expect(bash(command)).toEqual({ blocked: false });
   });

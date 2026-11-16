@@ -96,7 +96,12 @@ All measured. No baseline, because trunk has no cage.
 | Cage cold start to `claude --version` output, docker, 10 runs | median 311 ms, max 357 ms | median under 30 s |
 | Headless one-edit task, 3 turns | 3.08 s | none |
 
-The hook number is the HTTP round trip to the server only. It leaves out Claude Code's own hook dispatch. The cold start leaves out the first model call. CI_NUMBERS_PLACEHOLDER
+The hook number is the HTTP round trip to the server only. It leaves out Claude Code's own hook dispatch. The cold start leaves out the first model call. The model-free lanes also ran in CI on `ubuntu-latest` at head 1460dd1 (cage run 43879468500, ci run 43879468631, Docker 29.4.2, Podman 5.7.0, crun 1.21, rootless). Every lane passed on both engines, including the git readers, `git commit -a`, the read-only mask write and the mask on rootless podman. The first head with these lanes (315f479, run 43879037198) failed `L5-mask-write` on both engines, because the runner did not own the mask file and the write got `Permission denied`. The tightened lane caught it, and the mask file is now world-writable so only the read-only mount can refuse the write.
+
+| CI metric (measured) | docker | podman |
+| --- | --- | --- |
+| Hook round trip, 100 POSTs | p50 1.39 ms, p95 3.57 ms | p50 1.08 ms, p95 3.03 ms |
+| Cold start, 10 runs | median 255 ms | median 83 ms |
 
 ## What is best effort
 

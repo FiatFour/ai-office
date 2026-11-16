@@ -216,7 +216,7 @@ describePosix('B spawn audit: any attempt to start a process is observable even 
   const itPermission = permission ? it : it.skip;
   const attempts = (file: string) => (existsSync(file) ? readFileSync(file, 'utf8').trim() : '');
 
-  it('the audit preload records a swallowed spawn that the permission model denies', () => {
+  itPermission('the audit preload records a swallowed spawn that the permission model denies', () => {
     const audit = join(root, 'b-control.audit');
     const script = `
       const name = ['node:child', 'process'].join('_');

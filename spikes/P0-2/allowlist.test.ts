@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { text } from 'node:stream/consumers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isAllowed, parseAllowlist, parseConnectTarget, toSquidConf } from './proxy/allowlist.mjs';
 import { startProxy } from './proxy/node-proxy.mjs';
@@ -75,15 +76,9 @@ describe('node CONNECT proxy', () => {
   const allowlistPath = join(dir, 'allowlist.txt');
   writeFileSync(allowlistPath, 'registry.npmjs.org\n');
   const events: unknown[] = [];
-  const stub = createServer((req, res) => {
-    let body = '';
-    req.on('data', (chunk) => {
-      body += chunk;
-    });
-    req.on('end', () => {
-      events.push({ path: req.url, ...JSON.parse(body) });
-      res.writeHead(204).end();
-    });
+  const stub = createServer(async (req, res) => {
+    events.push({ path: req.url, ...JSON.parse(await text(req)) });
+    res.writeHead(204).end();
   });
   let proxy: Server;
 

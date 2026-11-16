@@ -1,4 +1,5 @@
 import { promises as dns } from 'node:dns';
+import { once } from 'node:events';
 import { connect } from 'node:net';
 import { release } from 'node:os';
 import { performance } from 'node:perf_hooks';
@@ -78,7 +79,7 @@ export async function httpsGet({ host, path, proxy }) {
     }
     const tls = tlsConnect(tlsOptions);
     raw ??= tls;
-    await new Promise((resolve, reject) => tls.once('secureConnect', resolve).once('error', reject));
+    await once(tls, 'secureConnect');
     const tlsMs = performance.now() - start;
     tls.write(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: agent-works-probe\r\nConnection: close\r\n\r\n`);
     /** @type {Promise<number>} */

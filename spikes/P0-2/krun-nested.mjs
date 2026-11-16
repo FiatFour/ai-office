@@ -71,5 +71,6 @@ if (started === 0) {
     code = docker(['exec', NAME, ...as(run.join(' '), values.rootful)]);
   }
 }
+if (started === 0) docker(['exec', NAME, 'chmod', '-R', 'a+rX', '/out']);
 docker(['rm', '-f', '-v', NAME]);
 process.exitCode = code;

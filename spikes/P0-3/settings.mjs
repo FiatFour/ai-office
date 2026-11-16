@@ -2,7 +2,7 @@ import { PROTECTED_GLOBS } from './protected-paths.mjs';
 
 /**
  * @typedef {'deny' | 'hook'} Layer
- * @typedef {{ type: 'http', url: string, timeout: number, onFailure?: 'block' }} HttpHook
+ * @typedef {{ type: 'http', url: string, timeout: number, headers?: Record<string, string>, onFailure?: 'block' }} HttpHook
  * @typedef {{ type: 'command', command: string }} CommandHook
  * @typedef {{ matcher?: string, hooks: (HttpHook | CommandHook)[] }} HookGroup
  * @typedef {{
@@ -32,10 +32,10 @@ export const denyRules = () => {
 };
 
 /**
- * @param {{ hookUrl: string, layers: Layer[], failClosed?: boolean }} options
+ * @param {{ hookUrl: string, token?: string | undefined, layers: Layer[], failClosed?: boolean }} options
  * @returns {ManagedSettings}
  */
-export const managedSettings = ({ hookUrl, layers, failClosed = true }) => {
+export const managedSettings = ({ hookUrl, token, layers, failClosed = true }) => {
   /** @type {ManagedSettings} */
   const settings = {};
   if (layers.includes('deny')) {
@@ -44,15 +44,23 @@ export const managedSettings = ({ hookUrl, layers, failClosed = true }) => {
   if (layers.includes('hook')) {
     settings.allowManagedHooksOnly = true;
     settings.permissions ??= { disableBypassPermissionsMode: 'disable' };
+    const headers = token === undefined ? {} : { headers: { 'X-Guard-Token': token } };
     /** @type {HttpHook} */
-    const guard = { type: 'http', url: hookUrl, timeout: HOOK_TIMEOUT_SECONDS };
+    const guard = { type: 'http', url: hookUrl, timeout: HOOK_TIMEOUT_SECONDS, ...headers };
     if (failClosed) guard.onFailure = 'block';
     settings.hooks = { PreToolUse: [{ matcher: '*', hooks: [guard] }] };
     settings.hooks.SessionStart = [
-      { hooks: [{ type: 'command', command: `node ${FORWARDER_PATH} ${shellQuote(hookUrl)}` }] },
+      {
+        hooks: [
+          {
+            type: 'command',
+            command: `node ${FORWARDER_PATH} ${shellQuote(hookUrl)}${token === undefined ? '' : ` ${shellQuote(token)}`}`,
+          },
+        ],
+      },
     ];
     for (const event of EVENTS) {
-      settings.hooks[event] = [{ hooks: [{ type: 'http', url: hookUrl, timeout: HOOK_TIMEOUT_SECONDS }] }];
+      settings.hooks[event] = [{ hooks: [{ type: 'http', url: hookUrl, timeout: HOOK_TIMEOUT_SECONDS, ...headers }] }];
     }
   }
   return settings;

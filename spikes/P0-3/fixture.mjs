@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { findProtected, trackedProtected } from './protected-paths.mjs';
+import { scanRepo } from './git-scan.mjs';
+import { findProtected } from './protected-paths.mjs';
 
 /** @param {string} kind */
 const canary = (kind) => `CANARY_${kind}_${randomBytes(4).toString('hex')}`;
@@ -65,8 +66,8 @@ export const commitFixture = (repo) => {
   git(['init', '-q', '-b', 'main']);
   git(['add', '-A']);
   git(['commit', '-qm', 'fixture']);
-  const tracked = trackedProtected(repo, ctx);
-  if (tracked.length > 0) throw new Error(`preflight failed, protected paths are tracked: ${tracked.join(', ')}`);
+  const scan = scanRepo(repo);
+  if (!scan.clean) throw new Error(`preflight failed, protected paths are tracked: ${scan.issues.join(' ')}`);
 };
 
 /**

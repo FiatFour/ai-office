@@ -52,6 +52,15 @@ export const runAsync = (bin, args, input, timeoutMs) =>
   });
 
 /**
+ * Filters for the lane label and one run id, so a cleanup never touches another run's cages.
+ * @param {string | undefined} runId
+ */
+export const cleanupArgs = (runId) => {
+  if (!runId) throw new Error('cleanup needs a run id');
+  return ['--filter', `label=${LANE_LABEL}`, '--filter', `label=agent-works.run=${runId}`];
+};
+
+/**
  * @param {string} container
  * @param {string[]} command
  * @param {{ user?: string, cwd?: string, input?: string, timeoutMs?: number }} options
@@ -105,14 +114,9 @@ export const engineFor = (engine) => ({
     for (const mount of mounts) args.push('-v', `${mount.src}:${mount.dst}${mount.ro ? ':ro' : ''}`);
     return run(engine, [...args, ...extra, image]);
   },
-  /** @param {string} [runId] */
+  /** @param {string} runId */
   cleanup: (runId) => {
-    const filters = [
-      '--filter',
-      `label=${LANE_LABEL}`,
-      ...(runId ? ['--filter', `label=agent-works.run=${runId}`] : []),
-    ];
-    const ids = run(engine, ['ps', '-aq', ...filters])
+    const ids = run(engine, ['ps', '-aq', ...cleanupArgs(runId)])
       .out.split('\n')
       .filter(Boolean);
     if (ids.length > 0) run(engine, ['rm', '-f', ...ids]);

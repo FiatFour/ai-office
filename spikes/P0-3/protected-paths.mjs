@@ -1,10 +1,10 @@
-import { execFileSync } from 'node:child_process';
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path/posix';
 
 /**
  * @typedef {{
- *   home: string, cwd: string, mapDir?: ((path: string) => string) | undefined, maxEntries?: number,
+ *   home: string, cwd: string, maxEntries?: number | undefined,
+ *   workspace?: string | undefined, root?: string | undefined, gitClean?: boolean | undefined,
  * }} PathContext
  * @typedef {{ blocked: false } | { blocked: true, reason: string, path: string }} Verdict
  * @typedef {{ tool_name: string, tool_input?: unknown }} ToolCall
@@ -57,8 +57,46 @@ const expand = (raw, ctx) => {
   return isAbsolute(home) ? resolve(home) : resolve(ctx.cwd, home);
 };
 
-/** @param {string} path @param {PathContext} ctx */
-const onDisk = (path, ctx) => (ctx.mapDir ? ctx.mapDir(path) : path);
+/** @param {string} path @param {string} base */
+const within = (path, base) => path === base || path.startsWith(base === '/' ? '/' : `${base}/`);
+
+export class UnreadableError extends Error {}
+
+/**
+ * Maps a cage path to the host path. With a root, only the mapped workspace exists: a path outside it, or a
+ * symlink that resolves outside it, maps to null so the guard never stats or walks the host beyond the repo.
+ * @param {string} path
+ * @param {PathContext} ctx
+ * @returns {string | null}
+ */
+const hostPath = (path, ctx) => {
+  if (ctx.root === undefined) return path;
+  const workspace = ctx.workspace ?? ctx.cwd;
+  if (!within(path, workspace)) return null;
+  const host = join(ctx.root, path.slice(workspace.length));
+  try {
+    return within(realpathSync(host), realpathSync(ctx.root)) ? host : null;
+  } catch {
+    return host;
+  }
+};
+
+/**
+ * @param {string} path
+ * @param {PathContext} ctx
+ * @returns {import('node:fs').Dirent[]}
+ */
+const readDir = (path, ctx) => {
+  const host = hostPath(path, ctx);
+  if (host === null) return [];
+  try {
+    return readdirSync(host, { withFileTypes: true });
+  } catch (error) {
+    const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+    throw new UnreadableError(`${path} is unreadable (${code})`);
+  }
+};
 
 /** @param {string} path @param {string[]} segments */
 const hasSegments = (path, segments) => `/${path}/`.includes(`/${segments}/`);
@@ -81,7 +119,7 @@ export class ScanLimitError extends Error {}
 /**
  * Walks a tree without a silent cutoff. node_modules and .git are skipped on purpose: packages ship
  * test keys that would make every recursive search look protected, and .git is covered by the git rules.
- * A tree over the entry cap throws, so every caller must fail closed.
+ * A tree over the entry cap or a directory it cannot read throws, so every caller must fail closed.
  * @param {string} dir
  * @param {PathContext} ctx
  * @param {number} [limit]
@@ -94,13 +132,7 @@ export const findProtected = (dir, ctx, limit = Number.POSITIVE_INFINITY) => {
   let seen = 0;
   while (pending.length > 0 && found.length < limit) {
     const current = /** @type {string} */ (pending.pop());
-    let entries;
-    try {
-      entries = readdirSync(onDisk(current, ctx), { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
+    for (const entry of readDir(current, ctx)) {
       seen += 1;
       if (seen > cap) throw new ScanLimitError(`${dir} is too large to scan (cap ${cap} entries)`);
       const full = join(current, entry.name);
@@ -117,47 +149,47 @@ export const findProtected = (dir, ctx, limit = Number.POSITIVE_INFINITY) => {
  */
 export const directoryHoldsProtected = (dir, ctx) => findProtected(dir, ctx, 1).length > 0;
 
-/**
- * Protected paths that git tracks in the index or holds in any reachable commit.
- * @param {string} dir
- * @param {PathContext} ctx
- * @returns {string[]}
- */
-export const trackedProtected = (dir, ctx) => {
-  /** @param {string[]} args */
-  const git = (args) =>
-    execFileSync('git', ['-c', 'safe.directory=*', '-C', onDisk(dir, ctx), ...args], {
-      encoding: 'utf8',
-      maxBuffer: 256 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-  let paths;
-  try {
-    const indexed = git(['ls-files', '-z']).split('\0');
-    const history = git(['rev-list', '--all', '--objects'])
-      .split('\n')
-      .filter((line) => line.includes(' '))
-      .map((line) => line.slice(line.indexOf(' ') + 1));
-    paths = [...indexed, ...history];
-  } catch {
-    return [];
-  }
-  const inRepo = { ...ctx, cwd: '/' };
-  return [...new Set(paths.filter((path) => path && isProtectedPath(`/${path}`, inRepo)))];
-};
-
 /** @param {string} path @param {PathContext} ctx */
 const isDirectory = (path, ctx) => {
+  const host = hostPath(path, ctx);
+  if (host === null) return false;
   try {
-    return statSync(onDisk(path, ctx)).isDirectory();
+    return statSync(host).isDirectory();
   } catch {
     return false;
   }
 };
 
+const SIMPLE_ESCAPES = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v' };
+
+/**
+ * Decodes one `$'..'` escape. `index` points after the backslash.
+ * @param {string} text
+ * @param {number} index
+ * @returns {{ text: string, length: number }}
+ */
+const decodeEscape = (text, index) => {
+  const char = text[index] ?? '';
+  /** @param {RegExp} pattern @param {number} base @param {number} skip */
+  const numeric = (pattern, base, skip) => {
+    const digits = pattern.exec(text.slice(index + skip))?.[0] ?? '';
+    if (!digits) return { text: `\\${char}`, length: 1 };
+    const code = Number.parseInt(digits, base);
+    return { text: code <= 0x10ffff ? String.fromCodePoint(code) : '', length: skip + digits.length };
+  };
+  if (char === 'x') return numeric(/^[0-9a-fA-F]{1,2}/, 16, 1);
+  if (char === 'u') return numeric(/^[0-9a-fA-F]{1,4}/, 16, 1);
+  if (char === 'U') return numeric(/^[0-9a-fA-F]{1,8}/, 16, 1);
+  if (/[0-7]/.test(char)) return numeric(/^[0-7]{1,3}/, 8, 0);
+  if (char in SIMPLE_ESCAPES)
+    return { text: SIMPLE_ESCAPES[/** @type {keyof typeof SIMPLE_ESCAPES} */ (char)], length: 1 };
+  if (char === '\\' || char === "'" || char === '"' || char === '?') return { text: char, length: 1 };
+  return { text: `\\${char}`, length: 1 };
+};
+
 /**
  * Splits a shell command into commands of words with a small, documented grammar. Quotes and
- * backslashes are removed, `$'..'` loses its `$`, `;&|()` backticks and newlines end a command,
+ * backslashes are removed, `$'..'` is decoded like bash, `;&|()` backticks and newlines end a command,
  * and whitespace, `<`, `>` and `=` end a word.
  * @param {string} command
  * @returns {string[][]}
@@ -170,6 +202,7 @@ export const parseCommands = (command) => {
   let current = '';
   /** @type {string | null} */
   let quote = null;
+  let ansi = false;
   const flush = () => {
     if (current) tokens.push(current);
     current = '';
@@ -181,7 +214,14 @@ export const parseCommands = (command) => {
   };
   for (let index = 0; index < command.length; index++) {
     const char = /** @type {string} */ (command[index]);
-    if (quote === "'") {
+    if (ansi) {
+      if (char === "'") ansi = false;
+      else if (char === '\\') {
+        const decoded = decodeEscape(command, index + 1);
+        current += decoded.text;
+        index += decoded.length;
+      } else current += char;
+    } else if (quote === "'") {
       if (char === "'") quote = null;
       else current += char;
     } else if (char === '\\') {
@@ -192,6 +232,8 @@ export const parseCommands = (command) => {
       if (char === quote) quote = null;
       else current += char;
     } else if (char === '$' && command[index + 1] === "'") {
+      ansi = true;
+      index += 1;
     } else if (char === '"' || char === "'") quote = char;
     else if (/[;&|()`\n]/.test(char)) endCommand();
     else if (/[\s<>=]/.test(char)) flush();
@@ -234,15 +276,33 @@ const nameGlob = (glob) => {
 
 const GLOB_CHARS = /[*?[{]/;
 
+/** @param {string} text */
+const splitGlobList = (text) => {
+  const patterns = [];
+  let depth = 0;
+  let current = '';
+  for (const char of text) {
+    if (char === '{') depth += 1;
+    else if (char === '}') depth = Math.max(0, depth - 1);
+    if (/\s/.test(char) || (char === ',' && depth === 0)) {
+      if (current) patterns.push(current);
+      current = '';
+    } else current += char;
+  }
+  if (current) patterns.push(current);
+  return patterns;
+};
+
 /**
- * @param {string} glob a glob whose last segment may use wildcards
+ * Grep and Glob use ripgrep-style globs, where `*` matches a leading dot and a negation can widen the search.
+ * Any pattern in the list that could match a protected file name counts, and so does any negation.
+ * @param {string} restriction
  * @param {string[]} names
  */
-const globMatchesAny = (glob, names) => {
-  const pattern = nameGlob(basename(glob));
-  const dotted = basename(glob).startsWith('.');
-  return names.some((name) => (dotted || !name.startsWith('.')) && pattern.test(name));
-};
+const toolGlobMatchesAny = (restriction, names) =>
+  splitGlobList(restriction).some(
+    (glob) => glob.startsWith('!') || names.some((name) => nameGlob(basename(glob)).test(name)),
+  );
 
 /**
  * @param {string} token
@@ -254,9 +314,10 @@ const globHitsProtected = (token, ctx) => {
   /** @type {string[]} */
   let names;
   try {
-    names = readdirSync(onDisk(parent, ctx));
-  } catch {
-    return false;
+    names = readDir(parent, ctx).map((entry) => entry.name);
+  } catch (error) {
+    if (error instanceof UnreadableError) return true;
+    throw error;
   }
   const pattern = nameGlob(basename(token));
   const dotted = basename(token).startsWith('.');
@@ -353,7 +414,7 @@ const holds = (dir, ctx) => {
   try {
     return directoryHoldsProtected(dir, ctx);
   } catch (error) {
-    if (error instanceof ScanLimitError) return true;
+    if (error instanceof ScanLimitError || error instanceof UnreadableError) return true;
     throw error;
   }
 };
@@ -397,32 +458,61 @@ const recursiveSearchHit = (tokens, ctx) => {
   return targets.find((target) => holds(target, ctx)) ?? null;
 };
 
+const GIT_PATH_OPTIONS = new Set(['-C', '--git-dir', '--work-tree']);
+const GIT_VALUE_OPTIONS = new Set([...GIT_PATH_OPTIONS, '-c', '--namespace', '--exec-path']);
+
 /**
+ * A git reader runs in the cage and prints what git holds. It is allowed only after the preflight vouched for
+ * the repo, only inside the workspace, and never over untracked or unindexed files. The guard never runs git itself.
  * @param {string[]} tokens
  * @param {PathContext} ctx
- * @returns {string | null}
+ * @returns {{ path: string, reason: string } | null}
  */
-const trackedGitHit = (tokens, ctx) => {
+const gitReaderHit = (tokens, ctx) => {
   if (basename(tokens[0] ?? '') !== 'git') return null;
-  let repo = ctx.cwd;
+  const workspace = ctx.workspace ?? ctx.cwd;
+  const outside = [];
   let index = 1;
   while (index < tokens.length && /^-/.test(/** @type {string} */ (tokens[index]))) {
-    if (tokens[index] === '-C') repo = expand(tokens[index + 1] ?? '.', ctx);
-    index += tokens[index] === '-C' || tokens[index] === '-c' ? 2 : 1;
+    const option = /** @type {string} */ (tokens[index]);
+    if (GIT_PATH_OPTIONS.has(option)) {
+      const target = expand(tokens[index + 1] ?? '.', ctx);
+      if (!within(target, workspace)) outside.push(target);
+    }
+    index += GIT_VALUE_OPTIONS.has(option) ? 2 : 1;
   }
-  if (!GIT_READERS.has(tokens[index] ?? '')) return null;
-  return trackedProtected(repo, ctx)[0] ?? null;
+  const subcommand = tokens[index] ?? '';
+  const flags = tokens.slice(index + 1).filter((token) => token.startsWith('-'));
+  const listsUntracked =
+    subcommand === 'ls-files' && flags.some((flag) => flag === '--others' || /^-[a-zA-Z]*o/.test(flag));
+  if (!GIT_READERS.has(subcommand) && !listsUntracked) return null;
+  const hit = (/** @type {string} */ path, /** @type {string} */ reason) => ({ path, reason });
+  if (outside[0]) return hit(outside[0], `git would read ${outside[0]}, which is outside the workspace ${workspace}`);
+  if (listsUntracked || flags.some((flag) => flag === '--no-index' || flag === '--untracked')) {
+    return hit(subcommand, `git ${subcommand} would read files that git does not track, which the mask may not cover`);
+  }
+  if (ctx.gitClean !== true) {
+    return hit(
+      subcommand,
+      'the repo has not passed the git preflight (no protected path in the index, any commit, the reflog, any object or a submodule), so a git reader could print one',
+    );
+  }
+  return null;
 };
 
 /** @param {string} text @param {PathContext} ctx */
 const embeddedName = (text, ctx) => text.split(/[^\w.\-/~$]+/).find((piece) => piece && isProtectedPath(piece, ctx));
 
+const SHELLS = /^(sh|bash|zsh|dash|ksh)$/;
+const MAX_SHELL_DEPTH = 4;
+
 /**
  * @param {string} command
  * @param {PathContext} ctx
+ * @param {number} [depth]
  * @returns {Verdict}
  */
-const checkBash = (command, ctx) => {
+const checkBash = (command, ctx, depth = 0) => {
   for (const text of new Set([command, withAssignments(command)])) {
     const commands = parseCommands(text);
     for (const token of commands.flat()) {
@@ -438,6 +528,12 @@ const checkBash = (command, ctx) => {
         if (hidden)
           return { blocked: true, path: hidden, reason: `the script text names the protected path ${hidden}` };
       }
+      if (SHELLS.test(basename(segment[0] ?? '')) && depth < MAX_SHELL_DEPTH) {
+        const flag = segment.findIndex((token) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(token));
+        const inner = flag > 0 ? segment[flag + 1] : undefined;
+        const nested = inner === undefined ? undefined : checkBash(inner, ctx, depth + 1);
+        if (nested?.blocked) return nested;
+      }
       const hit = recursiveSearchHit(segment, ctx);
       if (hit) {
         return {
@@ -446,14 +542,8 @@ const checkBash = (command, ctx) => {
           reason: `a recursive read of ${hit} would reach protected files, or the tree is too large to scan`,
         };
       }
-      const tracked = trackedGitHit(segment, ctx);
-      if (tracked) {
-        return {
-          blocked: true,
-          path: tracked,
-          reason: `git holds the protected path ${tracked} in a tracked file or a commit, so a git reader would print it (preflight must untrack it)`,
-        };
-      }
+      const gitHit = gitReaderHit(segment, ctx);
+      if (gitHit) return { blocked: true, ...gitHit };
     }
   }
   return { blocked: false };
@@ -501,7 +591,7 @@ const checkFileTool = (tool, input, ctx) => {
     if (found.length === 0) return { blocked: false };
     if (restriction === undefined) return deny(path ?? '.', `${tool} would read protected files under ${root}`);
     if (
-      globMatchesAny(
+      toolGlobMatchesAny(
         restriction,
         found.map((file) => basename(file)),
       )
@@ -509,8 +599,8 @@ const checkFileTool = (tool, input, ctx) => {
       return deny(restriction, `${tool} pattern ${restriction} matches a protected file under ${root}`);
     }
   } catch (error) {
-    if (!(error instanceof ScanLimitError)) throw error;
-    return deny(root, `${tool} root ${root} is too large to scan for protected files`);
+    if (!(error instanceof ScanLimitError || error instanceof UnreadableError)) throw error;
+    return deny(root, `${tool} root ${root} is too large or unreadable, so it cannot be scanned for protected files`);
   }
   return { blocked: false };
 };

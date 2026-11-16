@@ -8,11 +8,13 @@ import { checkToolCall } from '../protected-paths.mjs';
 export const LAYER = 'pretooluse-hook';
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_LOG_BYTES = 16 * 1024 * 1024;
+const MAX_DENY_LOG_BYTES = 4 * 1024 * 1024;
+export const TOKEN_HEADER = 'x-guard-token';
 
 /**
  * @typedef {{
- *   logPath: string, home: string, host?: string, port?: number, mapDir?: (path: string) => string,
- *   secret?: string, maxBodyBytes?: number, maxLogBytes?: number,
+ *   logPath: string, home: string, host?: string, port?: number, workspace?: string, root?: string,
+ *   gitClean?: boolean, secret?: string, maxBodyBytes?: number, maxLogBytes?: number, maxDenyLogBytes?: number,
  * }} GuardOptions
  */
 
@@ -54,25 +56,41 @@ export const startGuardServer = async ({
   home,
   host = '127.0.0.1',
   port = 0,
-  mapDir,
+  workspace,
+  root,
+  gitClean = false,
   secret,
   maxBodyBytes = MAX_BODY_BYTES,
   maxLogBytes = MAX_LOG_BYTES,
+  maxDenyLogBytes = MAX_DENY_LOG_BYTES,
 }) => {
   writeFileSync(logPath, '');
   let seq = 0;
-  let logged = 0;
+  const stats = { events: 0, denies: 0, dropped: 0, deniesDropped: 0 };
+  const budgets = {
+    events: { limit: maxLogBytes, used: 0 },
+    denies: { limit: maxDenyLogBytes, used: 0 },
+  };
   /** @param {Record<string, unknown>} entry */
   const log = (entry) => {
-    if (logged > maxLogBytes) return;
+    stats.events += 1;
+    const deny = entry.decision === 'deny';
+    if (deny) stats.denies += 1;
+    const budget = deny ? budgets.denies : budgets.events;
+    if (budget.used > budget.limit) {
+      stats[deny ? 'deniesDropped' : 'dropped'] += 1;
+      return;
+    }
     const line = `${JSON.stringify(entry)}\n`;
-    if (logged + line.length > maxLogBytes) {
-      appendFileSync(logPath, `${JSON.stringify({ seq: entry.seq, event: 'log-truncated', decision: 'none' })}\n`);
-      logged = maxLogBytes + 1;
+    if (budget.used + line.length > budget.limit) {
+      const marker = deny ? 'deny-log-truncated' : 'log-truncated';
+      appendFileSync(logPath, `${JSON.stringify({ seq: entry.seq, event: marker, decision: 'none' })}\n`);
+      budget.used = budget.limit + 1;
+      stats[deny ? 'deniesDropped' : 'dropped'] += 1;
       return;
     }
     appendFileSync(logPath, line);
-    logged += line.length;
+    budget.used += line.length;
   };
 
   /** @param {import('node:http').IncomingMessage} request @param {import('node:http').ServerResponse} response */
@@ -88,7 +106,7 @@ export const startGuardServer = async ({
       reply(response, 404);
       return;
     }
-    if (secret !== undefined && !sameSecret(target.searchParams.get('token'), secret)) {
+    if (secret !== undefined && !sameSecret(String(request.headers[TOKEN_HEADER] ?? ''), secret)) {
       reply(response, 401);
       return;
     }
@@ -125,7 +143,7 @@ export const startGuardServer = async ({
       try {
         verdict = checkToolCall(
           { tool_name: payload.tool_name, tool_input: payload.tool_input },
-          { home, cwd: typeof payload.cwd === 'string' ? payload.cwd : '/', mapDir },
+          { home, cwd: typeof payload.cwd === 'string' ? payload.cwd : '/', workspace, root, gitClean },
         );
       } catch (error) {
         verdict = {
@@ -164,8 +182,10 @@ export const startGuardServer = async ({
   const address = /** @type {import('node:net').AddressInfo} */ (server.address());
   return {
     url: `http://${host}:${address.port}`,
-    hookUrl: `http://${host}:${address.port}/hook${secret === undefined ? '' : `?token=${encodeURIComponent(secret)}`}`,
+    hookUrl: `http://${host}:${address.port}/hook`,
+    token: secret,
     port: address.port,
+    stats: () => ({ ...stats }),
     close: () =>
       new Promise((resolve) => {
         server.close(resolve);
@@ -182,6 +202,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       host: { type: 'string', default: '127.0.0.1' },
       port: { type: 'string', default: '0' },
       secret: { type: 'string' },
+      workspace: { type: 'string' },
+      root: { type: 'string' },
+      'git-clean': { type: 'boolean', default: false },
     },
   });
   const server = await startGuardServer({
@@ -190,6 +213,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     host: String(values.host),
     port: Number(values.port),
     ...(values.secret ? { secret: values.secret } : {}),
+    ...(values.workspace ? { workspace: values.workspace } : {}),
+    ...(values.root ? { root: values.root } : {}),
+    gitClean: values['git-clean'] === true,
   });
   console.log(server.hookUrl);
 }

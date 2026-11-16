@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,8 @@ import { parseArgs } from 'node:util';
 import { engineFor, IMAGE, LANE_LABEL, makeReporter, newRunId, percentile, run } from './cage.mjs';
 import { commitFixture, makeFixture, maskMounts } from './fixture.mjs';
 import { startGuardServer } from './hooks/guard-server.mjs';
+import * as ok from './lane-checks.mjs';
+import { preflightInContainer } from './preflight.mjs';
 import { checkToolCall, isProtectedPath } from './protected-paths.mjs';
 import { managedSettings } from './settings.mjs';
 
@@ -20,10 +22,10 @@ const POST_SCRIPT = `
 const payloads = JSON.parse(require('fs').readFileSync(0, 'utf8'));
 (async () => {
   const out = [];
-  for (const { url, body } of payloads) {
+  for (const { url, token, body } of payloads) {
     const start = process.hrtime.bigint();
     try {
-      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { 'x-guard-token': token } : {}) }, body: JSON.stringify(body) });
       out.push({ status: response.status, body: await response.text(), ms: Number(process.hrtime.bigint() - start) / 1e6 });
     } catch (error) {
       out.push({ error: String(error.cause?.code ?? error.message), ms: Number(process.hrtime.bigint() - start) / 1e6 });
@@ -66,14 +68,21 @@ const { values: args } = parseArgs({
 const engineName = /** @type {'docker' | 'podman'} */ (args.engine);
 const engine = engineFor(engineName);
 
+const runIdFile = join(String(args.out), `${engineName}-run-id.txt`);
 if (args.cleanup) {
-  console.log(`removed ${engine.cleanup()} ${engineName} container(s) labeled agent-works.p0-3=lane`);
+  const previous = existsSync(runIdFile) ? readFileSync(runIdFile, 'utf8').trim() : '';
+  console.log(
+    previous
+      ? `removed ${engine.cleanup(previous)} ${engineName} container(s) labeled agent-works.p0-3=lane and agent-works.run=${previous}`
+      : `no run id at ${runIdFile}, removed nothing`,
+  );
   process.exit(0);
 }
 
 mkdirSync(String(args.out), { recursive: true });
 const report = makeReporter(join(String(args.out), `${engineName}-cage-lanes.txt`));
 const runId = newRunId();
+writeFileSync(runIdFile, `${runId}\n`);
 const root = mkdtempSync(join(tmpdir(), 'p0-3-lanes-'));
 chmodSync(root, 0o755);
 const fixture = makeFixture(root);
@@ -98,11 +107,84 @@ if (!args.image) {
   if (build.code !== 0) process.exit(report.finish());
 }
 
+/** @param {string} repo @param {string[]} gitArgs */
+const hostGit = (repo, gitArgs) =>
+  run('git', [
+    '-c',
+    'user.name=lane',
+    '-c',
+    'user.email=lane@example.test',
+    '-c',
+    'commit.gpgsign=false',
+    '-C',
+    repo,
+    ...gitArgs,
+  ]);
+const proofDir = join(root, 'proof');
+mkdirSync(proofDir);
+chmodSync(proofDir, 0o777);
+const evilRepo = join(root, 'evil');
+const dirtyRepo = join(root, 'dirty');
+cpSync(fixture.repo, evilRepo, { recursive: true });
+cpSync(fixture.repo, dirtyRepo, { recursive: true });
+hostGit(dirtyRepo, ['add', '-f', '.env']);
+hostGit(dirtyRepo, ['commit', '-qm', 'oops']);
+hostGit(dirtyRepo, ['reset', '-q', '--hard', 'HEAD~1']);
+hostGit(evilRepo, ['config', 'core.fsmonitor', "sh -c 'touch /proof/ran'"]);
+const proof = join(proofDir, 'ran');
+const proofMount = `${proofDir}:/proof`;
+const cleanScan = preflightInContainer(engineName, { repo: fixture.repo, image, runId });
+const hardened = preflightInContainer(engineName, { repo: evilRepo, image, runId, mounts: [proofMount] });
+const hardenedProof = existsSync(proof);
+rmSync(proof, { force: true });
+run(engine.bin, [
+  'run',
+  '--rm',
+  '--network',
+  'none',
+  '--label',
+  LANE_LABEL,
+  '--label',
+  `agent-works.run=${runId}`,
+  '-v',
+  `${evilRepo}:/repo:ro`,
+  '-v',
+  proofMount,
+  '--entrypoint',
+  'git',
+  image,
+  '-c',
+  'safe.directory=*',
+  '-C',
+  '/repo',
+  'diff',
+]);
+const controlProof = existsSync(proof);
+const dirtyScan = preflightInContainer(engineName, { repo: dirtyRepo, image, runId });
+report.add(
+  'L1-preflight-contained',
+  ok.preflightContained({
+    hardenedProof,
+    controlProof,
+    cleanScan: cleanScan.clean && hardened.clean,
+    dirtyScan: dirtyScan.clean,
+  })
+    ? 'PASS'
+    : 'FAIL',
+  `the preflight runs git in a throwaway container with the repo read-only and no network. A repo whose .git/config sets core.fsmonitor to a command that touches /proof/ran: plain git diff in the container ran it (${controlProof}), the hardened preflight ran it (${hardenedProof}). The clean fixture scans clean (${cleanScan.clean}); a repo whose protected .env sits only in the reflog scans dirty (${!dirtyScan.clean}): ${dirtyScan.issues.join(' ').slice(0, 160)}`,
+);
+if (!cleanScan.clean) {
+  report.add('preflight', 'FAIL', `the fixture is not preflight-clean: ${cleanScan.issues.join(' ')}`);
+  process.exit(report.finish());
+}
+
 const server = await startGuardServer({
   secret: randomUUID(),
   logPath: join(String(args.out), `${engineName}-hook-events.jsonl`),
   home: CAGE_HOME,
-  mapDir: (path) => (path.startsWith(MOUNT) ? path.replace(MOUNT, fixture.repo) : path),
+  workspace: MOUNT,
+  root: fixture.repo,
+  gitClean: cleanScan.clean,
 });
 
 const masks = maskMounts(fixture.repo, emptyFile, MOUNT);
@@ -131,7 +213,9 @@ try {
   exposed.push(catMasked.all);
   report.add(
     'L5-mask-read',
-    catMasked.code === 0 && catMasked.out === '' && leaks(catControl.out).length === 1 ? 'PASS' : 'FAIL',
+    ok.maskRead({ maskedCode: catMasked.code, maskedOut: catMasked.out, controlLeaks: leaks(catControl.out).length })
+      ? 'PASS'
+      : 'FAIL',
     `masked cage cat .env prints ${catMasked.out.length} bytes; control cage prints the canary (${leaks(catControl.out).length} hit)`,
   );
 
@@ -140,7 +224,7 @@ try {
   exposed.push(grepMasked.all);
   report.add(
     'L5-mask-grep-r',
-    grepMasked.out.trim() === 'exit=1' && Number(grepControl.out.trim()) >= 5 ? 'PASS' : 'FAIL',
+    ok.maskGrep({ maskedOut: grepMasked.out, controlHits: Number(grepControl.out.trim()) }) ? 'PASS' : 'FAIL',
     `grep -r CANARY_ in masked cage: "${grepMasked.out.trim()}" (no hits); control cage: ${grepControl.out.trim()} hits. N-1 is closed by layer 2, not by deny rules`,
   );
 
@@ -162,9 +246,12 @@ try {
   exposed.push(readerOut);
   report.add(
     'L2-git-readers',
-    leaks(readerOut).length === 0 &&
-      readerControl.out.includes('hello') &&
-      !tracked.some((name) => isProtectedPath(`${MOUNT}/${name}`, { home: CAGE_HOME, cwd: MOUNT }))
+    ok.gitReaders({
+      leaks: leaks(readerOut).length,
+      controlOut: readerControl.out,
+      trackedProtected: tracked.filter((name) => isProtectedPath(`${MOUNT}/${name}`, { home: CAGE_HOME, cwd: MOUNT }))
+        .length,
+    })
       ? 'PASS'
       : 'FAIL',
     `${readers.length} git readers in the masked cage print ${leaks(readerOut).length} canaries; the control read of src/greet.js ${readerControl.out.includes('hello') ? 'printed its content' : 'failed'}, so git ran; ${tracked.length} tracked files, none protected (the preflight rule)`,
@@ -183,7 +270,12 @@ try {
   const write = sh(maskedRw, `echo x >> ${MOUNT}/.env`);
   report.add(
     'L5-mask-write',
-    startedRw.code === 0 && writeControl.code === 0 && write.code !== 0 && /Read-only file system/.test(write.err)
+    ok.maskWrite({
+      started: startedRw.code === 0,
+      controlCode: writeControl.code,
+      writeCode: write.code,
+      writeErr: write.err,
+    })
       ? 'PASS'
       : 'FAIL',
     `in a read-write masked cage, appending to README.md exits ${writeControl.code} (control) and appending to the masked .env exits ${write.code}: ${write.err.trim() || 'no error text'}`,
@@ -194,7 +286,7 @@ try {
   exposed.push(history);
   report.add(
     'L2-commit-a',
-    commit.code === 0 && committedNames === 'README.md' && leaks(history).length === 0 ? 'PASS' : 'FAIL',
+    ok.commitA({ code: commit.code, names: committedNames, leaks: leaks(history).length }) ? 'PASS' : 'FAIL',
     `git commit -a in the masked read-write cage exits ${commit.code}; the commit names "${committedNames}" and the whole history prints ${leaks(history).length} canaries`,
   );
 
@@ -203,12 +295,17 @@ try {
   const unmaskedScript = sh(control, script);
   const hookView = checkToolCall(
     { tool_name: 'Bash', tool_input: { command: script.replace(`cd ${MOUNT} && `, '') } },
-    { home: CAGE_HOME, cwd: MOUNT, mapDir: (path) => path.replace(MOUNT, fixture.repo) },
+    { home: CAGE_HOME, cwd: MOUNT, workspace: MOUNT, root: fixture.repo, gitClean: true },
   );
   exposed.push(obfuscated.all);
   report.add(
     'N-1-script-bypass',
-    obfuscated.code === 0 && obfuscated.all.trim() === '' && leaks(unmaskedScript.out).length === 1 && !hookView.blocked
+    ok.scriptBypass({
+      maskedCode: obfuscated.code,
+      maskedOut: obfuscated.all,
+      controlLeaks: leaks(unmaskedScript.out).length,
+      hookBlocked: hookView.blocked,
+    })
       ? 'PASS'
       : 'FAIL',
     `a script that builds the name '.'+'env' passes the hook (blocked=${hookView.blocked}) and the deny rules by design; the control cage prints the canary (${leaks(unmaskedScript.out).length} hit) and the masked cage exits ${obfuscated.code} with ${obfuscated.all.trim().length} bytes on stdout and stderr. Only layer 2 catches it`,
@@ -225,11 +322,11 @@ try {
   );
   report.add(
     'L6-no-home',
-    protectedHome.length === 0 && sweep.out.trim() === '0' ? 'PASS' : 'FAIL',
+    ok.noHome({ protectedHome: protectedHome.length, sweepHits: sweep.out }) ? 'PASS' : 'FAIL',
     `home entries [${homeNames.join(' ')}], protected names: ${protectedHome.length}; whole-filesystem sweep for the host-home canaries: ${sweep.out.trim()} hits (host home is never mounted)`,
   );
 
-  const settings = managedSettings({ hookUrl: server.hookUrl, layers: ['deny', 'hook'] });
+  const settings = managedSettings({ hookUrl: server.hookUrl, token: server.token, layers: ['deny', 'hook'] });
   const wrote = engine.exec(
     masked,
     ['sh', '-c', 'mkdir -p /etc/claude-code && cat > /etc/claude-code/managed-settings.json'],
@@ -243,12 +340,17 @@ try {
   const parsed = readBack.code === 0 ? JSON.parse(readBack.out) : {};
   report.add(
     'settings',
-    wrote.code === 0 &&
-      parsed.hooks?.PreToolUse?.[0]?.hooks?.[0]?.onFailure === 'block' &&
-      version.startsWith('2.1.325')
+    ok.settings({
+      wroteCode: wrote.code,
+      onFailure: parsed.hooks?.PreToolUse?.[0]?.hooks?.[0]?.onFailure,
+      version,
+      headerSet:
+        parsed.hooks?.PreToolUse?.[0]?.hooks?.[0]?.headers?.['X-Guard-Token'] === server.token &&
+        !JSON.stringify(parsed.hooks?.PreToolUse?.[0]?.hooks?.[0]?.url).includes(String(server.token)),
+    })
       ? 'PASS'
       : 'FAIL',
-    `managed settings installed in the cage with ${parsed.permissions?.deny?.length} deny rules and onFailure block on the PreToolUse hook; claude ${version}`,
+    `managed settings installed in the cage with ${parsed.permissions?.deny?.length} deny rules, onFailure block and the token in a header (not the URL) on the PreToolUse hook; claude ${version}`,
   );
 
   /** @param {unknown[]} bodies */
@@ -256,7 +358,7 @@ try {
     JSON.parse(
       (
         await engine.execAsync(masked, ['node', '-e', POST_SCRIPT], {
-          input: JSON.stringify(bodies.map((body) => ({ url: server.hookUrl, body }))),
+          input: JSON.stringify(bodies.map((body) => ({ url: server.hookUrl, token: server.token, body }))),
         })
       ).out || '[]',
     );
@@ -276,23 +378,28 @@ try {
     exposed.push(reply.body ?? '');
     report.add(
       `L4-hook-${attack.id}`,
-      decision === attack.expect ? 'PASS' : 'FAIL',
+      ok.hookDecision(decision, attack.expect) ? 'PASS' : 'FAIL',
       `PreToolUse ${attack.tool} ${JSON.stringify(attack.input)} -> ${decision} (expected ${attack.expect}) ${attack.note}`.trim(),
     );
   }
 
-  const anonymous = await engine.execAsync(masked, [
-    'node',
-    '-e',
-    `fetch(${JSON.stringify(`${server.url}/hook`)},{method:'POST',body:'{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}'}).then(r=>console.log(r.status))`,
-  ]);
+  const status = async (/** @type {string} */ header) =>
+    (
+      await engine.execAsync(masked, [
+        'node',
+        '-e',
+        `fetch(${JSON.stringify(`${server.url}/hook`)},{method:'POST',headers:${header},body:'{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}'}).then(r=>console.log(r.status))`,
+      ])
+    ).out.trim();
+  const anonymous = await status('{}');
+  const wrong = await status('{"x-guard-token":"nope"}');
   const loggedAnonymous = readFileSync(join(String(args.out), `${engineName}-hook-events.jsonl`), 'utf8')
     .split('\n')
     .filter(Boolean).length;
   report.add(
     'L4-hook-auth',
-    anonymous.out.trim() === '401' ? 'PASS' : 'FAIL',
-    `a POST from inside the cage without the per-run token gets ${anonymous.out.trim()}; the hook log holds ${loggedAnonymous} entries from authenticated calls only`,
+    ok.hookAuth({ anonymousStatus: anonymous, wrongStatus: wrong }) ? 'PASS' : 'FAIL',
+    `a POST from inside the cage without the per-run token header gets ${anonymous}, with a wrong one ${wrong}; the hook log holds ${loggedAnonymous} entries from authenticated calls only`,
   );
 
   const lifecycle = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop'].map((hook_event_name) => ({
@@ -311,7 +418,7 @@ try {
   const blocks = log.filter((entry) => entry.decision === 'deny' && entry.layer);
   report.add(
     'hook-events-ordered',
-    order.join(',') === 'SessionStart,PreToolUse,PostToolUse,Stop' ? 'PASS' : 'FAIL',
+    ok.eventsOrdered(order) ? 'PASS' : 'FAIL',
     `stub log order ${order.join(' > ')}; ${blocks.length} blocks logged, each with layer ${[...new Set(blocks.map((b) => b.layer))].join(',')}`,
   );
 
@@ -342,7 +449,7 @@ try {
   const leaked = leaks(exposed.join('\n'));
   report.add(
     'canary-no-leak',
-    leaked.length === 0 ? 'PASS' : 'FAIL',
+    ok.noLeak(leaked) ? 'PASS' : 'FAIL',
     `${fixture.values.length} fake canaries planted; ${leaked.length} appear in ${exposed.length} captured outputs and the hook log`,
   );
 
@@ -350,7 +457,7 @@ try {
   const after = await post([pre('Bash', { command: 'echo hi' })]);
   report.add(
     'hook-server-down',
-    after[0]?.error ? 'PASS' : 'FAIL',
+    ok.hookDown({ error: after[0]?.error, status: after[0]?.status }) ? 'PASS' : 'FAIL',
     `with the server stopped the cage gets ${after[0]?.error ?? `status ${after[0]?.status}`}. The managed settings set onFailure block, so Claude Code treats that as a block (live lane in run-agent.mjs)`,
   );
 
@@ -378,7 +485,7 @@ try {
   }
 } finally {
   await server.close();
-  const removed = engine.cleanup();
+  const removed = engine.cleanup(runId);
   console.log(`cleanup removed ${removed} container(s)`);
 }
 process.exit(report.finish());

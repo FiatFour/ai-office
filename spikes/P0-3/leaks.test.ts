@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { commitFixture, makeFixture, maskMounts } from './fixture.mjs';
+import { scanRepo } from './git-scan.mjs';
 import { startGuardServer } from './hooks/guard-server.mjs';
-import { checkToolCall, findProtected, trackedProtected } from './protected-paths.mjs';
+import { checkToolCall, findProtected } from './protected-paths.mjs';
 import { classifyResult, hookDownBlocked } from './scoring.mjs';
 
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
@@ -59,7 +60,7 @@ describePosix('git readers against a masked repo', () => {
     emptyProtected(fixture.repo);
     const output = readersOutput(fixture.repo);
     expect(fixture.values.filter((value) => output.includes(value)).length).toBeGreaterThanOrEqual(5);
-    expect(trackedProtected(fixture.repo, { home: '/h', cwd: fixture.repo }).length).toBeGreaterThanOrEqual(5);
+    expect(scanRepo(fixture.repo).protectedPaths.length).toBeGreaterThanOrEqual(5);
   });
 
   it('commitFixture keeps every protected file out of git, so no reader prints a canary', () => {
@@ -68,7 +69,7 @@ describePosix('git readers against a masked repo', () => {
     emptyProtected(fixture.repo);
     const output = readersOutput(fixture.repo);
     expect(fixture.values.filter((value) => output.includes(value))).toEqual([]);
-    expect(trackedProtected(fixture.repo, { home: '/h', cwd: fixture.repo })).toEqual([]);
+    expect(scanRepo(fixture.repo)).toMatchObject({ clean: true, protectedPaths: [] });
   });
 
   it('git commit -a with an emptied .env commits nothing about it', () => {
@@ -85,14 +86,13 @@ describePosix('git readers against a masked repo', () => {
   it('the preflight check rejects a repo where a protected path is tracked, in history too', () => {
     const fixture = makeFixture(join(root, 'preflight'));
     commitFixture(fixture.repo);
-    const ctx = { home: '/h', cwd: fixture.repo };
-    expect(trackedProtected(fixture.repo, ctx)).toEqual([]);
+    expect(scanRepo(fixture.repo).protectedPaths).toEqual([]);
     git(fixture.repo, 'add', '-f', '.env');
-    expect(trackedProtected(fixture.repo, ctx)).toEqual(['.env']);
+    expect(scanRepo(fixture.repo).protectedPaths).toEqual(['.env']);
     git(fixture.repo, '-c', 'user.name=t', '-c', 'user.email=t@t.test', 'commit', '-qm', 'oops');
     git(fixture.repo, 'rm', '--cached', '-q', '.env');
     git(fixture.repo, '-c', 'user.name=t', '-c', 'user.email=t@t.test', 'commit', '-qm', 'untrack');
-    expect(trackedProtected(fixture.repo, ctx)).toEqual(['.env']);
+    expect(scanRepo(fixture.repo).protectedPaths).toEqual(['.env']);
   });
 
   it('commitFixture refuses to finish when a protected file would be tracked', () => {
@@ -103,11 +103,9 @@ describePosix('git readers against a masked repo', () => {
     expect(() => commitFixture(fixture.repo)).toThrow(/protected/);
   });
 
-  it('layer 4 blocks git readers while a protected path is tracked and names the cause', () => {
+  it('layer 4 blocks git readers until the preflight vouches for the repo, and names the cause', () => {
     const fixture = makeFixture(join(root, 'layer4'));
-    git(fixture.repo, 'init', '-q', '-b', 'main');
-    git(fixture.repo, 'add', '-A');
-    git(fixture.repo, '-c', 'user.name=t', '-c', 'user.email=t@t.test', 'commit', '-qm', 'x');
+    commitFixture(fixture.repo);
     const ctx = { home: '/h', cwd: fixture.repo };
     for (const command of [
       'git diff',
@@ -118,7 +116,10 @@ describePosix('git readers against a masked repo', () => {
     ]) {
       const verdict = checkToolCall({ tool_name: 'Bash', tool_input: { command } }, ctx);
       expect(verdict, command).toMatchObject({ blocked: true });
-      expect(verdict.blocked && verdict.reason, command).toMatch(/tracked/);
+      expect(verdict.blocked && verdict.reason, command).toMatch(/preflight/);
+      expect(checkToolCall({ tool_name: 'Bash', tool_input: { command } }, { ...ctx, gitClean: true }).blocked).toBe(
+        false,
+      );
     }
     expect(checkToolCall({ tool_name: 'Bash', tool_input: { command: 'git status' } }, ctx).blocked).toBe(false);
   });
@@ -126,7 +127,7 @@ describePosix('git readers against a masked repo', () => {
   it('layer 4 blocks a git reader that names a protected path even when nothing is tracked', () => {
     const fixture = makeFixture(join(root, 'named'));
     commitFixture(fixture.repo);
-    const ctx = { home: '/h', cwd: fixture.repo };
+    const ctx = { home: '/h', cwd: fixture.repo, gitClean: true };
     for (const command of ['git show HEAD:.env', 'git cat-file -p HEAD:.env', 'git show :config/credentials.json']) {
       expect(checkToolCall({ tool_name: 'Bash', tool_input: { command } }, ctx).blocked, command).toBe(true);
     }
@@ -277,6 +278,7 @@ describePosix('guard server hardening', () => {
       logPath: logPath(),
       home: dir,
       secret: 's3cret',
+      gitClean: true,
       maxBodyBytes: 4096,
       maxLogBytes: 20_000,
     });
@@ -295,8 +297,12 @@ describePosix('guard server hardening', () => {
       socket.write(payload);
       setTimeout(() => socket.destroy(), 500);
     });
-  const post = (body: unknown, url = server.hookUrl) =>
-    fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const post = (body: unknown, token: string | undefined = server.token) =>
+    fetch(server.hookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(token ? { 'x-guard-token': token } : {}) },
+      body: JSON.stringify(body),
+    });
   const pre = (tool_name: unknown, tool_input: unknown) => ({
     hook_event_name: 'PreToolUse',
     session_id: 's',
@@ -344,20 +350,25 @@ describePosix('guard server hardening', () => {
 
   it('refuses a caller without the per-run secret and logs nothing for it', async () => {
     const before = statSync(logPath()).size;
-    const none = await post(pre('Bash', { command: 'echo hi' }), `${server.url}/hook`);
-    const wrong = await post(pre('Bash', { command: 'echo hi' }), `${server.url}/hook?token=nope`);
+    const none = await post(pre('Bash', { command: 'echo hi' }), '');
+    const wrong = await post(pre('Bash', { command: 'echo hi' }), 'nope');
     expect([none.status, wrong.status]).toEqual([401, 401]);
     expect(statSync(logPath()).size).toBe(before);
-    expect(new URL(server.hookUrl).searchParams.get('token')).toBe('s3cret');
   });
 
-  it('stops growing the log at the cap and still enforces', async () => {
+  it('stops growing the event log at the cap and still enforces', async () => {
+    const eventBytes = () =>
+      readFileSync(logPath(), 'utf8')
+        .split('\n')
+        .filter((line) => line && !line.includes('"decision":"deny"'))
+        .join('\n').length;
     for (let i = 0; i < 300; i++) await post(pre('Bash', { command: `echo ${i}` }));
-    const size = statSync(logPath()).size;
+    const size = eventBytes();
     expect(size).toBeLessThan(20_000 + 600);
     expect(readFileSync(logPath(), 'utf8')).toContain('log-truncated');
+    expect(await decision(await post(pre('Bash', { command: 'echo more' })))).toBe('allow');
+    expect(eventBytes()).toBe(size);
     expect(await decision(await post(pre('Bash', { command: 'cat .env' })))).toBe('deny');
-    expect(statSync(logPath()).size).toBe(size);
   });
 });
 

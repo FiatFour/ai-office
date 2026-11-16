@@ -1,5 +1,6 @@
 import { promises as dns } from 'node:dns';
 import { connect } from 'node:net';
+import { release } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { connect as tlsConnect } from 'node:tls';
 import { fileURLToPath } from 'node:url';
@@ -146,5 +147,7 @@ const COMMANDS = {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [command = '', ...args] = process.argv.slice(2);
   if (!(command in COMMANDS)) throw new Error(`usage: probe.mjs ${Object.keys(COMMANDS).join('|')} ...`);
-  console.log(JSON.stringify(await COMMANDS[/** @type {keyof typeof COMMANDS} */ (command)](args)));
+  console.log(
+    JSON.stringify({ ...(await COMMANDS[/** @type {keyof typeof COMMANDS} */ (command)](args)), kernel: release() }),
+  );
 }

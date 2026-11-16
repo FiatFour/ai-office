@@ -50,6 +50,9 @@ jobs:
           ls -l /dev/kvm || true
       - name: Run the escape attempts
         run: node spikes/P0-2/firewall.mjs --engine ${{ matrix.engine }} --perf 200 --out "$OUT" 2>&1 | tee "$OUT/${{ matrix.engine }}.txt"
+      - name: Run the escape attempts under krun in a Fedora container
+        if: matrix.engine == 'krun'
+        run: node spikes/P0-2/krun-nested.mjs --out "$OUT/nested" -- --perf 200 2>&1 | tee "$OUT/krun-nested.txt"
       - name: Clean up by label on both engines
         if: always()
         run: node spikes/P0-2/firewall.mjs --cleanup --engine docker,podman --out "$OUT" 2>&1 | tee "$OUT/${{ matrix.engine }}-cleanup.txt"

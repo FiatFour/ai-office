@@ -11,13 +11,13 @@ import { parseAllowlist, toSquidConf } from './proxy/allowlist.mjs';
 
 /**
  * @typedef {'docker' | 'podman' | 'krun'} EngineName
- * @typedef {{ bin: string, cageGlobalArgs: string[], hardenInternal: string[] }} Engine
+ * @typedef {{ bin: string, cageGlobalArgs: string[], hardenInternal: string[], rm: string[], probeBy: 'exec' | 'run' }} Engine
  * @typedef {'node' | 'squid'} ProxyName
  * @typedef {{ args: (setup: ProxySetup) => string[], reload: string[] | null, logFile: string | null }} ProxyKind
  * @typedef {{ dir: string, canaryIp: string, stubIp: string }} ProxySetup
  * @typedef {'PASS' | 'FAIL' | 'NOT-RUN'} Status
  * @typedef {{ status: Status, detail: unknown }} Outcome
- * @typedef {{ id: string, lane: number | 'perf', what: string, run: (ctx: Ctx) => Promise<Outcome> | Outcome }} Attempt
+ * @typedef {{ id: string, lane: number | 'perf' | 'host', what: string, run: (ctx: Ctx) => Promise<Outcome> | Outcome }} Attempt
  * @typedef {{
  *   engineName: EngineName, engine: Engine, proxyName: ProxyName, proxy: ProxyKind, dir: string, perfCount: number,
  *   hostPort: number, canaryIp: string, stubIp: string, stubIp6: string, proxyIp: string, gateways: string[],
@@ -56,9 +56,22 @@ const COREFILE = `${CANARY_ZONE}:53 {\n  log\n  whoami\n}\n.:53 {\n  log\n  forw
 
 /** @type {Record<EngineName, Engine>} */
 const ENGINES = {
-  docker: { bin: 'docker', cageGlobalArgs: [], hardenInternal: ['-o', 'com.docker.network.bridge.inhibit_ipv4=true'] },
-  podman: { bin: 'podman', cageGlobalArgs: [], hardenInternal: [] },
-  krun: { bin: 'podman', cageGlobalArgs: ['--runtime=krun'], hardenInternal: [] },
+  docker: {
+    bin: 'docker',
+    cageGlobalArgs: [],
+    hardenInternal: ['-o', 'com.docker.network.bridge.inhibit_ipv4=true'],
+    rm: ['rm', '-f'],
+    probeBy: 'exec',
+  },
+  podman: { bin: 'podman', cageGlobalArgs: [], hardenInternal: [], rm: ['rm', '-f', '-t', '0'], probeBy: 'exec' },
+  krun: {
+    bin: 'podman',
+    cageGlobalArgs: ['--runtime=krun'],
+    hardenInternal: [],
+    rm: ['rm', '-f', '-t', '0'],
+    // krun cannot exec into a running microVM, so each probe is a fresh one-shot cage on the same network.
+    probeBy: 'run',
+  },
 };
 
 /** @type {Record<ProxyName, ProxyKind>} */
@@ -129,16 +142,20 @@ function cleanup(engine) {
   const containers = sh(engine, ['ps', '-aq', ...filter])
     .stdout.split('\n')
     .filter(Boolean);
-  if (containers.length > 0) sh(engine, ['rm', '-f', ...containers]);
+  const removal = containers.length > 0 ? sh(engine, [...engine.rm, ...containers], { check: false }) : null;
   const networks = sh(engine, ['network', 'ls', '-q', ...filter])
     .stdout.split('\n')
     .filter(Boolean);
-  if (networks.length > 0) sh(engine, ['network', 'rm', ...networks]);
+  if (networks.length > 0) sh(engine, ['network', 'rm', ...networks], { check: false });
   const left = {
     containers: sh(engine, ['ps', '-a', ...filter, '--format', '{{.Names}}']).stdout.trim(),
     networks: sh(engine, ['network', 'ls', ...filter, '--format', '{{.Name}}']).stdout.trim(),
   };
-  return { removed: { containers: containers.length, networks: networks.length }, left };
+  return {
+    removed: { containers: containers.length, networks: networks.length },
+    ...(removal !== null && removal.code !== 0 ? { rmExit: removal.code, rmStderr: removal.stderr.trim() } : {}),
+    left,
+  };
 }
 
 /**
@@ -241,7 +258,7 @@ const ATTEMPTS = [
   },
   {
     id: 'host-gateway',
-    lane: 2,
+    lane: 'host',
     what: 'TCP to a host service through any bridge gateway fails',
     run: (c) => {
       const targets = [...new Set([...c.gateways, DOCKER0])];
@@ -514,33 +531,39 @@ function setUp(engineName, proxyName, { perfCount, plainInternal, hostPort }) {
   sh(engine, ['network', 'connect', NAMES.internal, NAMES.proxy]);
   const proxyIp = addressOf(engine, NAMES.proxy, NAMES.internal).ip;
 
-  startContainer(
-    engine,
-    NAMES.cage,
-    NAMES.internal,
-    [
-      '--label',
-      `agent-works.agent=${AGENT}`,
-      '--dns',
-      canaryIp,
-      '-e',
-      `HTTPS_PROXY=http://${AGENT}:x@${proxyIp}:3128`,
-      '-e',
-      `HTTP_PROXY=http://${AGENT}:x@${proxyIp}:3128`,
-      '-e',
-      'NO_PROXY=localhost,127.0.0.1',
-      '-v',
-      `${SPIKE_DIR}:/probe:ro`,
-      IMAGES.node,
-      'sleep',
-      'infinity',
-    ],
-    engine.cageGlobalArgs,
-  );
+  const cageArgs = [
+    '--label',
+    `agent-works.agent=${AGENT}`,
+    '--dns',
+    canaryIp,
+    '-e',
+    `HTTPS_PROXY=http://${AGENT}:x@${proxyIp}:3128`,
+    '-e',
+    `HTTP_PROXY=http://${AGENT}:x@${proxyIp}:3128`,
+    '-e',
+    'NO_PROXY=localhost,127.0.0.1',
+    '-v',
+    `${SPIKE_DIR}:/probe:ro`,
+    IMAGES.node,
+  ];
+  startContainer(engine, NAMES.cage, NAMES.internal, [...cageArgs, 'sleep', 'infinity'], engine.cageGlobalArgs);
 
+  const probeCommand = {
+    exec: () => ['exec', NAMES.cage],
+    run: () => [
+      ...engine.cageGlobalArgs,
+      'run',
+      '--rm',
+      '--label',
+      `${LABEL}=${PROJECT}`,
+      '--network',
+      NAMES.internal,
+      ...cageArgs,
+    ],
+  }[engine.probeBy];
   /** @param {string[]} args */
   const probe = (...args) => {
-    const out = sh(engine, ['exec', NAMES.cage, 'node', '/probe/probe.mjs', ...args]);
+    const out = sh(engine, [...probeCommand(), 'node', '/probe/probe.mjs', ...args]);
     return JSON.parse(out.stdout);
   };
 

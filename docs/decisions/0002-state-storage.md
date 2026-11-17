@@ -20,8 +20,8 @@ Chosen: SQLite through `node:sqlite` with four things. A state row. Append-only 
 
 - The state row is `state.json`, written to a temp file, fsynced, and renamed over the old one. It also holds the outbox, so a state and the commands it produced become visible in one rename. This is what makes the outbox transactional.
 - The event log is `events.jsonl`, append-only, one JSON line per event with a sequence number and a checksum. HQ fsyncs the line before it reduces. On start, HQ replays every event after `state.json`'s `seq` through the reducer. A torn last line is dropped.
-- Command delivery is at least once. A command carries `id = <event seq>.<index>`, and executors treat a repeat id as done. The outbox keeps `pending`, `done` and `failed` and does not hold the delivered ones past the prune.
-- Pruning drops a `check` or `review` fact for a head sha that the change has moved past, from the log's compaction and the state. The reducer's own join keeps only the latest, so the state already holds one head per change. Compaction rewrites the log to a segment and keeps the full log if the segment fails to verify.
+- Command delivery is at least once. A command carries `id = <event seq>.<index>`, and executors treat a repeat id as done. The outbox keeps `pending`, `failed`, `done` and `skipped` (no executor wired yet) and trims the closed ones to the last 200.
+- Pruning drops `check` and `review` fact groups for a head sha that a change has moved past, and never one that a change holds now. HQ learns the superseded shas by comparing the state before and after each event. The event log is not pruned, because P1-3 replays it. A late fact for a replaced sha is added back by the reducer and removed at the next head move. A head that moves back to an old sha relies on the host redelivering facts, which polls do.
 
 Moving to `node:sqlite` later is one file, because nothing outside `server/store/` reads the files. It becomes possible when the matrix drops Node 20, which is end of life, and an operator override of this ADR does not need a rewrite of HQ.
 

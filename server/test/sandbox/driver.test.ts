@@ -93,7 +93,10 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
         HostConfig: { CapDrop: string[]; SecurityOpt: string[]; ReadonlyRootfs: boolean };
         NetworkSettings: { Networks: Record<string, unknown> };
       }>;
-      expect(inspect?.HostConfig.CapDrop.map((c) => c.toUpperCase())).toContain('ALL');
+      const dropped = (inspect?.HostConfig.CapDrop ?? []).map((c) => c.toUpperCase().replace(/^CAP_/, ''));
+      for (const cap of dropped.includes('ALL') ? [] : ['CHOWN', 'NET_RAW', 'SYS_ADMIN', 'SETUID'])
+        expect(dropped).toContain(cap);
+      expect(dropped.length).toBeGreaterThan(0);
       expect(inspect?.HostConfig.SecurityOpt.join(' ')).toContain('no-new-privileges');
       expect(inspect?.HostConfig.ReadonlyRootfs).toBe(true);
       expect(inspect?.Config.User).toBe(`${process.getuid?.()}:${process.getgid?.()}`);

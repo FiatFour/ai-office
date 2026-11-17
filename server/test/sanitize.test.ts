@@ -12,7 +12,7 @@ import { FakeGitlab } from './fakes/gitlab-api.ts';
 
 const SLASH_LIKE = /^[/\u2044\u2215\u2571\u27cb\u29f8\u3033\uff0f]/u;
 const quickActionLine = (text: string): string | undefined =>
-  text.split(/\r\n|\r|\n/).find((line) =>
+  text.split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/).find((line) =>
     SLASH_LIKE.test(
       line
         .normalize('NFKC')
@@ -29,6 +29,11 @@ const PIECES = [
   '\n',
   '\r\n',
   '\r',
+  '\u2028',
+  '\u2029',
+  '\u0085',
+  '\v',
+  '\f',
   ' ',
   '\t',
   '>',
@@ -47,6 +52,10 @@ const PIECES = [
   '```',
   '````',
   '~~~',
+  '\\`',
+  '  ```',
+  '```a`b',
+  '- x\n  ```\n',
   '@',
   '@everyone',
   '@group/sub',
@@ -149,7 +158,39 @@ describe('the body sanitizer', () => {
     expect(inlineCode('a ` b')).toBe('``a ` b``');
   });
 
+  it('splits lines where a host does, on CR, LS, PS, NEL, VT and FF', () => {
+    for (const brk of ['\r', '\u2028', '\u2029', '\u0085', '\v', '\f']) {
+      expect(bodyProblem(`ok${brk}/merge`), JSON.stringify(brk)).toMatch(/slash command/);
+      expect(quoteBlock(`a${brk}/merge`), JSON.stringify(brk)).toBe('```text\n│ a\n│ /merge\n```');
+    }
+  });
+
+  it('sees through an escaped backtick, an indented fence and a backtick in a fence info string', () => {
+    for (const hidden of ['@all', '<img src=x>', '[x](https://evil.example)']) {
+      expect(bodyProblem(`see \\\`${hidden}\``), hidden).not.toBeNull();
+      expect(bodyProblem(`- x\n  \`\`\`\n${hidden}\n`), hidden).not.toBeNull();
+      expect(bodyProblem(`\`\`\`a\`b\n${hidden}\n\`\`\``), hidden).not.toBeNull();
+      expect(bodyProblem(`\`\`\`\n\`\`\`foo\n\`\`\`\n${hidden}`), hidden).not.toBeNull();
+    }
+    expect(bodyProblem('see \\\\`@all`')).toBeNull();
+    expect(bodyProblem('~~~a`b\n@all\n~~~')).toBeNull();
+    expect(bodyProblem('```\n@all\n  ```\nok')).toBeNull();
+  });
+
+  it('refuses each markdown form a host turns into a command, a mention, HTML or a link', () => {
+    for (const body of ['- [ ] /merge', '- [x] /merge', '[] /merge'])
+      expect(bodyProblem(body), body).toMatch(/slash command/);
+    for (const body of ['@Vega', '@1team', '@élodie', '@_x']) expect(bodyProblem(body), body).toMatch(/mentions/);
+    for (const body of ['<!-- x -->', '</b>', '<1>', 'a <?php ?>']) expect(bodyProblem(body), body).toMatch(/raw HTML/);
+    for (const body of ['[a]: https://evil.example', '[a][b]', '[a] (https://evil.example)'])
+      expect(bodyProblem(body), body).toMatch(/link/);
+    expect(bodyProblem('<!-- agent-works:merge-brief task=<b>@all -->')).not.toBeNull();
+    expect(bodyProblem('<!-- agent-works:merge-brief task=alpha/t1 head=abc -->')).toBeNull();
+  });
+
   it('cuts long text and says how much it cut', () => {
+    expect(bodyProblem('a'.repeat(60_000))).toBeNull();
+    expect(bodyProblem('a'.repeat(60_001))).toMatch(/longer than/);
     expect(quoteBlock('x'.repeat(5000))).toContain('(cut: 1000 more characters)');
     expect(bodyProblem(quoteBlock('x'.repeat(100_000)))).toBeNull();
   });
@@ -162,14 +203,14 @@ describe('every body HQ sends, on both hosts', () => {
     return [
       {
         name: 'github',
-        author: github({ send: gh.transport('aw-nova'), log: () => {} }),
-        reviewer: github({ send: gh.transport('vega'), log: () => {} }),
+        author: github({ repo: 'acme/app', base: 'main', send: gh.transport('aw-nova'), log: () => {} }),
+        reviewer: github({ repo: 'acme/app', base: 'main', send: gh.transport('vega'), log: () => {} }),
         sent: () => gh.calls,
       },
       {
         name: 'gitlab',
-        author: gitlab({ send: gl.transport('aw-nova'), log: () => {} }),
-        reviewer: gitlab({ send: gl.transport('vega'), log: () => {} }),
+        author: gitlab({ repo: 'acme/app', base: 'main', send: gl.transport('aw-nova'), log: () => {} }),
+        reviewer: gitlab({ repo: 'acme/app', base: 'main', send: gl.transport('vega'), log: () => {} }),
         sent: () => gl.calls,
       },
     ];

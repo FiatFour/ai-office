@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { CheckState, HostChangeState, PollEvent, Verdict, WebhookEvent } from '@agent-works/core';
 import { runBinary } from '../sandbox/engine.ts';
-import { BRANCH, bodyProblem } from './sanitize.ts';
+import { BRANCH, bodyProblem, LINE_BREAK } from './sanitize.ts';
 
 export type HostId = 'github' | 'gitlab';
 export type HostCheckState = CheckState | 'skipped';
@@ -74,6 +74,24 @@ export interface FileEdit {
   readonly content: string;
 }
 
+export interface HeadFile {
+  readonly path: string;
+  readonly content: string | null;
+}
+
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+
+export const textOf = (bytes: Buffer): string | null => {
+  if (bytes.includes(0)) return null;
+  try {
+    return UTF8.decode(bytes);
+  } catch {
+    return null;
+  }
+};
+
+export const contentText = (got: unknown): string | null => textOf(Buffer.from(str(got, 'content'), 'base64'));
+
 export interface LineComment {
   readonly path: string;
   readonly line: number;
@@ -104,7 +122,7 @@ export interface GitHost {
   snapshot(repo: string, number: number): Promise<ChangeSnapshot>;
   comments(repo: string, number: number): Promise<CommentFact[]>;
   paths(repo: string, number: number): Promise<string[]>;
-  files(repo: string, number: number, headSha: string): Promise<FileEdit[]>;
+  files(repo: string, number: number, headSha: string): Promise<HeadFile[]>;
   postReview(repo: string, number: number, review: ReviewDraft): Promise<ReviewFact>;
   findComment(repo: string, number: number, marker: string): Promise<PostedComment | null>;
   postComment(repo: string, number: number, body: string): Promise<PostedComment>;
@@ -269,10 +287,16 @@ export interface ApiCall {
   readonly ms: number;
 }
 
+export interface Scope {
+  readonly home: string;
+  readonly base: string;
+}
+
 export interface WriteRule {
   readonly method: HttpRequest['method'];
   readonly path: RegExp;
-  readonly body?: (body: Record<string, unknown>) => string | null;
+  readonly keys: readonly string[];
+  readonly body?: (body: Record<string, unknown>, scope: Scope) => string | null;
 }
 
 export class HostError extends Error {
@@ -298,7 +322,6 @@ export const orNull = async <T>(pending: Promise<T>): Promise<T | null> => {
 
 const TEXT_KEYS = ['body', 'title', 'description', 'message', 'commit_message'] as const;
 const ONE_LINE: ReadonlySet<string> = new Set(['title', 'message', 'commit_message']);
-const PROJECT_PATH = /^[A-Za-z0-9_][\w-]*(?:\.[\w-]+)*(?:\/[A-Za-z0-9_][\w-]*(?:\.[\w-]+)*)+$/;
 
 const textProblem = (o: Record<string, unknown>): string | null => {
   const texts: Array<[string, unknown]> = TEXT_KEYS.filter((key) => o[key] !== undefined).map((key) => [key, o[key]]);
@@ -308,7 +331,7 @@ const textProblem = (o: Record<string, unknown>): string | null => {
   }
   for (const [key, value] of texts) {
     if (typeof value !== 'string') return `${key} is not text`;
-    if (ONE_LINE.has(key) && /[\r\n]/.test(value)) return `${key} spans more than one line`;
+    if (ONE_LINE.has(key) && LINE_BREAK.test(value)) return `${key} spans more than one line`;
     const problem = bodyProblem(value);
     if (problem !== null) return `${key} ${problem}`;
   }
@@ -326,38 +349,37 @@ export const branchProblem = (branch: unknown): string | null =>
     ? null
     : `the branch ${JSON.stringify(branch)} is not aw/<factory>/<task>`;
 
-export const writeProblem = (rules: readonly WriteRule[], request: HttpRequest, projectIds = false): string | null => {
+export const unknownKey = (o: unknown, keys: readonly string[]): string | null => {
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) return 'an entry is not an object';
+  const extra = Object.keys(o).find((key) => !keys.includes(key));
+  return extra === undefined ? null : `the key ${JSON.stringify(extra)} is not allowed here`;
+};
+
+export const writeProblem = (rules: readonly WriteRule[], request: HttpRequest, scope: Scope): string | null => {
   const { method, path } = request;
   const { pathname, search } = new URL(path, 'https://host.invalid');
+  if (path !== '/user' && !path.startsWith(`${scope.home}/`))
+    return `it names a repository other than the configured ${scope.home}`;
   if (method === 'GET') return pathname + search === path ? null : 'the path is not in normal form';
   if (pathname !== path) return 'a write path may not hold a query, a fragment or a dot segment';
-  if (projectIds) {
-    const encoded = /^\/projects\/([^/]+)\//.exec(path)?.[1];
-    if (encoded === undefined) return 'the write names no project';
-    let project = '';
-    try {
-      project = decodeURIComponent(encoded);
-    } catch {
-      return 'the project id does not decode';
-    }
-    if (!PROJECT_PATH.test(project)) return `the project id ${JSON.stringify(project)} is not a namespace path`;
-  }
-  const rule = rules.find((r) => r.method === method && r.path.test(pathname));
+  const tail = pathname.slice(scope.home.length);
+  const rule = rules.find((r) => r.method === method && r.path.test(tail));
   if (rule === undefined) return 'it is outside the allowlist';
   const body = request.body ?? {};
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return 'the body is not an object';
-  return textProblem(body as Record<string, unknown>) ?? rule.body?.(body as Record<string, unknown>) ?? null;
+  const o = body as Record<string, unknown>;
+  return unknownKey(o, rule.keys) ?? textProblem(o) ?? rule.body?.(o, scope) ?? null;
 };
 
 export const guard = (
   host: HostId,
   rules: readonly WriteRule[],
+  scope: Scope,
   send: Transport,
   log: (call: ApiCall) => void,
-  projectIds = false,
 ): ((request: HttpRequest) => Promise<unknown>) => {
   return async (request) => {
-    const problem = writeProblem(rules, request, projectIds);
+    const problem = writeProblem(rules, request, scope);
     if (problem !== null) throw new WriteRefused(`refusing ${request.method} ${request.path} on ${host}: ${problem}`);
     const started = performance.now();
     const response = await send(request);
@@ -375,7 +397,7 @@ export const guard = (
 };
 
 const PAGE_SIZE = 100;
-const MAX_PAGES = 50;
+const MAX_ITEMS = 5_000;
 
 export const allPages = async (
   get: (path: string) => Promise<unknown>,
@@ -383,12 +405,12 @@ export const allPages = async (
   items: (body: unknown) => unknown[] = (body) => body as unknown[],
 ): Promise<unknown[]> => {
   const all: unknown[] = [];
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
+  for (let page = 1; ; page += 1) {
     const list = items(await get(`${path}${path.includes('?') ? '&' : '?'}per_page=${PAGE_SIZE}&page=${page}`));
     all.push(...list);
+    if (all.length > MAX_ITEMS) throw new Error(`${path} lists more than ${MAX_ITEMS} items`);
     if (list.length < PAGE_SIZE) return all;
   }
-  throw new Error(`${path} lists more than ${MAX_PAGES * PAGE_SIZE} items`);
 };
 
 export const once = <T>(make: () => Promise<T>): (() => Promise<T>) => {

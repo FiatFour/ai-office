@@ -13,6 +13,8 @@ const SANITIZE = 'server/test/sanitize.test.ts';
 const KILL = 'server/test/kill-push.test.ts';
 const DOCKER = 'server/test/sandbox/cage-shell.test.ts';
 const CLI = 'server/test/cli.test.ts';
+const SITE = 'server/test/site.test.ts';
+const TMP = 'server/test/tmp-cleanup.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[], survives?: boolean }>} */
 const MUTANTS = [
@@ -40,8 +42,8 @@ const MUTANTS = [
     edits: [
       [
         'server/githost/host.ts',
-        'const rule = rules.find((r) => r.method === method && r.path.test(pathname));',
-        'const rule = rules.find((r) => r.method === method && r.path.test(pathname)) ?? { method, path: /./ };',
+        'const rule = rules.find((r) => r.method === method && r.path.test(tail));',
+        'const rule = rules.find((r) => r.method === method && r.path.test(tail)) ?? { method, path: /./, keys: Object.keys(request.body ?? {}) };',
       ],
     ],
     tests: [CONTRACT],
@@ -178,7 +180,13 @@ const MUTANTS = [
   {
     name: 'allow-any-host',
     claim: 'Allow only answers a website that was blocked',
-    edits: [['server/modes/cages.ts', 'if (site === undefined || !denials.has(site))', 'if (site === undefined)']],
+    edits: [
+      [
+        'server/modes/cages.ts',
+        'if (site === undefined || denials.get(site)?.allow !== true)',
+        'if (site === undefined)',
+      ],
+    ],
     tests: [CAGES],
   },
   {
@@ -199,8 +207,8 @@ const MUTANTS = [
     edits: [
       [
         'server/githost/github.ts',
-        "  { method: 'POST', path: route('issues/\\\\d+/comments') },",
-        "  { method: 'POST', path: route('issues/\\\\d+/comments') },\n  { method: 'PUT', path: /\\/merge$/ },",
+        "  { method: 'POST', path: route('issues/\\\\d+/comments'), keys: ['body'] },",
+        "  { method: 'POST', path: route('issues/\\\\d+/comments'), keys: ['body'] },\n  { method: 'PUT', path: /\\/merge$/, keys: [] },",
       ],
       [
         'server/githost/github.ts',
@@ -308,8 +316,8 @@ const MUTANTS = [
   },
   {
     name: 'v-guard-no-%2f',
-    claim: 'the GitLab project id is decoded and each segment checked, so %2F.. is refused',
-    edits: [['server/githost/host.ts', 'if (!PROJECT_PATH.test(project)) return', 'if (false) return']],
+    claim: 'a configured GitLab project must be a namespace path, so a numeric id or a dot segment is refused',
+    edits: [['server/githost/gitlab.ts', 'if (!PROJECT_PATH.test(repo)) throw', 'if (false) throw']],
     tests: [CONTRACT],
   },
   {
@@ -467,7 +475,7 @@ const MUTANTS = [
     claim: 'Allow turns an IDN name into its ASCII form before it matches a denial (M9 replaced exact match)',
     edits: [
       [
-        'server/modes/cages.ts',
+        'server/sandbox/site.ts',
         "const host = domainToASCII((split[1] ?? '').replace(/\\.$/, ''));",
         "const host = (split[1] ?? '').toLowerCase().replace(/\\.$/, '');",
       ],
@@ -549,7 +557,7 @@ const MUTANTS = [
   {
     name: 'b1-files-raw',
     claim: 'changed file names in the brief are code spans',
-    edits: [['server/brief/merge-brief.ts', 'input.files.map((file) => inlineCode(file))', 'input.files']],
+    edits: [['server/brief/merge-brief.ts', 'const line = inlineCode(file);', 'const line = file;']],
     tests: [SANITIZE],
   },
   {
@@ -558,8 +566,8 @@ const MUTANTS = [
     edits: [
       [
         'server/githost/host.ts',
-        'return textProblem(body as Record<string, unknown>) ?? rule.body?.(body as Record<string, unknown>) ?? null;',
-        'return rule.body?.(body as Record<string, unknown>) ?? null;',
+        'return unknownKey(o, rule.keys) ?? textProblem(o) ?? rule.body?.(o, scope) ?? null;',
+        'return unknownKey(o, rule.keys) ?? rule.body?.(o, scope) ?? null;',
       ],
     ],
     tests: [CONTRACT, SANITIZE],
@@ -678,7 +686,11 @@ const MUTANTS = [
     name: 'm4-gitlab-any-case',
     claim: 'GitLab write routes match by exact case',
     edits: [
-      ['server/githost/gitlab.ts', 'new RegExp(`^${PROJECT}/${tail}$`)', "new RegExp(`^${PROJECT}/${tail}$`, 'i')"],
+      [
+        'server/githost/gitlab.ts',
+        'const route = (tail: string) => new RegExp(`^/${tail}$`);',
+        "const route = (tail: string) => new RegExp(`^/${tail}$`, 'i');",
+      ],
     ],
     tests: [CONTRACT],
   },
@@ -723,7 +735,7 @@ const MUTANTS = [
     claim: 'Allow keys a website on host and port',
     edits: [
       [
-        'server/modes/cages.ts',
+        'server/sandbox/site.ts',
         'return { site: `${host}:${port}`, host, port };',
         'return { site: `${host}:443`, host, port };',
       ],
@@ -735,7 +747,7 @@ const MUTANTS = [
     claim: 'Allow normalizes case, a trailing dot and IDN before it matches a denial',
     edits: [
       [
-        'server/modes/cages.ts',
+        'server/sandbox/site.ts',
         "const host = domainToASCII((split[1] ?? '').replace(/\\.$/, ''));",
         "const host = split[1] ?? '';",
       ],
@@ -771,6 +783,324 @@ const MUTANTS = [
     claim: 'serve --mode cages runs HQ with the cages mode',
     edits: [['server/cli.ts', '...(mode === undefined ? {} : { mode })', '']],
     tests: [CLI],
+  },
+  {
+    name: 'r2-lone-cr-kept',
+    claim: 'a lone CR is a line break, both when quoting and when checking',
+    edits: [
+      [
+        'server/githost/sanitize.ts',
+        'export const LINE_BREAK = /\\r\\n|[\\n\\r\\v\\f\\u0085\\u2028\\u2029]/;',
+        'export const LINE_BREAK = /\\r\\n|[\\n\\v\\f\\u0085\\u2028\\u2029]/;',
+      ],
+    ],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r2-lead-no-checkbox',
+    claim: 'a task-list checkbox before a slash still counts as a quick action',
+    edits: [['server/githost/sanitize.ts', '|\\\\d+[.)]|\\\\[[ xX]?\\\\])*', '|\\\\d+[.)])*']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r2-mention-ascii-lower',
+    claim: 'a mention of any letter, digit or case is refused',
+    edits: [['server/githost/sanitize.ts', '/@[\\p{L}\\p{N}_]/u.test(prose)', '/@[a-z]/.test(prose)']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r2-html-letters-only',
+    claim: 'any < outside code is refused, comments and closing tags included',
+    edits: [['server/githost/sanitize.ts', "prose.includes('<')", '/<[a-z]/.test(prose)']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r2-link-paren-only',
+    claim: 'reference links and definitions are refused, not only [x](y)',
+    edits: [['server/githost/sanitize.ts', '/\\]\\s*[([:]/.test(prose)', '/\\]\\(/.test(prose)']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r2-max-body-ge',
+    claim: 'a body of exactly 60,000 characters passes',
+    edits: [['server/githost/sanitize.ts', 'if (text.length > MAX_BODY)', 'if (text.length >= MAX_BODY)']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r2-fence-any-indent',
+    claim: 'an indented fence, which a list item can close, hides nothing from the check',
+    edits: [['server/githost/sanitize.ts', "if (open[1] !== '') return", 'if (false) return']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r2-marker-line-loose',
+    claim: 'only a marker line with plain values skips the prose check',
+    edits: [['server/githost/sanitize.ts', '(?: [a-z]+=[\\w./-]+)* -->$/', '(?: [a-z]+=\\S+)* -->$/']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r2-title-multiline-ok',
+    claim: 'a PR or MR title must be one line',
+    edits: [
+      [
+        'server/githost/host.ts',
+        "const ONE_LINE: ReadonlySet<string> = new Set(['title', 'message', 'commit_message']);",
+        "const ONE_LINE: ReadonlySet<string> = new Set(['message', 'commit_message']);",
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r2-gitlab-no-project-decode',
+    claim: 'every call, reads included, names the configured repo or project and no other',
+    edits: [['server/githost/host.ts', "if (path !== '/user' && !path.startsWith(`${scope.home}/`))", 'if (false)']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r2-gh-marker-login-substring',
+    claim: 'marker authorship compares the whole login, case-insensitively',
+    edits: [
+      [
+        'server/githost/github.ts',
+        "(c) => str(c, 'user.login').toLowerCase() === self && str(c, 'body')",
+        "(c) => str(c, 'user.login').toLowerCase().includes(self) && str(c, 'body')",
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r2-maxpages-2',
+    claim: 'lists are read up to 5,000 items, not 200',
+    edits: [['server/githost/host.ts', 'const MAX_ITEMS = 5_000;', 'const MAX_ITEMS = 200;']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r2-gitlab-always-start-branch',
+    claim: 'a GitLab push names start_branch only when it creates the branch',
+    edits: [
+      ['server/githost/gitlab.ts', '...(branchExists ? {} : { start_branch: spec.base }),', 'start_branch: spec.base,'],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r2-cage-shared-by-workers',
+    claim: 'the author and the reviewer of a task never share a cage',
+    edits: [['server/agents/cage-shell.ts', 'const key = `${worker}\\n${task}`;', 'const key = task;']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'r3-ls-not-a-break',
+    claim: 'LS and PS are line breaks',
+    edits: [['server/githost/sanitize.ts', '\\u0085\\u2028\\u2029]/;', '\\u0085]/;']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r3-escaped-backtick-opens',
+    claim: 'an escaped backtick does not open a code span',
+    edits: [['server/githost/sanitize.ts', '% 2 === 1;', '% 2 === 2;']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r3-fence-info-backtick',
+    claim: 'a backtick in a fence info string means it is not a fence',
+    edits: [['server/githost/sanitize.ts', '(`{3,}(?=[^`]*$)|~{3,})', '(`{3,}|~{3,})']],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r3-fence-close-with-info',
+    claim: 'a fence closes only on a bare fence line',
+    edits: [
+      [
+        'server/githost/sanitize.ts',
+        'const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \\t]*$/;',
+        'const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})/;',
+      ],
+    ],
+    tests: [SANITIZE],
+  },
+  {
+    name: 'r3-guard-any-key',
+    claim: 'a body key the route does not list is refused',
+    edits: [['server/githost/host.ts', '.find((key) => !keys.includes(key));', '.find(() => false);']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-gh-pr-any-base',
+    claim: 'a PR must target the configured base',
+    edits: [['server/githost/github.ts', '(b.base === scope.base ? null :', '(true ? null :']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-gl-mr-any-target',
+    claim: 'an MR must target the configured base',
+    edits: [['server/githost/gitlab.ts', '(b.target_branch === scope.base ? null :', '(true ? null :']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-gl-start-branch-any',
+    claim: 'a new GitLab branch starts only from the configured base',
+    edits: [
+      ['server/githost/gitlab.ts', 'body.start_branch !== undefined && body.start_branch !== scope.base', 'false'],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-gh-tree-entry-any-key',
+    claim: 'a tree entry may not carry a sha or any other extra key',
+    edits: [
+      [
+        'server/githost/github.ts',
+        "const extra = unknownKey(entry, ['path', 'mode', 'type', 'content']);",
+        'const extra = null;',
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-gl-action-any-key',
+    claim: 'a GitLab commit action may not set execute_filemode or any other extra key',
+    edits: [
+      [
+        'server/githost/gitlab.ts',
+        "const extra = unknownKey(action, ['action', 'file_path', 'content']);",
+        'const extra = null;',
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-gh-review-comment-any-key',
+    claim: 'a review line comment may not carry extra keys',
+    edits: [
+      [
+        'server/githost/github.ts',
+        "const extra = unknownKey(c, ['path', 'line', 'side', 'body']);",
+        'const extra = null;',
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-gl-position-any-key',
+    claim: 'a discussion position may not carry extra keys',
+    edits: [['server/githost/gitlab.ts', 'body: (b) => unknownKey(b.position, POSITION_KEYS),', 'body: () => null,']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-github-repo-unchecked',
+    claim: 'a configured GitHub repo must be <owner>/<name>',
+    edits: [['server/githost/github.ts', 'if (!REPO.test(repo)) throw', 'if (false) throw']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-site-raw-unchecked',
+    claim: 'Allow refuses multi-line, # and other non-hostname input before IDN mapping',
+    edits: [
+      [
+        'server/sandbox/site.ts',
+        "if (split === null || !RAW_NAME.test(split[1] ?? '')) return null;",
+        'if (split === null) return null;',
+      ],
+    ],
+    tests: [SITE, CAGES],
+  },
+  {
+    name: 'r3-site-label-unchecked',
+    claim: 'Allow refuses a wildcard, an empty label or a label with a leading hyphen',
+    edits: [['server/sandbox/site.ts', "!host.split('.').every((label) => LABEL.test(label))", 'false']],
+    tests: [SITE, CAGES],
+  },
+  {
+    name: 'r3-driver-allow-unvalidated',
+    claim: 'driver.allow uses the same validator as the Allow API',
+    edits: [['server/sandbox/container.ts', 'if (siteOf(rule)?.site !== rule) throw', 'if (false) throw']],
+    tests: [SITE],
+  },
+  {
+    name: 'r3-wildcard-item-allowable',
+    claim: 'the website item for a wildcard CONNECT does not offer Allow',
+    edits: [['server/modes/cages.ts', 'allow: valid !== null', 'allow: true']],
+    tests: [CAGES],
+  },
+  {
+    name: 'r3-allpages-overflow-unchecked',
+    claim: '5,001 items is an error, not a silent read',
+    edits: [['server/githost/host.ts', 'if (all.length > MAX_ITEMS) throw', 'if (false) throw']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-gitlab-paths-one-page',
+    claim: 'GitLab changed paths are read across every page of /diffs',
+    edits: [
+      [
+        'server/githost/gitlab.ts',
+        'const diffs = await allPages(get, `${project(repo)}/merge_requests/${number}/diffs`);',
+        'const diffs = (await get(`${project(repo)}/merge_requests/${number}/diffs`)) as unknown[];',
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-brief-file-list-unbounded',
+    claim: 'the brief caps its file list so a huge PR stays postable',
+    edits: [['server/brief/merge-brief.ts', 'if (used > FILE_LIST_BUDGET)', 'if (false)']],
+    tests: [BRIEF],
+  },
+  {
+    name: 'r3-brief-no-more-line',
+    claim: 'the brief says how many files it did not list',
+    edits: [
+      [
+        'server/brief/merge-brief.ts',
+        'return [...lines, `${files.length - lines.length} more files not listed`];',
+        'return lines;',
+      ],
+    ],
+    tests: [BRIEF],
+  },
+  {
+    name: 'r3-binary-read-as-text',
+    claim: 'a file with a NUL byte is reported as binary, not decoded as text',
+    edits: [['server/githost/host.ts', 'if (bytes.includes(0)) return null;', '']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r3-author-binary-pushed',
+    claim: 'an author commit with a binary file fails instead of pushing mangled text',
+    edits: [['server/agents/claude-code.ts', 'if (binary !== undefined)', 'if (false)']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'r3-review-prompt-binary-shown',
+    claim: 'the reviewer prompt says a binary file is not shown',
+    edits: [['server/agents/claude-code.ts', 'f.content === null ?', 'false ?']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'r3-config-same-login',
+    claim: 'the config refuses an author login equal to the reviewer login',
+    edits: [['server/modes/cages-config.ts', 'if (author.toLowerCase() === reviewer.toLowerCase())', 'if (false)']],
+    tests: [CLI],
+  },
+  {
+    name: 'r3-leaks-no-cleanup',
+    claim: 'the P0-3 leaks test removes every temp directory it made',
+    edits: [
+      ['spikes/P0-3/leaks.test.ts', 'for (const dir of scratchDirs.splice(0)) rmSync', 'for (const dir of []) rmSync'],
+    ],
+    tests: [TMP],
+  },
+  {
+    name: 'r3-tempdir-no-cleanup',
+    claim: 'tempDir records each directory and removes it after the file',
+    edits: [['server/test/helpers.ts', '  made.push(dir);\n', '']],
+    tests: [TMP],
+  },
+  {
+    name: 'r3-keep-tmp-ignored',
+    claim: 'AW_KEEP_TMP=1 keeps the temp directories',
+    edits: [['server/test/helpers.ts', "process.env.AW_KEEP_TMP !== '1'", 'true']],
+    tests: [TMP],
   },
 ];
 

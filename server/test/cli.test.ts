@@ -302,6 +302,15 @@ live('serve --mode cages', () => {
         config(dir, { tickets: { 'bad id': { kind: 'chore', title: 't', body: 'b' } } }),
       ]).code,
     ).toBe(2);
+    for (const [over, said] of [
+      [{ reviewer: 'Nova' }, /different logins/],
+      [{ repo: 'acme' }, /not <owner>\/<name>/],
+      [{ host: 'gitlab', repo: '7' }, /not a namespace path/],
+    ] as const) {
+      const ran = cli(dir, dir, ['serve', '--mode', 'cages', '--config', config(dir, over)]);
+      expect(ran.code, JSON.stringify(over)).toBe(2);
+      expect(ran.out + ran.err).toMatch(said);
+    }
     expect(cli(dir, dir, ['serve', '--mode', 'cages']).code).toBe(2);
     expect(cli(dir, dir, ['serve', '--mode', 'other']).code).toBe(2);
   });

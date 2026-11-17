@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { cageShells } from '../agents/cage-shell.ts';
 import { type CageShell, claudeCode, parseStream } from '../agents/claude-code.ts';
 import { codex } from '../agents/codex.ts';
 import { AgentFailed, type AgentJob, parseReview, RuntimeUnavailable } from '../agents/runtime.ts';
+import type { SandboxDriver } from '../sandbox/container.ts';
 import { TICKETS } from './fixtures/factory.ts';
 
 const fixture = (name: string) => readFileSync(join(import.meta.dirname, 'fixtures', name), 'utf8');
@@ -11,14 +13,19 @@ const ticket = TICKETS['alpha/t1'] as NonNullable<(typeof TICKETS)['alpha/t1']>;
 const signal = new AbortController().signal;
 const result = (out: string, code = 0) => ({ code, out, err: '', timedOut: false });
 
-const shell = (stream: string, calls: string[][], inputs: string[] = []): CageShell => ({
+const shell = (
+  stream: string,
+  calls: string[][],
+  inputs: string[] = [],
+  diff = '3\t0\tsrc/greet.txt\0',
+): CageShell => ({
   exec: async (argv, options) => {
     calls.push([...argv]);
     inputs.push(options?.input ?? '');
     if (argv[0] === 'claude') return result(stream);
     const sub = argv.find((a) => ['rev-parse', 'diff', 'show'].includes(a));
     if (sub === 'rev-parse') return result('base000\n');
-    if (sub === 'diff') return result('src/greet.txt\0');
+    if (sub === 'diff') return result(diff);
     if (sub === 'show') return result('hello 1\nhello 2\nhello 3\n');
     return result('', 1);
   },
@@ -97,6 +104,40 @@ describe('the Claude Code runtime', () => {
     expect(inputs[claude]).toContain('--- src/big3.txt');
   });
 
+  it('never reads a binary file back as text, on either side of a review', async () => {
+    const binary = shell(fixture('claude-stream-author.jsonl'), [], [], '3\t0\tsrc/greet.txt\0-\t-\tlogo.png\0');
+    await expect(claudeCode({ shell: () => binary }).run(authorJob)).rejects.toThrow(/binary file logo.png/);
+    const inputs: string[] = [];
+    await claudeCode({ shell: () => shell(fixture('claude-stream-review.jsonl'), [], inputs) }).run({
+      role: 'reviewer',
+      task: 'alpha/t1',
+      worker: 'vega',
+      ticket,
+      round: 1,
+      change: {
+        host: 'github',
+        kind: 'change',
+        repo: 'acme/app',
+        headRepo: 'acme/app',
+        number: 1,
+        branch: 'aw/alpha/t1',
+        author: 'aw-nova',
+        state: 'open',
+        headSha: 'abc',
+        url: 'u',
+        at: 1,
+      },
+      files: [
+        { path: 'logo.png', content: null },
+        { path: 'a.txt', content: 'text' },
+      ],
+      signal,
+    });
+    const prompt = inputs.find((i) => i.includes('logo.png')) ?? '';
+    expect(prompt).toContain('--- logo.png (binary file, content not shown)');
+    expect(prompt).toContain('--- a.txt\ntext');
+  });
+
   it('reads the last result line when a stream holds more than one', () => {
     const early = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true });
     expect(parseStream(`${early}\n${fixture('claude-stream-author.jsonl')}`).usage.outputTokens).toBe(227);
@@ -161,5 +202,28 @@ describe('the Claude Code runtime', () => {
 describe('the Codex runtime', () => {
   it('refuses to run while Codex is deferred', async () => {
     await expect(codex().run(authorJob)).rejects.toThrow(RuntimeUnavailable);
+  });
+});
+
+describe('the cage shell', () => {
+  it('gives the author and the reviewer of one task separate cages, and reuses each', async () => {
+    const started: Array<{ task: string; worker: string }> = [];
+    const ran: string[] = [];
+    const driver = {
+      startCage: async (spec: { task: string; worker: string }) => {
+        started.push(spec);
+        return { id: `cage-${started.length}` };
+      },
+      exec: async (id: string) => {
+        ran.push(id);
+        return result('');
+      },
+    } as unknown as SandboxDriver;
+    const shells = cageShells(async () => driver, '/src');
+    await shells('nova', 'alpha/t1').exec(['true']);
+    await shells('vega', 'alpha/t1').exec(['true']);
+    await shells('nova', 'alpha/t1').exec(['true']);
+    expect(started.map((s) => s.worker)).toEqual(['nova', 'vega']);
+    expect(ran).toEqual(['cage-1', 'cage-2', 'cage-1']);
   });
 });

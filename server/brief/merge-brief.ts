@@ -57,6 +57,20 @@ export interface MergeBrief {
   readonly evidence: Readonly<Record<EvidenceKind, Section>>;
 }
 
+const FILE_LIST_BUDGET = 20_000;
+
+const fileLines = (files: readonly string[]): string[] => {
+  const lines: string[] = [];
+  let used = 0;
+  for (const file of files) {
+    const line = inlineCode(file);
+    used += line.length + 3;
+    if (used > FILE_LIST_BUDGET) return [...lines, `${files.length - lines.length} more files not listed`];
+    lines.push(line);
+  }
+  return lines;
+};
+
 const collected = (lines: readonly string[]): Section => ({ state: 'collected', lines });
 const missing = (reason: string): Section => ({ state: 'not_collected', reason });
 const orMissing = (lines: readonly string[] | undefined, reason: string): Section =>
@@ -101,10 +115,7 @@ export const mergeBrief = (input: BriefInput): MergeBrief => {
     summary: collected([
       `${plainLine(ticket.title)}. ${plainLine(ticket.body.split(/(?<=\.)\s/)[0] ?? '', 500)}`.trim(),
     ]),
-    what_changed: orMissing(
-      input.files.map((file) => inlineCode(file)),
-      'the host listed no changed files',
-    ),
+    what_changed: orMissing(fileLines(input.files), 'the host listed no changed files'),
     tests: orMissing(checkLines, 'no check ran on the head commit, so no test result is known'),
     review: orMissing(reviewLines, 'no peer review was recorded'),
     risk:

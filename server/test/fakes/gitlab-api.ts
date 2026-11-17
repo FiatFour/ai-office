@@ -78,15 +78,20 @@ export class FakeGitlab {
       const branch = this.branches.get(decodeURIComponent(m[1] ?? ''));
       return branch === undefined ? fail(404, '404 Branch Not Found') : ok({ commit: { id: branch.commit } });
     }
-    m = method === 'GET' ? /^\/repository\/files\/(.+)\/raw$/.exec(rest) : null;
+    m = method === 'GET' ? /^\/repository\/files\/([^/]+)(\/raw)?$/.exec(rest) : null;
     if (m) {
       const ref = url.searchParams.get('ref') ?? 'main';
       const branch = this.branches.get(ref) ?? [...this.branches.values()].find((b) => b.commit === ref);
       const content = branch?.files.get(decodeURIComponent(m[1] ?? ''));
-      return content === undefined ? fail(404, '404 File Not Found') : ok(content);
+      if (content === undefined) return fail(404, '404 File Not Found');
+      return ok(
+        m[2] === undefined ? { encoding: 'base64', content: Buffer.from(content).toString('base64') } : content,
+      );
     }
     if (method === 'POST' && rest === '/repository/commits') {
       const name = String(input.branch);
+      if (input.start_branch !== undefined && this.branches.has(name))
+        return fail(400, `A branch called '${name}' already exists`);
       const from = this.branches.get(name) ?? this.branches.get(String(input.start_branch));
       if (from === undefined) return fail(400, 'no start branch');
       const files = new Map(from.files);
@@ -125,14 +130,14 @@ export class FakeGitlab {
       if (mr === undefined) return fail(404, '404 Not found');
       const sub = m[2] ?? '';
       if (sub === '' && method === 'GET') return ok(this.mrObject(mr));
-      if (sub === '/changes') {
+      if (sub === '/diffs' && method === 'GET') {
         const base = this.branches.get(mr.target)?.files ?? new Map();
         const head = this.branches.get(mr.source)?.files ?? new Map();
-        return ok({
-          changes: [...head.entries()]
+        return ok(
+          [...head.entries()]
             .filter(([path, content]) => base.get(path) !== content)
-            .map(([path]) => ({ new_path: path, deleted_file: false })),
-        });
+            .map(([path]) => ({ old_path: path, new_path: path, deleted_file: false })),
+        );
       }
       if (sub === '/approvals')
         return ok({

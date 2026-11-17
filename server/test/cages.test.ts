@@ -106,8 +106,8 @@ const twoAccounts = () => {
     fake,
     calls,
     hosts: {
-      host: github({ send: fake.transport('aw-nova'), log }),
-      reviewHost: github({ send: fake.transport('vega'), log }),
+      host: github({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log }),
+      reviewHost: github({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log }),
     },
   };
 };
@@ -201,15 +201,25 @@ describe.skipIf(!hasSqlite)('one ticket through the cages mode', () => {
     expect((await post(hq, '/api/actions/allow', { host: 'B\u00fccher.example' })).json).toEqual({
       allowed: 'xn--bcher-kva.example:443',
     });
+    proxy.sink({ host: '*.com', port: 443, agent: 'nova', reason: 'not-allowlisted', at: '' });
+    const wildcard = await until(hq, (s) => s.actions.some((a) => a.kind === 'website' && a.host === '*.com'));
+    expect(wildcard.actions.find((a) => a.kind === 'website' && a.host === '*.com')).toMatchObject({ allow: false });
+    expect((await post(hq, '/api/actions/allow', { host: '*.com' })).status).toBe(400);
+    expect((await post(hq, '/api/actions/allow', { host: '"*.com:443"' })).status).toBe(400);
     await until(hq, (s) => station('alpha/web')(s) === 'merge');
     expect(fake.prs).toHaveLength(1);
     expect(proxy.denies).toBeGreaterThan(0);
-    expect(hq.snapshot().actions.filter((a) => a.kind === 'website')).toEqual([]);
+    expect(
+      hq
+        .snapshot()
+        .actions.filter((a) => a.kind === 'website')
+        .map((a) => a.kind === 'website' && a.allow),
+    ).toEqual([false]);
   });
 
   it('with one account, posts the changes verdict as a comment, keeps the fix round, and keeps an approval out of the count', async () => {
     const fake = new FakeGithub();
-    const host = github({ send: fake.transport('fiatfour'), log: () => {} });
+    const host = github({ repo: 'acme/app', base: 'main', send: fake.transport('fiatfour'), log: () => {} });
     const { hq } = await boot({ host });
     await post(hq, '/api/tickets', { id: 'alpha/t2' });
     await until(hq, (s) => fake.reviews.length === 2 && station('alpha/t2')(s) === 'qc');
@@ -226,8 +236,8 @@ describe.skipIf(!hasSqlite)('one ticket through the cages mode', () => {
     const calls: ApiCall[] = [];
     const log = (c: ApiCall) => calls.push(c);
     const { hq } = await boot({
-      host: gitlab({ send: fake.transport('aw-nova'), log }),
-      reviewHost: gitlab({ send: fake.transport('vega'), log }),
+      host: gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log }),
+      reviewHost: gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log }),
     });
     await post(hq, '/api/tickets', { id: 'alpha/t1' });
     await until(hq, (s) => action('ready_to_merge')(s) !== undefined);
@@ -366,8 +376,8 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
   it('quotes hostile ticket and review text so GitLab gets no quick action, and still reaches merge-ready', async () => {
     const fake = new FakeGitlab();
     const { hq } = await boot({
-      host: gitlab({ send: fake.transport('aw-nova'), log: () => {} }),
-      reviewHost: gitlab({ send: fake.transport('vega'), log: () => {} }),
+      host: gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} }),
+      reviewHost: gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log: () => {} }),
     });
     await post(hq, '/api/tickets', { id: 'alpha/evil' });
     await until(hq, (s) => action('ready_to_merge')(s) !== undefined);
@@ -389,7 +399,7 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
 
   it('ignores a dedup marker written by another account, so HQ still posts its own review and brief', async () => {
     const { fake, hosts } = twoAccounts();
-    const mallory = github({ send: fake.transport('mallory'), log: () => {} });
+    const mallory = github({ repo: 'acme/app', base: 'main', send: fake.transport('mallory'), log: () => {} });
     const hook = { current: (async () => {}) as Hook };
     const forged = new Set<string>();
     hook.current = async (method, args) => {
@@ -463,7 +473,7 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
 
   it('gives each fix round only the reviewer comments made on the head it fixes', async () => {
     const { fake, hosts } = twoAccounts();
-    const mallory = github({ send: fake.transport('mallory'), log: () => {} });
+    const mallory = github({ repo: 'acme/app', base: 'main', send: fake.transport('mallory'), log: () => {} });
     const seen = new Set<string>();
     const hook = {
       current: (async (method) => {

@@ -1,5 +1,4 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { domainToASCII } from 'node:url';
 import {
   type AlertReason,
   type Box,
@@ -27,7 +26,7 @@ import {
 import { inlineCode, plainLine, quoteBlock, TASK_ID, unquote } from '../githost/sanitize.ts';
 import type { Executor } from '../hq.ts';
 import type { Denial } from '../sandbox/firewall.ts';
-import { parseAllowlist } from '../sandbox/proxy/allowlist.mjs';
+import { siteOf } from '../sandbox/site.ts';
 import { canonicalJson } from '../store/atomic.ts';
 import type { LoggedEvent, OutboxEntry } from '../store/store.ts';
 
@@ -49,6 +48,7 @@ export type ActionItem =
       readonly port: number;
       readonly agent: string;
       readonly count: number;
+      readonly allow: boolean;
     }
   | { readonly kind: 'alert'; readonly reason: AlertReason; readonly subject: string }
   | { readonly kind: 'job_failed'; readonly task: TaskId; readonly job: string; readonly error: string };
@@ -75,23 +75,6 @@ export type ModeFactory = (hq: HqPort) => Mode;
 export interface EgressControl {
   allow(site: string): Promise<void>;
 }
-
-export const siteOf = (
-  rawHost: string,
-  rawPort: unknown = 443,
-): { site: string; host: string; port: number } | null => {
-  const split = /^([^:]*)(?::(\d{1,5}))?$/.exec(rawHost.trim());
-  if (split === null) return null;
-  const port = split[2] === undefined ? Number(rawPort) : Number(split[2]);
-  const host = domainToASCII((split[1] ?? '').replace(/\.$/, ''));
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  try {
-    parseAllowlist(`${host}:${port}`);
-  } catch {
-    return null;
-  }
-  return { site: `${host}:${port}`, host, port };
-};
 
 export interface CagesOptions {
   readonly host: GitHost;
@@ -171,7 +154,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
     const failures = new Map<string, { count: number; error: string }>();
     const briefs = new Map<TaskId, { head: string; url: string; text: string }>();
     const usage = new Map<TaskId, (Usage | null)[]>();
-    const denials = new Map<string, { site: string; host: string; port: number; agent: string; count: number }>();
+    const denials = new Map<string, Omit<Extract<ActionItem, { kind: 'website' }>, 'kind'>>();
     const allowed = new Set<string>();
     const lastPoll = new Map<string, string>();
     let timer: NodeJS.Timeout | null = null;
@@ -537,7 +520,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         return body().then(async (raw) => {
           const { host: rawHost, port } = objectOf(raw);
           const site = typeof rawHost === 'string' ? siteOf(rawHost, port)?.site : undefined;
-          if (site === undefined || !denials.has(site))
+          if (site === undefined || denials.get(site)?.allow !== true)
             throw new InvalidEvent(`no blocked website ${JSON.stringify(rawHost)} is waiting`);
           await options.egress?.allow(site);
           allowed.add(site);
@@ -562,10 +545,19 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       view,
       route,
       noteDenial: (denial) => {
-        const key = siteOf(denial.host, denial.port);
-        if (key === null) return;
+        const valid = siteOf(denial.host, denial.port);
+        const key = valid ?? {
+          site: JSON.stringify(`${denial.host}:${denial.port}`),
+          host: denial.host,
+          port: denial.port,
+        };
         const seenBefore = denials.get(key.site);
-        denials.set(key.site, { ...key, agent: denial.agent, count: (seenBefore?.count ?? 0) + 1 });
+        denials.set(key.site, {
+          ...key,
+          agent: denial.agent,
+          count: (seenBefore?.count ?? 0) + 1,
+          allow: valid !== null,
+        });
       },
       start: () => {
         pokeAll();

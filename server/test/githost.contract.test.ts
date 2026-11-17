@@ -3,10 +3,11 @@ import { join } from 'node:path';
 import { initialState, reduce } from '@agent-works/core';
 import { describe, expect, it } from 'vitest';
 import { parseEvent } from '../events.ts';
-import { GITHUB_EVENTS, GITHUB_WRITES, github, parseGithub } from '../githost/github.ts';
-import { GITLAB_EVENTS, GITLAB_WRITES, gitlab, parseGitlab } from '../githost/gitlab.ts';
+import { GITHUB_EVENTS, GITHUB_WRITES, github, githubScope, parseGithub } from '../githost/github.ts';
+import { GITLAB_EVENTS, GITLAB_WRITES, gitlab, gitlabScope, parseGitlab } from '../githost/gitlab.ts';
 import {
   type ApiCall,
+  allPages,
   type GitHost,
   guard,
   type HostEvent,
@@ -176,6 +177,7 @@ interface Harness {
   readonly name: 'github' | 'gitlab';
   readonly author: GitHost;
   readonly reviewer: GitHost;
+  readonly as: (account: string) => GitHost;
   readonly calls: ApiCall[];
   readonly merges: () => number;
 }
@@ -188,15 +190,27 @@ const harnesses = (): Harness[] => {
   return [
     {
       name: 'github',
-      author: github({ send: gh.transport('aw-bot'), log: (c) => ghCalls.push(c) }),
-      reviewer: github({ send: gh.transport('aw-reviewer'), log: (c) => ghCalls.push(c) }),
+      author: github({ repo: 'acme/app', base: 'main', send: gh.transport('aw-bot'), log: (c) => ghCalls.push(c) }),
+      reviewer: github({
+        repo: 'acme/app',
+        base: 'main',
+        send: gh.transport('aw-reviewer'),
+        log: (c) => ghCalls.push(c),
+      }),
+      as: (account) => github({ repo: 'acme/app', base: 'main', send: gh.transport(account), log: () => {} }),
       calls: ghCalls,
       merges: () => gh.calls.filter((c) => /\/merge$/.test(c.path)).length,
     },
     {
       name: 'gitlab',
-      author: gitlab({ send: gl.transport('aw-bot'), log: (c) => glCalls.push(c) }),
-      reviewer: gitlab({ send: gl.transport('aw-reviewer'), log: (c) => glCalls.push(c) }),
+      author: gitlab({ repo: 'acme/app', base: 'main', send: gl.transport('aw-bot'), log: (c) => glCalls.push(c) }),
+      reviewer: gitlab({
+        repo: 'acme/app',
+        base: 'main',
+        send: gl.transport('aw-reviewer'),
+        log: (c) => glCalls.push(c),
+      }),
+      as: (account) => gitlab({ repo: 'acme/app', base: 'main', send: gl.transport(account), log: () => {} }),
       calls: glCalls,
       merges: () => gl.calls.filter((c) => /\/merge$/.test(c.path)).length,
     },
@@ -260,15 +274,27 @@ describe.each(['github', 'gitlab'] as const)('GitHost contract on %s', (name) =>
     const poll = toPoll(await author.snapshot(repo, pr.number));
     expect(poll).toMatchObject({ source: 'poll', number: pr.number, headSha: head, branch });
     expect(poll.reviews).toEqual([{ reviewer: 'aw-reviewer', verdict: 'approve' }]);
+    const binary = await author.pushFiles(repo, {
+      branch,
+      base: 'main',
+      files: [{ path: 'logo.png', content: '\u0089PNG\r\n\u001a\n\u0000\u0000' }],
+      message: 'm',
+    });
+    const both = await reviewer.files(repo, pr.number, binary);
+    expect(both.sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: 'logo.png', content: null },
+      { path: 'src/a.txt', content: 'a\nb\nc\n' },
+    ]);
   });
 
   it('finds a comment by its marker only when the HQ account wrote it, on any page', async () => {
-    const { author, reviewer } = setup();
+    const { author, reviewer, as } = setup();
     await author.pushFiles(repo, { branch, base: 'main', files: [{ path: 'x.md', content: 'x\n' }], message: 'm' });
     const pr = await author.openChange(repo, { branch, base: 'main', title: 't', body: 'b' });
     const marker = '<!-- agent-works:merge-brief task=alpha/t1 head=abc -->';
     expect(await author.findComment(repo, pr.number, marker)).toBeNull();
     await reviewer.postComment(repo, pr.number, `fake brief\n${marker}`);
+    await as('x-aw-bot-2').postComment(repo, pr.number, `fake brief\n${marker}`);
     for (let i = 0; i < 120; i += 1) await reviewer.postComment(repo, pr.number, `noise ${i}`);
     expect(await author.findComment(repo, pr.number, marker)).toBeNull();
     const posted = await author.postComment(repo, pr.number, `brief\n${marker}`);
@@ -276,6 +302,9 @@ describe.each(['github', 'gitlab'] as const)('GitHost contract on %s', (name) =>
     expect(
       await author.findComment(repo, pr.number, '<!-- agent-works:merge-brief task=alpha/t1 head=ab -->'),
     ).toBeNull();
+    const other = '<!-- agent-works:merge-brief task=alpha/t1 head=def -->';
+    const same = await as('AW-Bot').postComment(repo, pr.number, `brief by the same login\n${other}`);
+    expect(await author.findComment(repo, pr.number, other)).toEqual(same);
   });
 
   it('reads every page of review comments', async () => {
@@ -291,6 +320,16 @@ describe.each(['github', 'gitlab'] as const)('GitHost contract on %s', (name) =>
     await reviewer.postReview(repo, pr.number, { commitId: head, verdict: 'comment', body: 'many', comments });
     const read = await author.comments(repo, pr.number);
     expect(read.filter((c) => c.path === 'src/a.txt').map((c) => c.body)).toContain('c129');
+  });
+
+  it('lists every changed path across pages', async () => {
+    const { author } = setup();
+    const files = Array.from({ length: 230 }, (_, i) => ({ path: `src/f${i}.txt`, content: `${i}\n` }));
+    await author.pushFiles(repo, { branch, base: 'main', files, message: 'm' });
+    const pr = await author.openChange(repo, { branch, base: 'main', title: 't', body: 'b' });
+    const paths = await author.paths(repo, pr.number);
+    expect(paths).toHaveLength(230);
+    expect(paths).toContain('src/f229.txt');
   });
 
   it('pushes all files of a round as one commit on the task branch', async () => {
@@ -325,8 +364,9 @@ describe('the write guard', () => {
     sent.push(request);
     return { status: 200, body: {} };
   };
-  const gh = guard('github', GITHUB_WRITES, send, () => {});
-  const gl = guard('gitlab', GITLAB_WRITES, send, () => {}, true);
+  const gh = guard('github', GITHUB_WRITES, githubScope('a/b', 'main'), send, () => {});
+  const gl = guard('gitlab', GITLAB_WRITES, gitlabScope('a/b', 'main'), send, () => {});
+  const deep = guard('gitlab', GITLAB_WRITES, gitlabScope('group/sub/app', 'main'), send, () => {});
   type Call = readonly [HttpRequest['method'], string, unknown?];
   const refused = async (api: typeof gh, calls: readonly Call[]) => {
     for (const [method, path, body] of calls)
@@ -378,7 +418,11 @@ describe('the write guard', () => {
     ]);
     await refused(gl, [
       ['POST', '/projects/a%2Fb/repository/commits', { branch: 'main', commit_message: 'm', actions: [] }],
-      ['POST', '/projects/a%2Fb/merge_requests', { source_branch: 'refs/heads/main', title: 't', description: 'd' }],
+      [
+        'POST',
+        '/projects/a%2Fb/merge_requests',
+        { source_branch: 'refs/heads/main', target_branch: 'main', title: 't', description: 'd' },
+      ],
     ]);
     await allowed(gh, [
       ['POST', '/repos/a/b/git/refs', { ref: 'refs/heads/aw/alpha/t1', sha: 'x' }],
@@ -425,10 +469,82 @@ describe('the write guard', () => {
       ['POST', '/projects/1/merge_requests/1/notes', { body: 'x' }],
       ['POST', '/api/graphql', { query: 'x' }],
     ]);
-    await allowed(gl, [
-      ['POST', '/projects/a%2Fb/merge_requests/1/notes', { body: 'x' }],
-      ['POST', '/projects/group%2Fsub%2Fapp/merge_requests/1/approve', { sha: 'x' }],
+    await allowed(gl, [['POST', '/projects/a%2Fb/merge_requests/1/notes', { body: 'x' }]]);
+    await allowed(deep, [['POST', '/projects/group%2Fsub%2Fapp/merge_requests/1/approve', { sha: 'x' }]]);
+    await refused(deep, [['POST', '/projects/a%2Fb/merge_requests/1/approve', { sha: 'x' }]]);
+  });
+
+  it('binds every call, reads included, to the configured repository', async () => {
+    await refused(gh, [
+      ['GET', '/repos/a/c/pulls/1'],
+      ['GET', '/repos/a/bb/pulls/1'],
+      ['POST', '/repos/x/b/issues/1/comments', { body: 'x' }],
+      ['POST', '/repos/a/b2/pulls', pr],
     ]);
+    await refused(gl, [
+      ['GET', '/projects/a%2Fc/merge_requests/1'],
+      ['POST', '/projects/a%2Fbb/merge_requests/1/notes', { body: 'x' }],
+      ['POST', '/projects/7/merge_requests/1/notes', { body: 'x' }],
+    ]);
+    await allowed(gh, [
+      ['GET', '/user'],
+      ['GET', '/repos/a/b/pulls/1'],
+    ]);
+    expect(() => githubScope('a', 'main')).toThrow(/owner/);
+    expect(() => gitlabScope('7', 'main')).toThrow(/namespace path/);
+    expect(() => gitlabScope('a/../b', 'main')).toThrow(/namespace path/);
+  });
+
+  it('refuses a body key the route does not list: force, another project, file modes, author overrides', async () => {
+    const commit = {
+      branch: 'aw/alpha/t1',
+      commit_message: 'm',
+      actions: [{ action: 'create', file_path: 'a', content: 'x' }],
+    };
+    const mr = { source_branch: 'aw/alpha/t1', target_branch: 'main', title: 't', description: 'd' };
+    await refused(gl, [
+      ['POST', '/projects/a%2Fb/repository/commits', { ...commit, force: true }],
+      ['POST', '/projects/a%2Fb/repository/commits', { ...commit, start_project: 9 }],
+      ['POST', '/projects/a%2Fb/repository/commits', { ...commit, start_branch: 'release' }],
+      ['POST', '/projects/a%2Fb/repository/commits', { ...commit, author_email: 'x@y.z' }],
+      [
+        'POST',
+        '/projects/a%2Fb/repository/commits',
+        { ...commit, actions: [{ ...commit.actions[0], execute_filemode: true }] },
+      ],
+      ['POST', '/projects/a%2Fb/merge_requests', { ...mr, target_branch: 'production' }],
+      ['POST', '/projects/a%2Fb/merge_requests', { ...mr, target_project_id: 9 }],
+      ['POST', '/projects/a%2Fb/merge_requests', { ...mr, remove_source_branch: true }],
+      ['POST', '/projects/a%2Fb/merge_requests/1/notes', { body: 'x', merge_request_diff_head_sha: 'x' }],
+      [
+        'POST',
+        '/projects/a%2Fb/merge_requests/1/discussions',
+        { body: 'x', position: { position_type: 'text', x: 1 } },
+      ],
+    ]);
+    await refused(gh, [
+      ['POST', '/repos/a/b/git/commits', { message: 'm', tree: 't', parents: ['p'], author: { name: 'x' } }],
+      ['POST', '/repos/a/b/git/commits', { message: 'm', tree: 't', parents: ['p'], committer: { name: 'x' } }],
+      ['POST', '/repos/a/b/pulls', { ...pr, issue: 3 }],
+      ['POST', '/repos/a/b/pulls', { ...pr, base: 'production' }],
+      ['POST', '/repos/a/b/pulls', { ...pr, maintainer_can_modify: true }],
+      ['POST', '/repos/a/b/git/refs', { ref: 'refs/heads/aw/alpha/t1', sha: 'x', force: true }],
+      [
+        'POST',
+        '/repos/a/b/git/trees',
+        { base_tree: 't', tree: [{ path: 'a', mode: '100644', type: 'blob', content: 'x', sha: 'y' }] },
+      ],
+      [
+        'POST',
+        '/repos/a/b/pulls/1/reviews',
+        { event: 'COMMENT', body: 'ok', comments: [{ path: 'a', line: 1, body: 'b', start_line: 0 }] },
+      ],
+    ]);
+    await allowed(gl, [
+      ['POST', '/projects/a%2Fb/repository/commits', { ...commit, start_branch: 'main' }],
+      ['POST', '/projects/a%2Fb/merge_requests', mr],
+    ]);
+    await allowed(gh, [['POST', '/repos/a/b/git/commits', { message: 'm', tree: 't', parents: ['p'] }]]);
   });
 
   it('refuses a body that holds a quick action, a mention, raw HTML or a link outside code', async () => {
@@ -460,6 +576,15 @@ describe('the write guard', () => {
       ['POST', '/repos/a/b/pulls', { ...pr, title: 'a\n/merge' }],
       ['POST', '/repos/a/b/git/commits', { message: 'x\n/merge', tree: 't', parents: ['p'] }],
       ['POST', '/repos/a/b/pulls/1/reviews', { event: 'DISMISS', body: 'ok' }],
+      ['POST', '/repos/a/b/pulls', { ...pr, title: 'line one\nline two' }],
+      ['POST', '/repos/a/b/pulls', { ...pr, title: 'line one\u2028line two' }],
+    ]);
+    await refused(gl, [
+      [
+        'POST',
+        '/projects/a%2Fb/merge_requests',
+        { source_branch: 'aw/alpha/t1', target_branch: 'main', title: 'line one\nline two', description: 'd' },
+      ],
     ]);
     await allowed(gl, [
       ['POST', '/projects/a%2Fb/merge_requests/1/notes', { body: 'fine `@user` and\n```text\n│ /merge\n```' }],
@@ -469,6 +594,30 @@ describe('the write guard', () => {
         { body: 'x\n<!-- agent-works:merge-brief task=alpha/t1 head=abc -->' },
       ],
     ]);
+  });
+});
+
+describe('reading every page', () => {
+  const serve = (n: number) => {
+    const asked: string[] = [];
+    const get = async (path: string) => {
+      asked.push(path);
+      const page = Number(new URL(path, 'https://x.invalid').searchParams.get('page'));
+      return Array.from({ length: Math.max(0, Math.min(100, n - (page - 1) * 100)) }, (_, i) => i);
+    };
+    return { get, asked };
+  };
+
+  it('reads exactly 5,000 items and refuses 5,001', async () => {
+    for (const n of [0, 99, 100, 101, 250, 4_999, 5_000]) {
+      const { get } = serve(n);
+      expect(await allPages(get, '/x'), String(n)).toHaveLength(n);
+    }
+    await expect(allPages(serve(5_001).get, '/x')).rejects.toThrow(/more than 5000 items/);
+    await expect(allPages(serve(1_000_000).get, '/x')).rejects.toThrow(/more than 5000 items/);
+    const { get, asked } = serve(150);
+    await allPages(get, '/x?state=open');
+    expect(asked).toEqual(['/x?state=open&per_page=100&page=1', '/x?state=open&per_page=100&page=2']);
   });
 });
 
@@ -487,7 +636,7 @@ describe('parsing edge cases the cages mode relies on', () => {
 
   it('opens a GitHub PR ready for review, not as a draft', async () => {
     const fake = new FakeGithub();
-    const host = github({ send: fake.transport('aw-nova'), log: () => {} });
+    const host = github({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} });
     await host.pushFiles('acme/app', {
       branch: 'aw/alpha/t1',
       base: 'main',
@@ -500,7 +649,7 @@ describe('parsing edge cases the cages mode relies on', () => {
 
   it('finds the change only on the exact branch, whatever the host list returns', async () => {
     const fake = new FakeGithub();
-    const host = github({ send: fake.transport('aw-nova'), log: () => {} });
+    const host = github({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} });
     await host.pushFiles('acme/app', {
       branch: 'aw/alpha/t10',
       base: 'main',
@@ -509,6 +658,8 @@ describe('parsing edge cases the cages mode relies on', () => {
     });
     await host.openChange('acme/app', { branch: 'aw/alpha/t10', base: 'main', title: 't', body: 'b' });
     const loose = github({
+      repo: 'acme/app',
+      base: 'main',
       send: async (request) => {
         const url = new URL(request.path, 'https://x.invalid');
         if (url.pathname.endsWith('/pulls')) url.searchParams.delete('head');
@@ -522,8 +673,8 @@ describe('parsing edge cases the cages mode relies on', () => {
 
   it('approves on GitLab only when the verdict is approve', async () => {
     const fake = new FakeGitlab();
-    const author = gitlab({ send: fake.transport('aw-nova'), log: () => {} });
-    const reviewer = gitlab({ send: fake.transport('vega'), log: () => {} });
+    const author = gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} });
+    const reviewer = gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log: () => {} });
     const head = await author.pushFiles('acme/app', {
       branch: 'aw/alpha/t1',
       base: 'main',
@@ -541,7 +692,7 @@ describe('parsing edge cases the cages mode relies on', () => {
 describe('a review the host refuses on a PR the same account opened', () => {
   it('posts it as a comment that names the verdict, and reports the comment verdict the host holds', async () => {
     const fake = new FakeGithub();
-    const host = github({ send: fake.transport('fiatfour'), log: () => {} });
+    const host = github({ repo: 'acme/app', base: 'main', send: fake.transport('fiatfour'), log: () => {} });
     const head = await host.pushFiles('acme/app', {
       branch: 'aw/alpha/t1',
       base: 'main',

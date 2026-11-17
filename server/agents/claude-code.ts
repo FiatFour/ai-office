@@ -62,7 +62,9 @@ const promptFor = (job: AgentJob): string => {
     const asked = job.comments.map((c) => `- ${c.path ?? '(general)'}:${c.line ?? '-'} ${c.body}`).join('\n');
     return `${order}\n\nA peer reviewer asked for these changes (round ${job.round}):\n${asked}\n\nFix them and commit.`;
   }
-  const files = job.files.map((f) => `--- ${f.path}\n${f.content}`).join('\n');
+  const files = job.files
+    .map((f) => (f.content === null ? `--- ${f.path} (binary file, content not shown)` : `--- ${f.path}\n${f.content}`))
+    .join('\n');
   return `${order}\n\nReview change #${job.change.number} at ${job.change.headSha}. Files at the head:\n${files}\n\nEnd your answer with a \`\`\`json block: {"verdict": "approve" | "changes", "body": "...", "comments": [{"path": "...", "line": 1, "body": "..."}]}.`;
 };
 
@@ -91,15 +93,22 @@ const changedFiles = async (shell: CageShell, since: string): Promise<FileEdit[]
   const listed = await shell.exec([
     ...GIT,
     'diff',
-    '--name-only',
+    '--numstat',
     '--no-renames',
     '--diff-filter=AM',
     '-z',
     since,
     'HEAD',
   ]);
+  const entries = listed.out
+    .split('\0')
+    .filter(Boolean)
+    .map((entry) => entry.split('\t'));
+  const binary = entries.find(([added]) => added === '-');
+  if (binary !== undefined)
+    throw new AgentFailed(`claude committed the binary file ${binary[2]}; HQ pushes text files only`);
   const files: FileEdit[] = [];
-  for (const path of listed.out.split('\0').filter(Boolean)) {
+  for (const [, , path = ''] of entries) {
     const shown = await shell.exec([...GIT, 'show', `HEAD:${path}`]);
     if (shown.code === 0) files.push({ path, content: shown.out });
   }

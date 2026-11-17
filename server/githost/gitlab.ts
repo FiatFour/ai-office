@@ -6,6 +6,7 @@ import {
   type ChangeFact,
   type CheckFact,
   type CommentFact,
+  contentText,
   count,
   field,
   filePathProblem,
@@ -21,9 +22,11 @@ import {
   optLine,
   orNull,
   type ReviewFact,
+  type Scope,
   str,
   type Transport,
   time,
+  unknownKey,
   type WriteRule,
   ZERO_SHA,
 } from './host.ts';
@@ -49,16 +52,20 @@ const PIPELINE: Record<string, HostCheckState> = {
   canceled: 'failure',
 };
 
-const PROJECT = '/projects/[\\w.-]+(?:%2F[\\w.-]+)+';
-const route = (tail: string) => new RegExp(`^${PROJECT}/${tail}$`);
+const PROJECT_PATH = /^[A-Za-z0-9_][\w-]*(?:\.[\w-]+)*(?:\/[A-Za-z0-9_][\w-]*(?:\.[\w-]+)*)+$/;
+const route = (tail: string) => new RegExp(`^/${tail}$`);
 const ACTIONS: ReadonlySet<unknown> = new Set(['create', 'update']);
 
-const commitProblem = (body: Record<string, unknown>): string | null => {
+const commitProblem = (body: Record<string, unknown>, scope: Scope): string | null => {
   const problem = branchProblem(body.branch);
   if (problem !== null) return problem;
+  if (body.start_branch !== undefined && body.start_branch !== scope.base)
+    return `a new branch must start from ${scope.base}`;
   if (!Array.isArray(body.actions) || body.actions.length === 0) return 'the commit lists no file';
   for (const action of body.actions as Array<Record<string, unknown>>) {
-    if (!ACTIONS.has(action?.action) || typeof action.content !== 'string')
+    const extra = unknownKey(action, ['action', 'file_path', 'content']);
+    if (extra !== null) return extra;
+    if (!ACTIONS.has(action.action) || typeof action.content !== 'string')
       return 'a commit action is not a plain create or update';
     const bad = filePathProblem(action.file_path);
     if (bad !== null) return bad;
@@ -66,12 +73,30 @@ const commitProblem = (body: Record<string, unknown>): string | null => {
   return null;
 };
 
+const POSITION_KEYS = ['position_type', 'base_sha', 'start_sha', 'head_sha', 'new_path', 'new_line'];
+
 export const GITLAB_WRITES: readonly WriteRule[] = [
-  { method: 'POST', path: route('repository/commits'), body: commitProblem },
-  { method: 'POST', path: route('merge_requests'), body: (b) => branchProblem(b.source_branch) },
-  { method: 'POST', path: route('merge_requests/\\d+/discussions') },
-  { method: 'POST', path: route('merge_requests/\\d+/notes') },
-  { method: 'POST', path: route('merge_requests/\\d+/approve') },
+  {
+    method: 'POST',
+    path: route('repository/commits'),
+    keys: ['branch', 'start_branch', 'commit_message', 'actions'],
+    body: commitProblem,
+  },
+  {
+    method: 'POST',
+    path: route('merge_requests'),
+    keys: ['source_branch', 'target_branch', 'title', 'description'],
+    body: (b, scope) =>
+      branchProblem(b.source_branch) ?? (b.target_branch === scope.base ? null : `an MR must target ${scope.base}`),
+  },
+  {
+    method: 'POST',
+    path: route('merge_requests/\\d+/discussions'),
+    keys: ['body', 'position'],
+    body: (b) => unknownKey(b.position, POSITION_KEYS),
+  },
+  { method: 'POST', path: route('merge_requests/\\d+/notes'), keys: ['body'] },
+  { method: 'POST', path: route('merge_requests/\\d+/approve'), keys: ['sha'] },
 ];
 
 const repoOf = (b: unknown): string => str(b, 'project.path_with_namespace');
@@ -204,10 +229,17 @@ export const parseGitlab = (event: string, body: unknown): HostEvent | null => {
 export interface GitlabOptions {
   readonly send: Transport;
   readonly log: (call: ApiCall) => void;
+  readonly repo: string;
+  readonly base: string;
 }
 
-export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
-  const api = guard('gitlab', GITLAB_WRITES, send, log, true);
+export const gitlabScope = (repo: string, base: string): Scope => {
+  if (!PROJECT_PATH.test(repo)) throw new Error(`the GitLab project ${JSON.stringify(repo)} is not a namespace path`);
+  return { home: `/projects/${encodeURIComponent(repo)}`, base };
+};
+
+export const gitlab = ({ send, log, repo, base }: GitlabOptions): GitHost => {
+  const api = guard('gitlab', GITLAB_WRITES, gitlabScope(repo, base), send, log);
   const call = (method: HttpRequest['method'], path: string, body?: unknown) =>
     api(body === undefined ? { method, path } : { method, path, body });
   const get = (path: string) => call('GET', path);
@@ -229,10 +261,8 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
   };
 
   const paths = async (repo: string, number: number): Promise<string[]> => {
-    const mr = await call('GET', `${project(repo)}/merge_requests/${number}/changes`);
-    return (field(mr, 'changes') as unknown[])
-      .filter((c) => field(c, 'deleted_file') !== true)
-      .map((c) => str(c, 'new_path'));
+    const diffs = await allPages(get, `${project(repo)}/merge_requests/${number}/diffs`);
+    return diffs.filter((d) => field(d, 'deleted_file') !== true).map((d) => str(d, 'new_path'));
   };
 
   return {
@@ -309,11 +339,8 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
     async files(repo, number, headSha) {
       const files = [];
       for (const path of await paths(repo, number)) {
-        const raw = await call(
-          'GET',
-          `${project(repo)}/repository/files/${encodeURIComponent(path)}/raw?ref=${headSha}`,
-        );
-        files.push({ path, content: String(raw) });
+        const got = await get(`${project(repo)}/repository/files/${encodeURIComponent(path)}?ref=${headSha}`);
+        files.push({ path, content: contentText(got) });
       }
       return files;
     },

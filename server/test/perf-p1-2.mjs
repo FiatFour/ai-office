@@ -16,8 +16,8 @@ for (const task of ['alpha/t1', 'alpha/t2', 'alpha/t3']) {
     home: tempDir('perf-p1-2'),
     port: 0,
     mode: cagesMode({
-      host: github({ send: fake.transport('aw-nova'), log: () => {} }),
-      reviewHost: github({ send: fake.transport('vega'), log: () => {} }),
+      host: github({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} }),
+      reviewHost: github({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log: () => {} }),
       repo: 'acme/app',
       base: 'main',
       tickets: TICKETS,

@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,7 +12,20 @@ export const exited = (child: ChildProcess): Promise<void> =>
     child.exitCode !== null || child.signalCode !== null ? resolve() : child.once('exit', () => resolve()),
   );
 
-export const tempDir = (label: string): string => realpathSync(mkdtempSync(join(tmpdir(), `aw-${label}-`)));
+const made: string[] = [];
+
+if (process.env.VITEST !== undefined && process.env.AW_KEEP_TMP !== '1') {
+  const { afterAll } = await import('vitest');
+  afterAll(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  });
+}
+
+export const tempDir = (label: string): string => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `aw-${label}-`)));
+  made.push(dir);
+  return dir;
+};
 
 export const folder = (root: string, name: string): string => {
   const path = join(root, name);

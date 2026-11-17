@@ -63,7 +63,7 @@ if (args.phase === 'hq') {
     home,
     port: 0,
     mode: cagesMode({
-      host: github({ send: cliTransport('gh'), log: fileLog(join(home, 'api-calls.jsonl')) }),
+      host: github({ repo, base: 'main', send: cliTransport('gh'), log: fileLog(join(home, 'api-calls.jsonl')) }),
       repo,
       base: 'main',
       tickets: { [task]: ticket },

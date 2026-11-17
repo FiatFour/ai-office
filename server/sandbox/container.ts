@@ -18,6 +18,7 @@ import {
   writeAllowlist,
 } from './firewall.ts';
 import { parseAllowlist } from './proxy/allowlist.mjs';
+import { siteOf } from './site.ts';
 
 export interface CageView {
   readonly id: string;
@@ -221,6 +222,7 @@ export class SandboxDriver {
 
   async allow(rule: string): Promise<void> {
     parseAllowlist(rule);
+    if (siteOf(rule)?.site !== rule) throw new Error(`allowlist: not a host rule: ${JSON.stringify(rule)}`);
     const { allowlistPath } = await this.raise();
     const current = lines(readFileSync(allowlistPath, 'utf8'));
     if (!current.includes(rule)) writeAllowlist(allowlistPath, [...current, rule]);

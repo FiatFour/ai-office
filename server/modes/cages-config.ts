@@ -53,9 +53,12 @@ export const cagesFromConfig = (
   const hostId = text(c, 'host', 'config');
   if (hostId !== 'github' && hostId !== 'gitlab') throw new ConfigError('config.host must be github or gitlab');
   const send = cliTransport(hostId === 'github' ? 'gh' : 'glab', optText(c, 'hostname', 'config'));
-  const host = (hostId === 'github' ? github : gitlab)({ send, log });
+  const repo = text(c, 'repo', 'config');
+  const base = text(c, 'base', 'config');
   const author = text(c, 'author', 'config');
   const reviewer = text(c, 'reviewer', 'config');
+  if (author.toLowerCase() === reviewer.toLowerCase())
+    throw new ConfigError('config.author and config.reviewer must be different logins');
   const model = optText(c, 'model', 'config');
   const bin = optText(c, 'bin', 'config');
   const runtime = claudeCode({
@@ -68,9 +71,9 @@ export const cagesFromConfig = (
   );
   try {
     return cagesMode({
-      host,
-      repo: text(c, 'repo', 'config'),
-      base: text(c, 'base', 'config'),
+      host: (hostId === 'github' ? github : gitlab)({ send, log, repo, base }),
+      repo,
+      base,
       tickets,
       author,
       reviewer,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Ticket } from '../agents/runtime.ts';
 import { BRIEF_FIELDS, type BriefInput, EVIDENCE_KINDS, mergeBrief, renderBrief } from '../brief/merge-brief.ts';
+import { bodyProblem } from '../githost/sanitize.ts';
 
 const ticket: Ticket = {
   id: 'alpha/t1',
@@ -104,6 +105,18 @@ describe('the merge brief', () => {
       /Round 1: vega \(claude-code\) gave changes[^\n]*asked:\n```text\n│ src\/greet\.txt:1 say hi\n```/,
     );
     expect(review.state === 'collected' && review.lines.join('\n')).toContain('Cross-runtime review not collected');
+  });
+
+  it('stays postable for a PR of 3,000 files and says how many it left out', () => {
+    const files = Array.from({ length: 3_000 }, (_, i) => `src/deep/folder/${'n'.repeat(40)}/file-${i}.ts`);
+    const text = renderBrief(mergeBrief({ ...base, files }));
+    expect(bodyProblem(text)).toBeNull();
+    const listed = text.split('\n').filter((line) => line.startsWith('- `src/deep/')).length;
+    expect(listed).toBeGreaterThan(100);
+    expect(text).toContain(`- ${3_000 - listed} more files not listed`);
+    const long = renderBrief(mergeBrief({ ...base, files: files.map((f) => f.repeat(10)) }));
+    expect(bodyProblem(long)).toBeNull();
+    expect(renderBrief(mergeBrief({ ...base, files: files.slice(0, 5) }))).not.toContain('not listed');
   });
 
   it('flags a HIGH risk change that has no evidence, and only that', () => {

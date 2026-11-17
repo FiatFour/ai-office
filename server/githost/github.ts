@@ -8,6 +8,7 @@ import {
   type ChangeFact,
   type CheckFact,
   type CommentFact,
+  contentText,
   count,
   field,
   filePathProblem,
@@ -25,9 +26,11 @@ import {
   optStr,
   orNull,
   type ReviewFact,
+  type Scope,
   str,
   type Transport,
   time,
+  unknownKey,
   type WriteRule,
   ZERO_SHA,
 } from './host.ts';
@@ -73,15 +76,17 @@ const REVIEW: Record<string, Verdict | null> = {
 };
 const EVENT: Record<Verdict, string> = { approve: 'APPROVE', changes: 'REQUEST_CHANGES', comment: 'COMMENT' };
 
-const REPO = '[\\w.-]+/[\\w.-]+';
-const route = (tail: string) => new RegExp(`^/repos/${REPO}/${tail}$`);
+const REPO = /^[\w-][\w.-]*\/[\w-][\w.-]*$/;
+const route = (tail: string) => new RegExp(`^/${tail}$`);
 const MODES: ReadonlySet<unknown> = new Set(['100644']);
 const EVENTS: ReadonlySet<unknown> = new Set(['APPROVE', 'REQUEST_CHANGES', 'COMMENT']);
 
 const treeProblem = (body: Record<string, unknown>): string | null => {
   if (!Array.isArray(body.tree) || body.tree.length === 0) return 'the tree lists no file';
   for (const entry of body.tree as Array<Record<string, unknown>>) {
-    if (entry?.type !== 'blob' || !MODES.has(entry.mode) || typeof entry.content !== 'string')
+    const extra = unknownKey(entry, ['path', 'mode', 'type', 'content']);
+    if (extra !== null) return extra;
+    if (entry.type !== 'blob' || !MODES.has(entry.mode) || typeof entry.content !== 'string')
       return 'a tree entry is not a plain text file';
     const problem = filePathProblem(entry.path);
     if (problem !== null) return problem;
@@ -89,34 +94,52 @@ const treeProblem = (body: Record<string, unknown>): string | null => {
   return null;
 };
 
+const reviewProblem = (body: Record<string, unknown>): string | null => {
+  if (!EVENTS.has(body.event)) return `the review event ${JSON.stringify(body.event)} is unknown`;
+  const comments = Array.isArray(body.comments) ? body.comments : [];
+  for (const c of comments) {
+    const extra = unknownKey(c, ['path', 'line', 'side', 'body']);
+    if (extra !== null) return extra;
+  }
+  return null;
+};
+
 export const GITHUB_WRITES: readonly WriteRule[] = [
-  { method: 'POST', path: route('git/trees'), body: treeProblem },
+  { method: 'POST', path: route('git/trees'), keys: ['base_tree', 'tree'], body: treeProblem },
   {
     method: 'POST',
     path: route('git/commits'),
+    keys: ['message', 'tree', 'parents'],
     body: (b) => (Array.isArray(b.parents) && b.parents.length === 1 ? null : 'a commit needs exactly one parent'),
   },
   {
     method: 'POST',
     path: route('git/refs'),
+    keys: ['ref', 'sha'],
     body: (b) => branchProblem(typeof b.ref === 'string' ? b.ref.replace(/^refs\/heads\//, '') : null),
   },
   {
     method: 'PATCH',
     path: route(`git/refs/heads/aw/${SEGMENT}/${SEGMENT}`),
+    keys: ['sha', 'force'],
     body: (b) => (b.force === undefined || b.force === false ? null : 'a ref update may not force'),
   },
   {
     method: 'POST',
     path: route('pulls'),
-    body: (b) => branchProblem(b.head) ?? (b.draft === false ? null : 'a PR opens ready, not draft'),
+    keys: ['title', 'body', 'head', 'base', 'draft'],
+    body: (b, scope) =>
+      branchProblem(b.head) ??
+      (b.base === scope.base ? null : `a PR must target ${scope.base}`) ??
+      (b.draft === false ? null : 'a PR opens ready, not draft'),
   },
   {
     method: 'POST',
     path: route('pulls/\\d+/reviews'),
-    body: (b) => (EVENTS.has(b.event) ? null : `the review event ${JSON.stringify(b.event)} is unknown`),
+    keys: ['commit_id', 'event', 'body', 'comments'],
+    body: reviewProblem,
   },
-  { method: 'POST', path: route('issues/\\d+/comments') },
+  { method: 'POST', path: route('issues/\\d+/comments'), keys: ['body'] },
 ];
 
 const repoOf = (b: unknown): string => str(b, 'repository.full_name');
@@ -223,10 +246,17 @@ const segments = (path: string): string => path.split('/').map(encodeURIComponen
 export interface GithubOptions {
   readonly send: Transport;
   readonly log: (call: ApiCall) => void;
+  readonly repo: string;
+  readonly base: string;
 }
 
-export const github = ({ send, log }: GithubOptions): GitHost => {
-  const api = guard('github', GITHUB_WRITES, send, log);
+export const githubScope = (repo: string, base: string): Scope => {
+  if (!REPO.test(repo)) throw new Error(`the GitHub repo ${JSON.stringify(repo)} is not <owner>/<name>`);
+  return { home: `/repos/${repo}`, base };
+};
+
+export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
+  const api = guard('github', GITHUB_WRITES, githubScope(repo, base), send, log);
   const call = (method: HttpRequest['method'], path: string, body?: unknown) =>
     api(body === undefined ? { method, path } : { method, path, body });
   const get = (path: string) => call('GET', path);
@@ -312,7 +342,7 @@ export const github = ({ send, log }: GithubOptions): GitHost => {
       const files = [];
       for (const path of await paths(repo, number)) {
         const got = await get(`/repos/${repo}/contents/${segments(path)}?ref=${headSha}`);
-        files.push({ path, content: Buffer.from(str(got, 'content'), 'base64').toString('utf8') });
+        files.push({ path, content: contentText(got) });
       }
       return files;
     },

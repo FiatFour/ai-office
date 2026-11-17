@@ -1,5 +1,5 @@
 import type { TaskId, Verdict } from '@agent-works/core';
-import type { ChangeFact, CommentFact, FileEdit, LineComment } from '../githost/host.ts';
+import type { ChangeFact, CommentFact, FileEdit, HeadFile, LineComment } from '../githost/host.ts';
 
 export type RuntimeId = 'claude-code' | 'codex' | 'scripted';
 
@@ -30,7 +30,7 @@ interface JobBase {
 export type AgentJob = JobBase &
   (
     | { readonly role: 'author'; readonly comments: readonly CommentFact[] }
-    | { readonly role: 'reviewer'; readonly change: ChangeFact; readonly files: readonly FileEdit[] }
+    | { readonly role: 'reviewer'; readonly change: ChangeFact; readonly files: readonly HeadFile[] }
   );
 
 export type AgentResult =

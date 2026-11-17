@@ -27,8 +27,8 @@ const hq = await startHq({
   port: 0,
   makeDriver: async () => null,
   mode: cagesMode({
-    host: github({ send: transport('aw-nova'), log: () => {} }),
-    reviewHost: github({ send: transport('vega'), log: () => {} }),
+    host: github({ repo: 'acme/app', base: 'main', send: transport('aw-nova'), log: () => {} }),
+    reviewHost: github({ repo: 'acme/app', base: 'main', send: transport('vega'), log: () => {} }),
     repo: 'acme/app',
     base: 'main',
     tickets: {

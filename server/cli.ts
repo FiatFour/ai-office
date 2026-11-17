@@ -29,7 +29,7 @@ import { fileLog } from './githost/host.ts';
 import { startHq } from './hq.ts';
 import type { ModeFactory } from './modes/cages.ts';
 import { ConfigError, cagesFromConfig } from './modes/cages-config.ts';
-import { demoMode, loadDemo } from './modes/demo.ts';
+import { DemoFixtureError, demoMode, loadDemo } from './modes/demo.ts';
 import { type DoctorContext, exitCodeOf, formatChecks, type PortState, runDoctor } from './preflight/checks.ts';
 import { realHostProbe } from './preflight/host.ts';
 import { Registry } from './registry.ts';
@@ -287,16 +287,36 @@ const serveMode = (
   }
 };
 
+const DEMO_SIGNALS: readonly NodeJS.Signals[] =
+  process.platform === 'win32' ? ['SIGTERM', 'SIGINT', 'SIGHUP'] : ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
+
+const DEMO_READ_ONLY =
+  'demo mode is read-only: it replays a recorded run and accepts no writes. Run agent-works for the live floor.';
+
+const loadDemoSource = (env: NodeJS.ProcessEnv) => {
+  const custom = env.AGENT_WORKS_DEMO_EVENTS;
+  try {
+    return custom === undefined ? loadDemo(DEMO_EVENTS, DEMO_LABEL) : loadDemo(custom, custom);
+  } catch (error) {
+    if (error instanceof DemoFixtureError) throw new CliError(error.message, 2);
+    throw error;
+  }
+};
+
 const runDemo = async (port: number, env: NodeJS.ProcessEnv, noOpen: boolean, io: Io): Promise<number> => {
   const assets = builtAssets();
   if (assets === undefined) io.err('The floor is not built. Run: pnpm --filter @agent-works/floor build');
   const interval = Number(env.AGENT_WORKS_DEMO_INTERVAL_MS ?? DEMO_INTERVAL_MS);
+  const source = loadDemoSource(env);
   const home = mkdtempSync(join(tmpdir(), 'aw-demo-'));
+  const wipe = () => rmSync(home, { recursive: true, force: true });
+  process.once('exit', wipe);
   try {
     const hq = await startHq({
       home,
       port,
-      mode: demoMode(loadDemo(DEMO_EVENTS, DEMO_LABEL), interval),
+      mode: demoMode(source, interval),
+      readOnly: DEMO_READ_ONLY,
       ...(assets === undefined ? {} : { assets }),
     }).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE')
@@ -306,15 +326,15 @@ const runDemo = async (port: number, env: NodeJS.ProcessEnv, noOpen: boolean, io
         );
       throw error;
     });
-    io.out(`Demo replay of ${DEMO_LABEL} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);
+    io.out(`Demo replay of ${source.label} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);
     if (!noOpen) openBrowser(hq.url);
     const quit = () => void hq.close();
-    process.on('SIGTERM', quit);
-    process.on('SIGINT', quit);
+    for (const signal of DEMO_SIGNALS) process.on(signal, quit);
     await hq.stopped;
     return 0;
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    process.off('exit', wipe);
+    wipe();
   }
 };
 

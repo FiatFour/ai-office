@@ -44,9 +44,8 @@ export const useHq = (): Hq => {
 
   const rev = snapshot?.rev;
   const isDemo = useRef<boolean | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the replay count is read again on every snapshot
   useEffect(() => {
-    if (isDemo.current === false) return;
+    if (rev === undefined || isDemo.current === false) return;
     void fetch('/api/demo')
       .then((res) => (res.ok ? (res.json() as Promise<DemoInfo>) : null))
       .then((info) => {

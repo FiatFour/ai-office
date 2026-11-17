@@ -77,10 +77,9 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
 
   const shipped = view?.shipped ?? 0;
   useEffect(() => {
-    if (shipped > shippedBefore.current)
-      setToast(t('floor.hud.deliveredDetail', { task: view?.boxes.find((box) => box.stamp === 'SHIPPED')?.id ?? '' }));
+    if (shipped > shippedBefore.current) setToast(view?.boxes.find((box) => box.stamp === 'SHIPPED')?.id ?? '');
     shippedBefore.current = shipped;
-  }, [shipped, t, view]);
+  }, [shipped, view]);
 
   if (view === null || hq.snapshot === null) return <main className="boot">…</main>;
   const needing = view.workers.filter((worker) => worker.mood === 'needs').length;
@@ -106,7 +105,7 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
           <span className="status">{t('floor.hud.demoProgress', { done: demo.replayed, total: demo.total })}</span>
         )}
         <span className="grow" />
-        <nav aria-label="HQ">
+        <nav aria-label={t('floor.hud.menu')}>
           <button
             type="button"
             className="btn gold"
@@ -184,7 +183,7 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
       {toast === null ? null : (
         <div className="toast panel" role="status">
           <b className="pixel">{t('floor.hud.delivered')}</b>
-          <span>{toast}</span>
+          <span>{t('floor.hud.deliveredDetail', { task: toast })}</span>
           <button type="button" className="btn small" aria-label={t('floor.hud.close')} onClick={() => setToast(null)}>
             ✕
           </button>

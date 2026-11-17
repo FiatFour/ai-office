@@ -35,7 +35,7 @@ a {
   color: var(--yellow);
 }
 .pixel {
-  font-family: "Silkscreen", monospace;
+  font-family: "Silkscreen", "Sarabun", monospace;
   font-weight: 400;
 }
 .sr-only {
@@ -120,10 +120,13 @@ main {
 .small-title {
   margin: 0 0 6px;
   font-size: 11px;
-  color: var(--yellow);
+  color: var(--cream);
+}
+.right .small-title {
+  color: #ffa726;
 }
 .warn {
-  color: #ff8a80;
+  color: var(--yellow);
 }
 .muted {
   color: var(--mute);
@@ -193,7 +196,7 @@ main {
   margin-left: auto;
 }
 .key {
-  font-family: "VT323", monospace;
+  font-family: "VT323", "Sarabun", monospace;
   font-size: 15px;
   background: var(--yellow);
   color: var(--ink);
@@ -219,7 +222,7 @@ main {
   color: var(--mute);
 }
 .counts .big {
-  font-family: "Press Start 2P", monospace;
+  font-family: "Press Start 2P", "Sarabun", monospace;
   font-size: 9px;
   color: var(--cream);
 }

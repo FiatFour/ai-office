@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -107,3 +107,81 @@ export const moods = (/** @type {import('playwright').Page} */ page) =>
   );
 
 export const AXE = join(ROOT, 'src', 'node_modules', 'axe-core', 'axe.min.js');
+
+/** @param {import('playwright').Page} page @param {string} label */
+export const runAxe = async (page, label) => {
+  await page.evaluate(readFileSync(AXE, 'utf8'));
+  const out = await page.evaluate(() => globalThis.axe.run(document, { resultTypes: ['violations', 'incomplete'] }));
+  const nodes = (/** @type {any[]} */ rules) =>
+    rules.flatMap((rule) =>
+      rule.nodes.map((node) => `${label} ${rule.id} (${rule.impact ?? 'n/a'}) ${node.target.join(' ')}`),
+    );
+  return { violations: nodes(out.violations), incomplete: nodes(out.incomplete) };
+};
+
+const luminance = (/** @type {number[]} */ [r, g, b]) => {
+  const f = (/** @type {number} */ v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+};
+export const contrastRatio = (/** @type {number[]} */ a, /** @type {number[]} */ b) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+};
+
+/**
+ * axe cannot decide the contrast of text drawn on SVG art. For every scene label this finds the last
+ * rect drawn before it (document order is paint order) that contains the label, takes its fill (a
+ * pattern counts as the fill of its first rect), and computes the WCAG ratio. An estimate, not a proof.
+ * @param {import('playwright').Page} page
+ */
+export const sceneLabelContrast = async (page) => {
+  const rows = await page.evaluate(() => {
+    const svg = document.querySelector('.scene svg');
+    if (svg === null) return [];
+    const hex = (/** @type {string} */ value) => {
+      const probe = document.createElement('span');
+      probe.style.color = value;
+      document.body.append(probe);
+      const rgb = getComputedStyle(probe)
+        .color.match(/[\d.]+/g)
+        ?.map(Number) ?? [0, 0, 0];
+      probe.remove();
+      return rgb.slice(0, 3);
+    };
+    const fillOf = (/** @type {Element} */ rect) => {
+      const raw = rect.getAttribute('fill') ?? '';
+      const ref = /url\(#(\w+)\)/.exec(raw);
+      if (ref === null) return raw;
+      return svg.querySelector(`#${ref[1]} rect`)?.getAttribute('fill') ?? '';
+    };
+    const all = [...svg.querySelectorAll('rect, text')];
+    const out = [];
+    for (const [index, node] of all.entries()) {
+      if (node.tagName !== 'text' || !node.textContent?.trim()) continue;
+      const box = node.getBoundingClientRect();
+      const [cx, cy] = [box.left + box.width / 2, box.top + box.height / 2];
+      const under = all
+        .slice(0, index)
+        .reverse()
+        .find((other) => {
+          if (
+            other.tagName !== 'rect' ||
+            Number(other.getAttribute('opacity') ?? 1) < 0.8 ||
+            other.getAttribute('fill') === 'url(#mesh)'
+          )
+            return false;
+          const r = other.getBoundingClientRect();
+          return cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom && r.width > 3 && r.height > 3;
+        });
+      if (under === undefined) continue;
+      out.push({
+        text: node.textContent.trim(),
+        fg: hex(node.getAttribute('fill') ?? '#000'),
+        bg: hex(fillOf(under)),
+        size: Number(node.getAttribute('font-size')),
+      });
+    }
+    return out;
+  });
+  return rows.map((row) => ({ ...row, ratio: Number(contrastRatio(row.fg, row.bg).toFixed(2)) }));
+};

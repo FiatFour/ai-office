@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Event } from '@agent-works/core';
-import { parseEvent } from '../events.ts';
+import { InvalidEvent, parseEvent } from '../events.ts';
 import type { Mode, ModeFactory } from './cages.ts';
 
 export interface DemoSource {
@@ -10,13 +10,28 @@ export interface DemoSource {
   readonly events: readonly Event[];
 }
 
+export class DemoFixtureError extends Error {}
+
+const eventOfLine = (line: string, where: string): Event => {
+  try {
+    return parseEvent((JSON.parse(line) as { event: unknown }).event);
+  } catch (error) {
+    const why = error instanceof InvalidEvent ? error.message : 'not a JSON line of the form {"seq", "event"}';
+    throw new DemoFixtureError(`${where}: ${why}`);
+  }
+};
+
 export const loadDemo = (path: string, label: string): DemoSource => {
-  const bytes = readFileSync(path);
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch {
+    throw new DemoFixtureError(`${label}: cannot read the demo events file`);
+  }
   const events = bytes
     .toString('utf8')
     .split('\n')
-    .filter((line) => line.trim() !== '')
-    .map((line) => parseEvent((JSON.parse(line) as { event: unknown }).event));
+    .flatMap((line, index) => (line.trim() === '' ? [] : [eventOfLine(line, `${label} line ${index + 1}`)]));
   return { label, sha256: createHash('sha256').update(bytes).digest('hex'), events };
 };
 

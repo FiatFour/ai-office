@@ -49,6 +49,7 @@ const review = (verdict: 'approve' | 'changes'): Event => ({
   at: 1002,
 });
 
+const cancel: Event = { source: 'human', kind: 'cancel', task: TASK };
 const atBelt = [...staff, order];
 const atCode = [...atBelt, hire];
 const atTest = [...atCode, change('open')];
@@ -277,5 +278,86 @@ describe('the recorded demo run', () => {
       for (const worker of floorView({ rev: 0, state }).workers) moods.add(worker.mood);
     }
     expect(moods).toEqual(new Set(['working', 'needs', 'qc', 'break']));
+  });
+
+  it('every poll in the file reports only reviews a one-account host can produce: by the PR author', () => {
+    const polls = events.filter((event) => event.source === 'poll');
+    expect(polls.length).toBeGreaterThan(0);
+    for (const poll of polls) {
+      const reviewers = (poll as unknown as { reviews: { reviewer: string }[] }).reviews.map((r) => r.reviewer);
+      expect(reviewers.every((name) => name === (poll as unknown as { author: string }).author)).toBe(true);
+    }
+  });
+
+  it('keeps the peer approval by vega, because the author reviewing their own PR does not move the box to MERGE', () => {
+    const approval = events.findIndex(
+      (event) => event.source === 'webhook' && event.kind === 'review' && event.verdict === 'approve',
+    );
+    const stateAfter = (list: readonly Event[]) =>
+      list.reduce((state, event) => reduce(state, event).state, initialState({ budget: 3, approvals: 1 }));
+    const as = (reviewer: string) =>
+      events.slice(0, approval + 1).map((event, i) => (i === approval ? ({ ...event, reviewer } as Event) : event));
+    expect((events[approval] as { reviewer: string }).reviewer).toBe('vega');
+    expect(stateAfter(as('vega')).boxes['alpha/p12c']?.state).toBe('merge');
+    expect(stateAfter(as('FiatFour')).boxes['alpha/p12c']?.state).toBe('qc');
+  });
+});
+
+describe('the floor view from the snapshot', () => {
+  it('lists the stations in the order of the line, QC before MERGE', () => {
+    expect(STATIONS).toEqual(['ORDER', 'CODE', 'TEST', 'QC', 'MERGE', 'SHIPPING']);
+  });
+
+  it('carries the snapshot rev', () => {
+    expect(floorView({ rev: 42, state: run(atQc) }).rev).toBe(42);
+  });
+
+  it('shows the box code as the upper-case task name without its line', () => {
+    expect(box(atBelt).code).toBe('BOX-ONE');
+  });
+
+  it('a box scrapped by a person is on no station, counts nowhere and asks nothing of its builder', () => {
+    const scrapped = [...atCode, cancel];
+    const found = view(scrapped);
+    expect(STATIONS.map((station) => found.counts[station])).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(found.actions).toEqual([]);
+    expect(mood(scrapped, 'nova')).toBe('break');
+  });
+
+  it('a shipment that has merged but not left is not counted as shipped', () => {
+    const events: Event[] = [
+      ...staff,
+      { source: 'human', kind: 'order', task: TASK, shipment: { id: 's1', size: 2 } },
+      { source: 'human', kind: 'order', task: 'alpha/box-two', shipment: { id: 's1', size: 2 } },
+      hire,
+      change('open'),
+      change('merged', 2000),
+    ];
+    expect(run(events).boxes[TASK]?.state).toBe('shipping');
+    expect(view(events).shipped).toBe(0);
+    expect(view(events).counts.SHIPPING).toBe(1);
+  });
+
+  describe('a box the reducer could not produce but the snapshot can carry', () => {
+    const withBox = (patch: Record<string, unknown>, staffOf: State['staff'] = run(atMerge).staff): State => {
+      const state = run(atMerge);
+      return { ...state, staff: staffOf, boxes: { [TASK]: { ...state.boxes[TASK], ...patch } as never } };
+    };
+    const named = (state: State) => floorView({ rev: 1, state }).workers;
+
+    it('the first builder, not the last owner, is asked to merge', () => {
+      const state = withBox({ builders: ['nova', 'vega'], worker: 'vega' });
+      expect(floorView({ rev: 1, state }).actions[0]?.worker).toBe('nova');
+    });
+
+    it('a worker that is on a box but not on the staff is still listed', () => {
+      const state = withBox({ builders: ['ghost'], worker: 'ghost' }, {});
+      expect(named(state).map((worker) => worker.name)).toEqual(['ghost']);
+    });
+
+    it('the worker of a box counts as its owner even when no builder is recorded', () => {
+      const state = withBox({ builders: [], worker: 'nova' }, {});
+      expect(floorView({ rev: 1, state }).actions[0]?.worker).toBe('nova');
+    });
   });
 });

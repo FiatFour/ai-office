@@ -17,7 +17,7 @@ const tagColor = (shipment: string): string => {
 
 const at = (x: number, y: number): { transform: string } => ({ transform: `translate(${x}px, ${y}px)` });
 
-const Background = () => (
+const Background = ({ names }: { names: readonly string[] }) => (
   <>
     <defs>
       <pattern id="yard" width="16" height="16" patternUnits="userSpaceOnUse">
@@ -84,6 +84,7 @@ const Background = () => (
     </text>
     <rect x="211" y="48" width="57" height="54" fill="#3a2a2e" />
     <rect x="211" y="48" width="57" height="2" fill="#ef5350" />
+    <rect x="213" y="50" width="53" height="7" fill="#15181c" />
     <text x="239.5" y="55.4" textAnchor="middle" fontFamily="Silkscreen" fontSize="4" fill="#ef5350">
       FIREWALL
     </text>
@@ -118,6 +119,18 @@ const Background = () => (
           <rect x={cage.x + 6} y={cage.y + 10} width="26" height="5" fill="#8d6e63" />
           <rect x={cage.x + 14} y={cage.y - 4} width="10" height="7" fill="#15181c" />
           <rect x={cage.x + 15} y={cage.y - 3} width="8" height="5" fill="#0d1a24" />
+          <text
+            x={cage.x + 20}
+            y={cage.y + 36.5}
+            textAnchor="middle"
+            fontFamily="Silkscreen"
+            fontSize="2.8"
+            fill="#2f343b"
+          >
+            {names[slot] === undefined
+              ? `CAGE ${slot + 1}`
+              : `CAGE ${slot + 1} · ${names[slot].toUpperCase().slice(0, 8)}`}
+          </text>
         </g>
       );
     })}
@@ -280,7 +293,7 @@ export const Scene = ({
         role="img"
         aria-label={t('floor.scene', { count: view.boxes.length, shipped: view.shipped })}
       >
-        <Background />
+        <Background names={workers.map((worker) => worker.name)} />
         {placed.map(({ box, stack }) => (
           <Box key={box.id} box={box} stack={stack} />
         ))}

@@ -13,6 +13,7 @@
     "@agent-works/core": "workspace:*",
     "@fontsource/pixelify-sans": "5.3.0",
     "@fontsource/press-start-2p": "5.3.0",
+    "@fontsource/sarabun": "5.3.0",
     "@fontsource/silkscreen": "5.3.0",
     "@fontsource/vt323": "5.3.0",
     "i18next": "27.1.3",

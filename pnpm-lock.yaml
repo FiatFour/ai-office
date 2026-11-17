@@ -246,6 +246,9 @@ importers:
       '@fontsource/press-start-2p':
         specifier: 5.3.0
         version: 5.3.0
+      '@fontsource/sarabun':
+        specifier: 5.3.0
+        version: 5.3.0
       '@fontsource/silkscreen':
         specifier: 5.3.0
         version: 5.3.0
@@ -369,6 +372,9 @@ packages:
 
   '@fontsource/press-start-2p@5.3.0':
     resolution: {integrity: sha512-gxWFxdeDglPhEYSwEeooomcaFK8kSQYLQwVxfnOJeYRj2sPEHXjpVtFgEaYfqzOjuAJGrIcJOipu2KY5YkbyuQ==}
+
+  '@fontsource/sarabun@5.3.0':
+    resolution: {integrity: sha512-8GWxnEIG9g/2JlZxU+APaVwipcLMkZkBps9N1tEyBxXWaJEnAtHpuaDYmFVG7lzTgr28orG7//htD/rfxDlfFg==}
 
   '@fontsource/silkscreen@5.3.0':
     resolution: {integrity: sha512-M1NQ3LQH0LFNvyFPd/piHEGMImPPtpLglNnLC6Vdcq9kL0jNIOtTQmksAWCc4enbDnw1OnIpZtjNEfRqYm/QmA==}
@@ -1136,6 +1142,8 @@ snapshots:
   '@fontsource/pixelify-sans@5.3.0': {}
 
   '@fontsource/press-start-2p@5.3.0': {}
+
+  '@fontsource/sarabun@5.3.0': {}
 
   '@fontsource/silkscreen@5.3.0': {}
 

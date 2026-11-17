@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Works — factory floor</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&amp;family=Silkscreen&amp;family=Press+Start+2P&amp;family=VT323&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#1f2328}
+a{color:#ffca28}a:hover{color:#f5f3ec}
+button,select{font-family:inherit}
+button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #ffca28;outline-offset:2px}
+@keyframes bob{0%{transform:translateY(0)}50%{transform:translateY(-1px)}100%{transform:translateY(0)}}
+@keyframes jump{0%{transform:translateY(0)}30%{transform:translateY(-3px)}60%{transform:translateY(0)}100%{transform:translateY(0)}}
+@keyframes blink{0%{opacity:1}50%{opacity:0.15}100%{opacity:1}}
+@keyframes tA{0%{opacity:1}50%{opacity:0}100%{opacity:1}}
+@keyframes tB{0%{opacity:0}50%{opacity:1}100%{opacity:0}}
+@keyframes zz{0%{transform:translate(0,0);opacity:0}20%{opacity:1}100%{transform:translate(4px,-8px);opacity:0}}
+@keyframes rise{0%{transform:translateY(3px);opacity:0}15%{opacity:1}80%{opacity:1}100%{transform:translateY(-10px);opacity:0}}
+@keyframes walkx{0%{transform:translateX(0)}45%{transform:translateX(176px)}55%{transform:translateX(176px)}100%{transform:translateX(0)}}
+@keyframes belt{0%{transform:translateX(0)}100%{transform:translateX(30px)}}
+@keyframes press{0%{transform:translateY(0)}50%{transform:translateY(3px)}100%{transform:translateY(0)}}
+@keyframes pop{0%{transform:translate(-50%,-6px);opacity:0}10%{transform:translate(-50%,0);opacity:1}100%{transform:translate(-50%,0);opacity:1}}
+.bob{animation:bob .8s steps(2) infinite}
+.jump{animation:jump .8s steps(4) infinite}
+.blink{animation:blink 1s steps(1) infinite}
+.typeA{animation:tA .3s steps(1) infinite}
+.typeB{animation:tB .3s steps(1) infinite}
+.hide{opacity:0}
+.zz{animation:zz 2s steps(8) infinite}
+.rise{animation:rise 2.6s steps(12) infinite}
+.walkx{animation:walkx 14s steps(70) infinite}
+.belt{animation:belt 2.4s steps(15) infinite}
+.press{animation:press 1.2s steps(2) infinite}
+.pop{animation:pop .5s steps(5) both}
+@media (prefers-reduced-motion: reduce){.bob,.jump,.blink,.typeA,.typeB,.zz,.rise,.walkx,.belt,.press,.pop{animation:none}.typeB{opacity:0}}
+@media (max-width: 1000px){.hud{position:static !important;transform:none !important;width:auto !important;max-width:none !important;margin:8px 8px 0 !important}}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #1f2328; color: #f5f3ec; font-family: 'Pixelify Sans', system-ui, sans-serif; font-size: 14px">
+<div style="position: relative">
+
+<div style="position: relative">
+<svg viewBox="0 0 480 270" width="100%" shape-rendering="crispEdges" aria-hidden="true" style="display: block; image-rendering: pixelated">
+<defs>
+<pattern id="yard" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="#5a5f66"></rect><rect x="3" y="5" width="1" height="1" fill="#666b73"></rect><rect x="11" y="12" width="1" height="1" fill="#4e535a"></rect></pattern>
+<pattern id="grass" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="#4a8c3f"></rect><rect x="2" y="3" width="1" height="1" fill="#5fa552"></rect><rect x="8" y="8" width="1" height="1" fill="#3d7a34"></rect></pattern>
+<pattern id="floor" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="#d6d0bf"></rect><rect width="16" height="1" fill="#c4bdaa"></rect><rect width="1" height="16" fill="#c4bdaa"></rect><rect x="6" y="9" width="1" height="1" fill="#cbc4b1"></rect></pattern>
+<pattern id="mesh" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="transparent"></rect><rect width="1" height="1" fill="#6b7280" opacity="0.35"></rect><rect x="2" y="2" width="1" height="1" fill="#6b7280" opacity="0.35"></rect></pattern>
+<pattern id="roof" width="6" height="14" patternUnits="userSpaceOnUse"><rect width="6" height="14" fill="#8a929c"></rect><rect width="2" height="14" fill="#9aa2ac"></rect><rect x="5" width="1" height="14" fill="#6f7680"></rect></pattern>
+<pattern id="haz" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#ffca28"></rect><rect width="4" height="8" fill="#15181c" transform="skewX(-30)"></rect></pattern>
+<pattern id="belt" width="6" height="10" patternUnits="userSpaceOnUse"><rect width="6" height="10" fill="#3a3f4a"></rect><rect width="1" height="10" fill="#2a2e36"></rect></pattern>
+<symbol id="tree" viewBox="0 0 14 16" width="14" height="16"><rect x="3" y="0" width="8" height="2" fill="#2f7a2b"></rect><rect x="1" y="2" width="12" height="7" fill="#3e9a38"></rect><rect x="0" y="4" width="14" height="4" fill="#3e9a38"></rect><rect x="2" y="2" width="4" height="2" fill="#6cc160"></rect><rect x="2" y="9" width="10" height="2" fill="#2f7a2b"></rect><rect x="6" y="11" width="2" height="3" fill="#6b4220"></rect><rect x="2" y="14" width="10" height="2" fill="#000" opacity="0.2"></rect></symbol>
+<symbol id="crate" viewBox="0 0 12 9" width="12" height="9"><rect width="12" height="9" fill="#8d6e63"></rect><rect x="1" y="1" width="10" height="7" fill="#c49a6c"></rect><rect x="1" y="4" width="10" height="1" fill="#8d6e63"></rect></symbol>
+</defs>
+
+<!-- yard -->
+<rect width="480" height="270" fill="url(#yard)"></rect>
+<rect x="0" y="0" width="480" height="20" fill="url(#grass)"></rect><rect x="0" y="258" width="480" height="12" fill="url(#grass)"></rect>
+<use href="#tree" x="100" y="3"></use><use href="#tree" x="150" y="3"></use><use href="#tree" x="206" y="3"></use><use href="#tree" x="262" y="3"></use><use href="#tree" x="318" y="3"></use><use href="#tree" x="372" y="3"></use>
+<use href="#tree" x="120" y="255"></use><use href="#tree" x="200" y="255"></use><use href="#tree" x="280" y="255"></use><use href="#tree" x="350" y="255"></use>
+<rect x="20" y="40" width="1" height="200" fill="#ffca28" opacity="0.6"></rect><rect x="458" y="40" width="1" height="200" fill="#ffca28" opacity="0.6"></rect>
+<rect x="0" y="150" width="92" height="18" fill="#6b7078"></rect><rect x="0" y="158" width="92" height="1" fill="#ffca28"></rect>
+
+<!-- building shell -->
+<rect x="90" y="24" width="304" height="230" fill="#15181c"></rect>
+<rect x="93" y="27" width="298" height="18" fill="url(#roof)"></rect>
+<rect x="186" y="29" width="112" height="13" fill="#15181c"></rect><rect x="187" y="30" width="110" height="11" fill="#ffca28"></rect>
+<text x="242" y="38" text-anchor="middle" font-family="Silkscreen" font-size="6" fill="#15181c">AGENT WORKS · 01</text>
+<rect x="96" y="45" width="292" height="206" fill="url(#floor)"></rect>
+<rect x="90" y="150" width="6" height="18" fill="url(#floor)"></rect>
+
+
+<!-- dispatch office (lead) -->
+<rect x="98" y="48" width="44" height="54" fill="#cfe6f2"></rect><rect x="98" y="48" width="44" height="54" fill="url(#mesh)" opacity="0.4"></rect>
+<rect x="98" y="48" width="44" height="2" fill="#546e7a"></rect><rect x="98" y="100" width="44" height="2" fill="#546e7a"></rect><rect x="98" y="48" width="2" height="54" fill="#546e7a"></rect><rect x="140" y="48" width="2" height="54" fill="#546e7a"></rect>
+<rect x="112" y="100" width="14" height="2" fill="#cfe6f2"></rect>
+<rect x="101" y="51" width="38" height="14" fill="#15181c"></rect><rect x="102" y="52" width="36" height="12" fill="#f5f3ec"></rect>
+<text x="120" y="56.4" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#c62828">ORDERS</text>
+<rect x="104" y="58" width="5" height="3" fill="#9aa1ab"></rect><rect x="110" y="58" width="5" height="3" fill="#42a5f5"></rect><rect x="116" y="58" width="5" height="3" fill="#ef5350"></rect><rect x="122" y="58" width="5" height="3" fill="#ffca28"></rect><rect x="128" y="58" width="5" height="3" fill="#66bb6a"></rect><rect x="134" y="58" width="3" height="3" fill="#66bb6a"></rect>
+<rect x="104" y="72" width="32" height="6" fill="#78909c"></rect><rect x="104" y="77" width="32" height="1.5" fill="#455a64"></rect>
+<rect x="107" y="67" width="10" height="6" fill="#15181c"></rect><rect x="108" y="68" width="8" height="4" fill="#0d1a24"></rect><rect x="109" y="69" width="5" height="1" fill="#42a5f5"></rect>
+<rect x="124" y="67" width="10" height="6" fill="#15181c"></rect><rect x="125" y="68" width="8" height="4" fill="#0d1a24"></rect><rect class="blink" x="126" y="69" width="5" height="1" fill="#66bb6a"></rect>
+<text x="120" y="98.6" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#455a64">DISPATCH</text>
+
+<!-- break room -->
+<rect x="145" y="48" width="63" height="54" fill="#e8d9c4"></rect>
+<rect x="145" y="48" width="63" height="2" fill="#6b7280"></rect><rect x="145" y="48" width="2" height="54" fill="#6b7280"></rect><rect x="206" y="48" width="2" height="54" fill="#6b7280"></rect>
+<rect x="149" y="52" width="9" height="15" fill="#c62828"></rect><rect x="150" y="54" width="7" height="6" fill="#90caf9"></rect><rect x="151" y="62" width="2" height="2" fill="#ffca28"></rect><rect x="154" y="62" width="2" height="2" fill="#66bb6a"></rect>
+<rect x="161" y="52" width="8" height="10" fill="#9aa1ab"></rect><rect x="163" y="54" width="4" height="3" fill="#15181c"></rect>
+<rect x="152" y="91" width="50" height="6" fill="#26a69a"></rect><rect x="152" y="89" width="50" height="3" fill="#00796b"></rect>
+<text x="176.5" y="100.4" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#5d4037">BREAK +ENERGY</text>
+
+<!-- firewall -->
+<rect x="211" y="48" width="57" height="54" fill="#3a2a2e"></rect>
+<rect x="211" y="48" width="57" height="2" fill="#ef5350"></rect><rect x="211" y="100" width="57" height="2" fill="#ef5350"></rect><rect x="211" y="48" width="2" height="54" fill="#ef5350"></rect><rect x="266" y="48" width="2" height="54" fill="#ef5350"></rect>
+<rect x="213" y="50" width="53" height="7" fill="#15181c"></rect><text x="239.5" y="55.4" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#ef5350">FIREWALL</text>
+<rect x="216" y="60" width="9" height="6" fill="#66bb6a"></rect><text x="220.5" y="64.4" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">git</text>
+<rect x="254" y="60" width="9" height="6" fill="#66bb6a"></rect><text x="258.5" y="64.4" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">npm</text>
+<rect x="216" y="70" width="4" height="24" fill="#454b55"></rect><rect x="259" y="70" width="4" height="24" fill="#454b55"></rect>
+<rect class="blink" x="220" y="74" width="39" height="1" fill="#ff5252"></rect><rect x="220" y="80" width="39" height="1" fill="#ff5252"></rect><rect class="blink" x="220" y="86" width="39" height="1" fill="#ff5252"></rect><rect x="220" y="92" width="39" height="1" fill="#ff5252"></rect>
+<g class="blink"><rect x="224" y="82" width="7" height="6" fill="#ef5350"></rect><rect x="227" y="83" width="1" height="2.5" fill="#f5f3ec"></rect></g>
+<g class="blink"><rect x="236" y="88" width="7" height="6" fill="#ef5350"></rect><rect x="239" y="89" width="1" height="2.5" fill="#f5f3ec"></rect></g>
+<g class="blink"><rect x="248" y="76" width="7" height="6" fill="#ef5350"></rect><rect x="251" y="77" width="1" height="2.5" fill="#f5f3ec"></rect></g>
+<text x="239.5" y="99.6" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#ffb3b3">3 BLOCKED · 2 ALLOWED</text>
+
+<!-- PR rack -->
+<rect x="271" y="48" width="48" height="54" fill="#cbc4b1"></rect>
+<text x="295" y="54" text-anchor="middle" font-family="Silkscreen" font-size="3.2" fill="#454b55">PR RACK</text>
+<rect x="274" y="57" width="42" height="2" fill="#e65100"></rect><rect x="274" y="76" width="42" height="2" fill="#e65100"></rect>
+<rect x="276" y="61" width="9" height="7" fill="#66bb6a"></rect><text x="280.5" y="66" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">#11</text>
+<rect x="287" y="61" width="9" height="7" fill="#66bb6a"></rect><text x="291.5" y="66" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">#12</text>
+<rect class="blink" x="298" y="61" width="9" height="7" fill="#ffca28"></rect><text x="302.5" y="66" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">#14</text>
+<rect x="276" y="69" width="9" height="6" fill="#9aa1ab"></rect><text x="280.5" y="73.6" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">#15</text>
+<text class="rise" x="295" y="92" text-anchor="middle" font-family="Press Start 2P" font-size="4" fill="#66bb6a" stroke="#15181c" stroke-width="0.6" paint-order="stroke">+50 XP</text>
+
+<!-- shipping dock -->
+<rect x="322" y="48" width="64" height="196" fill="#b9b4a6"></rect>
+<rect x="322" y="48" width="2" height="196" fill="#6b7280"></rect>
+<rect x="386" y="80" width="5" height="70" fill="#9aa1ab"></rect><rect x="386" y="80" width="5" height="70" fill="url(#roof)" opacity="0.6"></rect>
+<rect x="326" y="52" width="56" height="6" fill="url(#haz)"></rect>
+<text x="354" y="64" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#15181c">SHIPPING</text>
+<rect x="335" y="72" width="38" height="78" fill="#15181c"></rect><rect x="337" y="74" width="34" height="64" fill="#eceff1"></rect><rect x="337" y="138" width="34" height="11" fill="#1565c0"></rect><rect x="341" y="140" width="26" height="4" fill="#90caf9"></rect>
+<text x="354" y="81" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#15181c">v0.1</text>
+<use href="#crate" x="340" y="85"></use><use href="#crate" x="356" y="85"></use><use href="#crate" x="340" y="96"></use><use href="#crate" x="356" y="96"></use>
+<rect x="340" y="107" width="12" height="9" fill="none" stroke="#9aa1ab" stroke-width="0.6" stroke-dasharray="1 1"></rect><rect x="356" y="107" width="12" height="9" fill="none" stroke="#9aa1ab" stroke-width="0.6" stroke-dasharray="1 1"></rect>
+<text x="354" y="128" text-anchor="middle" font-family="Silkscreen" font-size="3.4" fill="#454b55">4 / 9 LOADED</text>
+<rect x="326" y="160" width="56" height="34" fill="#cbc4b1"></rect>
+<text x="354" y="167" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#454b55">SHIPMENTS</text>
+<rect x="329" y="171" width="5" height="4" fill="#ff77a8" stroke="#15181c" stroke-width="0.4"></rect><text x="336" y="174.6" font-family="VT323" font-size="4" fill="#15181c">S-1 sign-in · L1+L3</text>
+<rect x="329" y="180" width="5" height="4" fill="#26c6da" stroke="#15181c" stroke-width="0.4"></rect><text x="336" y="183.6" font-family="VT323" font-size="4" fill="#15181c">S-2 webhook · L2</text>
+<text x="354" y="191" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#454b55">truck waits for all PRs</text>
+<rect x="326" y="230" width="56" height="10" fill="url(#haz)"></rect>
+
+<!-- production lines -->
+<g opacity="{{A.mode.cage}}"><rect x="100" y="108" width="40" height="40" fill="#b9b4a6"></rect><rect x="100" y="108" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="100" y="108" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="146" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="108" width="2" height="40" fill="#6b7280"></rect>
+<rect x="138" y="108" width="2" height="40" fill="#6b7280"></rect><rect x="138" y="122" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="137" y="119" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="137.5" y="119.5" width="2" height="2" fill="#66bb6a"></rect>
+<text x="120.0" y="144.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 1 · BYTE</text></g>
+<g opacity="{{A.mode.desk}}"><rect x="104" y="140.5" width="32" height="5" fill="#15181c"></rect><text x="120.0" y="144.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · BYTE</text></g>
+<rect x="106" y="118" width="26" height="5" fill="#8d6e63"></rect><rect x="106" y="122" width="26" height="1.2" fill="#5d4037"></rect><rect x="114" y="104" width="10" height="7" fill="#15181c"></rect><rect x="115" y="105" width="8" height="5" fill="#0d1a24"></rect><rect x="116" y="106" width="5" height="1" fill="#66bb6a"></rect><rect class="blink" x="116" y="108" width="4" height="1" fill="#66bb6a"></rect>
+<g opacity="{{A.mode.cage}}"><rect x="143" y="108" width="40" height="40" fill="#b9b4a6"></rect><rect x="143" y="108" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="143" y="108" width="40" height="2" fill="#6b7280"></rect><rect x="143" y="146" width="40" height="2" fill="#6b7280"></rect><rect x="143" y="108" width="2" height="40" fill="#6b7280"></rect>
+<rect x="181" y="108" width="2" height="40" fill="#6b7280"></rect><rect x="181" y="122" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="180" y="119" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="180.5" y="119.5" width="2" height="2" fill="#ffca28"></rect>
+<text x="163.0" y="144.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 2 · PIXEL</text></g>
+<g opacity="{{A.mode.desk}}"><rect x="147" y="140.5" width="32" height="5" fill="#15181c"></rect><text x="163.0" y="144.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · PIXEL</text></g>
+<rect x="149" y="118" width="26" height="5" fill="#8d6e63"></rect><rect x="149" y="122" width="26" height="1.2" fill="#5d4037"></rect><rect x="157" y="104" width="10" height="7" fill="#15181c"></rect><rect x="158" y="105" width="8" height="5" fill="#0d1a24"></rect><rect x="159" y="106" width="5" height="1" fill="#ffca28"></rect><rect x="159" y="108" width="4" height="1" fill="#ffca28"></rect><rect x="158" y="124" width="8" height="7" fill="#454b55"></rect><rect x="159" y="125" width="6" height="4" fill="#6b7280"></rect>
+<rect x="186" y="122" width="138" height="12" fill="#15181c"></rect><rect x="187" y="123" width="136" height="10" fill="url(#belt)"></rect>
+<rect x="186" y="114" width="44" height="7" fill="#15181c"></rect><rect x="187" y="115" width="6" height="5" fill="#ffca28"></rect>
+<text x="195" y="119" font-family="Silkscreen" font-size="3.2" fill="#f5f3ec">L1 my-app-web</text>
+<g opacity="{{A.mode.cage}}"><rect x="100" y="152" width="40" height="40" fill="#b9b4a6"></rect><rect x="100" y="152" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="100" y="152" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="190" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="152" width="2" height="40" fill="#6b7280"></rect>
+<rect x="138" y="152" width="2" height="40" fill="#6b7280"></rect><rect x="138" y="166" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="137" y="163" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="137.5" y="163.5" width="2" height="2" fill="#ef5350"></rect>
+<text x="120.0" y="188.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 3 · NOVA</text></g>
+<g opacity="{{A.mode.desk}}"><rect x="104" y="184.5" width="32" height="5" fill="#15181c"></rect><text x="120.0" y="188.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · NOVA</text></g>
+<rect x="106" y="162" width="26" height="5" fill="#8d6e63"></rect><rect x="106" y="166" width="26" height="1.2" fill="#5d4037"></rect><rect x="114" y="148" width="10" height="7" fill="#15181c"></rect><rect class="blink" x="115" y="149" width="8" height="5" fill="#7f1d1d"></rect><rect x="118.5" y="149.5" width="1" height="2.5" fill="#f5f3ec"></rect>
+<g opacity="{{A.mode.cage}}"><rect x="143" y="152" width="40" height="40" fill="#b9b4a6"></rect><rect x="143" y="152" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="143" y="152" width="40" height="2" fill="#6b7280"></rect><rect x="143" y="190" width="40" height="2" fill="#6b7280"></rect><rect x="143" y="152" width="2" height="40" fill="#6b7280"></rect>
+<rect x="181" y="152" width="2" height="40" fill="#6b7280"></rect><rect x="181" y="166" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="180" y="163" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="180.5" y="163.5" width="2" height="2" fill="#9aa1ab"></rect>
+<text x="163.0" y="188.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 4 · ECHO</text></g>
+<g opacity="{{A.mode.desk}}"><rect x="147" y="184.5" width="32" height="5" fill="#15181c"></rect><text x="163.0" y="188.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · ECHO</text></g>
+<rect x="149" y="162" width="26" height="5" fill="#8d6e63"></rect><rect x="149" y="166" width="26" height="1.2" fill="#5d4037"></rect><rect x="157" y="148" width="10" height="7" fill="#15181c"></rect><rect x="158" y="149" width="8" height="5" fill="#0d1a24"></rect><rect x="159" y="150" width="5" height="1" fill="#454b55"></rect><rect x="159" y="152" width="4" height="1" fill="#454b55"></rect><rect x="158" y="168" width="8" height="7" fill="#454b55"></rect><rect x="159" y="169" width="6" height="4" fill="#6b7280"></rect>
+<rect x="186" y="166" width="138" height="12" fill="#15181c"></rect><rect x="187" y="167" width="136" height="10" fill="url(#belt)"></rect>
+<rect x="186" y="158" width="44" height="7" fill="#15181c"></rect><rect x="187" y="159" width="6" height="5" fill="#42a5f5"></rect>
+<text x="195" y="163" font-family="Silkscreen" font-size="3.2" fill="#f5f3ec">L2 my-app-api</text>
+<g opacity="{{A.mode.cage}}"><rect x="100" y="196" width="40" height="40" fill="#b9b4a6"></rect><rect x="100" y="196" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="100" y="196" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="234" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="196" width="2" height="40" fill="#6b7280"></rect>
+<rect x="138" y="196" width="2" height="40" fill="#6b7280"></rect><rect x="138" y="210" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="137" y="207" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="137.5" y="207.5" width="2" height="2" fill="#66bb6a"></rect>
+<text x="120.0" y="232.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 5 · TEMP-1</text></g>
+<g opacity="{{A.mode.desk}}"><rect x="104" y="228.5" width="32" height="5" fill="#15181c"></rect><text x="120.0" y="232.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · TEMP-1</text></g>
+<rect x="106" y="206" width="26" height="5" fill="#8d6e63"></rect><rect x="106" y="210" width="26" height="1.2" fill="#5d4037"></rect><rect x="114" y="192" width="10" height="7" fill="#15181c"></rect><rect x="115" y="193" width="8" height="5" fill="#0d1a24"></rect><rect x="116" y="194" width="5" height="1" fill="#66bb6a"></rect><rect class="blink" x="116" y="196" width="4" height="1" fill="#66bb6a"></rect>
+<rect x="143" y="198" width="38" height="36" fill="#cbc4b1"></rect><rect x="143" y="198" width="38" height="36" fill="url(#mesh)"></rect>
+<rect x="146" y="203" width="32" height="9" fill="#ff7043"></rect><text x="162" y="209.4" text-anchor="middle" font-family="Silkscreen" font-size="3.4" fill="#15181c">TEMP BAY</text>
+<text x="162" y="219" text-anchor="middle" font-family="VT323" font-size="3.8" fill="#454b55">hired for L3 · 4m</text>
+<text x="162" y="225" text-anchor="middle" font-family="VT323" font-size="3.8" fill="#454b55">leaves after 15m idle</text>
+<rect x="186" y="210" width="138" height="12" fill="#15181c"></rect><rect x="187" y="211" width="136" height="10" fill="url(#belt)"></rect>
+<rect x="186" y="202" width="44" height="7" fill="#15181c"></rect><rect x="187" y="203" width="6" height="5" fill="#b06cff"></rect>
+<text x="195" y="207" font-family="Silkscreen" font-size="3.2" fill="#f5f3ec">L3 shared-contracts ⇄</text>
+<g opacity="{{A.mode.fwOn}}"><g class="blink"><rect x="232" y="179" width="22" height="7" fill="#ef5350"></rect><text x="243" y="184" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#f5f3ec">BLOCKED</text></g></g><g opacity="{{A.mode.fwOff}}"><g class="blink"><rect x="230" y="179" width="26" height="7" fill="#ffa726"></rect><text x="243" y="184" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#15181c">ASKS YOU</text></g></g>
+
+<!-- boxes on the belts (tag = shipment) -->
+<g class="blink"><rect x="187" y="112" width="22" height="6" fill="#ef5350"></rect><text x="198" y="116.6" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#f5f3ec">HOTFIX</text></g>
+<g class="jump"><rect x="188" y="124" width="9" height="8" fill="#ef5350"></rect><rect x="188" y="127.5" width="9" height="1" fill="#b71c1c"></rect><text x="192.5" y="129.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">D1</text></g>
+<g class="belt">
+<g><rect x="204" y="124" width="9" height="8" fill="#42a5f5"></rect><rect x="204" y="127.5" width="9" height="1" fill="#1565c0"></rect><text x="208.5" y="129.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">T3</text><rect x="209" y="123" width="4" height="3" fill="#ff77a8" stroke="#15181c" stroke-width="0.4"></rect></g>
+<g><rect x="208" y="212" width="9" height="8" fill="#42a5f5"></rect><rect x="208" y="215.5" width="9" height="1" fill="#1565c0"></rect><text x="212.5" y="217.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">C2</text><rect x="213" y="211" width="4" height="3" fill="#ff77a8" stroke="#15181c" stroke-width="0.4"></rect></g>
+</g>
+<g class="jump"><rect x="196" y="168" width="9" height="8" fill="#ef5350"></rect><rect x="196" y="171.5" width="9" height="1" fill="#b71c1c"></rect><text x="200.5" y="173.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">T6</text><rect x="201" y="167" width="4" height="3" fill="#26c6da" stroke="#15181c" stroke-width="0.4"></rect></g>
+<g><rect x="286" y="124" width="9" height="8" fill="#ffca28"></rect><rect x="286" y="127.5" width="9" height="1" fill="#c79a00"></rect><text x="290.5" y="129.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">T5</text></g>
+<g><rect x="238" y="212" width="9" height="8" fill="#9aa1ab"></rect><rect x="238" y="215.5" width="9" height="1" fill="#6b7280"></rect><text x="242.5" y="217.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">C1</text></g>
+
+<!-- shared stations across all lines -->
+<rect x="250" y="106" width="3" height="128" fill="#455a64"></rect><rect x="264" y="106" width="3" height="128" fill="#455a64"></rect><rect x="250" y="104" width="17" height="4" fill="#ffa726"></rect>
+<text x="258.5" y="241" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#e65100">TEST</text>
+<rect class="blink" x="253" y="127" width="11" height="1" fill="#ff7043"></rect><rect x="253" y="171" width="11" height="1" fill="#ff7043"></rect><rect class="blink" x="253" y="215" width="11" height="1" fill="#ff7043"></rect>
+<rect x="276" y="104" width="22" height="5" fill="#15181c"></rect><rect x="277" y="105" width="20" height="3" fill="#ffca28"></rect>
+<rect x="277" y="108" width="2" height="126" fill="#c79a00"></rect><rect x="295" y="108" width="2" height="126" fill="#c79a00"></rect>
+<g class="press"><rect x="288" y="117" width="4" height="5" fill="#455a64"></rect></g>
+<rect x="299" y="110" width="4" height="10" fill="#15181c"></rect><rect class="blink" x="300" y="111" width="2" height="2" fill="#ef5350"></rect><rect x="300" y="114" width="2" height="2" fill="#5d4037"></rect><rect x="300" y="117" width="2" height="2" fill="#66bb6a"></rect>
+<text x="287" y="241" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#c79a00">QC</text>
+<rect x="305" y="106" width="14" height="4" fill="#2e7d32"></rect><rect x="305" y="106" width="2" height="128" fill="#2e7d32"></rect><rect x="317" y="106" width="2" height="128" fill="#2e7d32"></rect>
+<g class="press"><rect x="309" y="121" width="6" height="3" fill="#66bb6a"></rect><rect x="309" y="165" width="6" height="3" fill="#66bb6a"></rect><rect x="309" y="209" width="6" height="3" fill="#66bb6a"></rect></g>
+<text x="312" y="241" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#2e7d32">MERGE</text>
+<text x="205" y="244" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#bdb6a2">3 LINES · 1 FACTORY</text>
+
+<!-- WORKERS -->
+<g transform="translate(114,80)">
+<g opacity="{{A.captain.ring}}"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="{{A.captain.anim}}">
+<rect x="1" y="-2" width="8" height="2" fill="#f5f3ec"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#9aa1ab"></rect><rect x="4" y="-2" width="2" height="2" fill="#ef5350"></rect><rect x="9" y="4" width="3" height="4" fill="#8d6e63"></rect><rect x="9.5" y="4.6" width="2" height="3" fill="#f5f3ec"></rect>
+<rect x="1" y="1" width="1" height="2" fill="{{A.captain.hair}}"></rect><rect x="8" y="1" width="1" height="2" fill="{{A.captain.hair}}"></rect>
+<rect x="2" y="1" width="6" height="4" fill="{{A.captain.skin}}"></rect>
+<rect x="3" y="{{A.captain.eyeY}}" width="1" height="{{A.captain.eyeH}}" fill="#1f2328"></rect><rect x="6" y="{{A.captain.eyeY}}" width="1" height="{{A.captain.eyeH}}" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="{{A.captain.shirt}}"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="{{A.captain.armA}}" x="0" y="6" width="1" height="3" fill="{{A.captain.skin}}"></rect><rect class="{{A.captain.armA}}" x="9" y="6" width="1" height="3" fill="{{A.captain.skin}}"></rect>
+<rect class="{{A.captain.armB}}" x="0" y="5" width="1" height="3" fill="{{A.captain.skin}}"></rect><rect class="{{A.captain.armB}}" x="9" y="7" width="1" height="3" fill="{{A.captain.skin}}"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV7</tspan> CAPTAIN</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="{{A.captain.hpS}}" height="1.4" fill="{{A.captain.hpC}}"></rect>
+<g opacity="{{A.captain.dots}}"><rect x="11" y="-3" width="11" height="6" fill="#f5f3ec"></rect><rect x="11" y="-3" width="11" height="0.6" fill="#15181c"></rect><rect x="11" y="2.4" width="11" height="0.6" fill="#15181c"></rect><rect class="blink" x="13" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect x="16" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect class="blink" x="19" y="-0.5" width="1" height="1" fill="#15181c"></rect></g>
+</g>
+<g transform="translate(114,126)">
+<g opacity="{{A.byte.ring}}"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="{{A.byte.anim}}">
+<rect x="1" y="-2" width="8" height="2" fill="#ffca28"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect>
+<rect x="1" y="1" width="1" height="2" fill="{{A.byte.hair}}"></rect><rect x="8" y="1" width="1" height="2" fill="{{A.byte.hair}}"></rect>
+<rect x="2" y="1" width="6" height="4" fill="{{A.byte.skin}}"></rect>
+<rect x="3" y="{{A.byte.eyeY}}" width="1" height="{{A.byte.eyeH}}" fill="#1f2328"></rect><rect x="6" y="{{A.byte.eyeY}}" width="1" height="{{A.byte.eyeH}}" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="{{A.byte.shirt}}"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="{{A.byte.armA}}" x="0" y="6" width="1" height="3" fill="{{A.byte.skin}}"></rect><rect class="{{A.byte.armA}}" x="9" y="6" width="1" height="3" fill="{{A.byte.skin}}"></rect>
+<rect class="{{A.byte.armB}}" x="0" y="5" width="1" height="3" fill="{{A.byte.skin}}"></rect><rect class="{{A.byte.armB}}" x="9" y="7" width="1" height="3" fill="{{A.byte.skin}}"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV4</tspan> BYTE</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="{{A.byte.hpS}}" height="1.4" fill="{{A.byte.hpC}}"></rect>
+<g opacity="{{A.byte.dots}}"><rect x="11" y="-3" width="11" height="6" fill="#f5f3ec"></rect><rect x="11" y="-3" width="11" height="0.6" fill="#15181c"></rect><rect x="11" y="2.4" width="11" height="0.6" fill="#15181c"></rect><rect class="blink" x="13" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect x="16" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect class="blink" x="19" y="-0.5" width="1" height="1" fill="#15181c"></rect></g>
+</g>
+<g transform="translate(114,170)">
+<g opacity="{{A.nova.ring}}"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="{{A.nova.anim}}">
+<rect x="1" y="-2" width="8" height="2" fill="#ffca28"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect>
+<rect x="1" y="1" width="1" height="2" fill="{{A.nova.hair}}"></rect><rect x="8" y="1" width="1" height="2" fill="{{A.nova.hair}}"></rect>
+<rect x="2" y="1" width="6" height="4" fill="{{A.nova.skin}}"></rect>
+<rect x="3" y="{{A.nova.eyeY}}" width="1" height="{{A.nova.eyeH}}" fill="#1f2328"></rect><rect x="6" y="{{A.nova.eyeY}}" width="1" height="{{A.nova.eyeH}}" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="{{A.nova.shirt}}"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="{{A.nova.armA}}" x="0" y="6" width="1" height="3" fill="{{A.nova.skin}}"></rect><rect class="{{A.nova.armA}}" x="9" y="6" width="1" height="3" fill="{{A.nova.skin}}"></rect>
+<rect class="{{A.nova.armB}}" x="0" y="5" width="1" height="3" fill="{{A.nova.skin}}"></rect><rect class="{{A.nova.armB}}" x="9" y="7" width="1" height="3" fill="{{A.nova.skin}}"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV3</tspan> NOVA</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="{{A.nova.hpS}}" height="1.4" fill="{{A.nova.hpC}}"></rect>
+<g opacity="{{A.nova.bang}}"><g class="jump"><rect x="1.5" y="-25" width="7" height="9" fill="#15181c"></rect><rect x="2.5" y="-24" width="5" height="7" fill="#ffca28"></rect><rect x="4.5" y="-23" width="1" height="3.5" fill="#15181c"></rect><rect x="4.5" y="-18.6" width="1" height="1" fill="#15181c"></rect></g></g>
+</g>
+<g transform="translate(188,76)">
+<g opacity="{{A.echo.ring}}"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="{{A.echo.anim}}">
+<rect x="1" y="-2" width="8" height="2" fill="#ffca28"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect>
+<rect x="1" y="1" width="1" height="2" fill="{{A.echo.hair}}"></rect><rect x="8" y="1" width="1" height="2" fill="{{A.echo.hair}}"></rect>
+<rect x="2" y="1" width="6" height="4" fill="{{A.echo.skin}}"></rect>
+<rect x="3" y="{{A.echo.eyeY}}" width="1" height="{{A.echo.eyeH}}" fill="#1f2328"></rect><rect x="6" y="{{A.echo.eyeY}}" width="1" height="{{A.echo.eyeH}}" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="{{A.echo.shirt}}"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="{{A.echo.armA}}" x="0" y="6" width="1" height="3" fill="{{A.echo.skin}}"></rect><rect class="{{A.echo.armA}}" x="9" y="6" width="1" height="3" fill="{{A.echo.skin}}"></rect>
+<rect class="{{A.echo.armB}}" x="0" y="5" width="1" height="3" fill="{{A.echo.skin}}"></rect><rect class="{{A.echo.armB}}" x="9" y="7" width="1" height="3" fill="{{A.echo.skin}}"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV2</tspan> ECHO</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="{{A.echo.hpS}}" height="1.4" fill="{{A.echo.hpC}}"></rect>
+<g opacity="{{A.echo.zzOn}}"><text class="zz" x="10" y="-1" font-family="Press Start 2P" font-size="4" fill="#f5f3ec" stroke="#15181c" stroke-width="0.6" paint-order="stroke">z</text><text class="zz" x="13" y="-4" font-family="Press Start 2P" font-size="5" fill="#f5f3ec" stroke="#15181c" stroke-width="0.6" paint-order="stroke" style="animation-delay: 1s">Z</text></g>
+</g>
+<g transform="translate(114,214)">
+<g opacity="{{A.temp1.ring}}"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="{{A.temp1.anim}}">
+<rect x="1" y="-2" width="8" height="2" fill="#ff7043"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#bf360c"></rect><rect x="3" y="-2" width="4" height="1" fill="#15181c"></rect>
+<rect x="1" y="1" width="1" height="2" fill="{{A.temp1.hair}}"></rect><rect x="8" y="1" width="1" height="2" fill="{{A.temp1.hair}}"></rect>
+<rect x="2" y="1" width="6" height="4" fill="{{A.temp1.skin}}"></rect>
+<rect x="3" y="{{A.temp1.eyeY}}" width="1" height="{{A.temp1.eyeH}}" fill="#1f2328"></rect><rect x="6" y="{{A.temp1.eyeY}}" width="1" height="{{A.temp1.eyeH}}" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="{{A.temp1.shirt}}"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="{{A.temp1.armA}}" x="0" y="6" width="1" height="3" fill="{{A.temp1.skin}}"></rect><rect class="{{A.temp1.armA}}" x="9" y="6" width="1" height="3" fill="{{A.temp1.skin}}"></rect>
+<rect class="{{A.temp1.armB}}" x="0" y="5" width="1" height="3" fill="{{A.temp1.skin}}"></rect><rect class="{{A.temp1.armB}}" x="9" y="7" width="1" height="3" fill="{{A.temp1.skin}}"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV1</tspan> TEMP-1</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="{{A.temp1.hpS}}" height="1.4" fill="{{A.temp1.hpC}}"></rect>
+<g opacity="{{A.temp1.dots}}"><rect x="11" y="-3" width="11" height="6" fill="#f5f3ec"></rect><rect x="11" y="-3" width="11" height="0.6" fill="#15181c"></rect><rect x="11" y="2.4" width="11" height="0.6" fill="#15181c"></rect><rect class="blink" x="13" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect x="16" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect class="blink" x="19" y="-0.5" width="1" height="1" fill="#15181c"></rect></g>
+</g>
+
+<!-- Pixel carries PR #14 to QC -->
+<g transform="translate(268,136)">
+<g opacity="{{A.pixel.ring}}"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="bob">
+<rect x="1" y="-9" width="8" height="6" fill="#8d6e63"></rect><rect x="2" y="-8" width="6" height="4" fill="#ffca28"></rect><text x="5" y="-5" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">#14</text>
+<rect x="1" y="-2" width="8" height="2" fill="#ffca28"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect>
+<rect x="1" y="1" width="1" height="2" fill="#e2557a"></rect><rect x="8" y="1" width="1" height="2" fill="#e2557a"></rect>
+<rect x="2" y="1" width="6" height="4" fill="#f2c79b"></rect><rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect>
+<rect x="1" y="5" width="8" height="4" fill="#ff9f43"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect x="0" y="-3" width="1" height="8" fill="#f2c79b"></rect><rect x="9" y="-3" width="1" height="8" fill="#f2c79b"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-19" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-14.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV5</tspan> PIXEL</text>
+<rect x="-7" y="-12.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-12.6" width="9.6" height="1.4" fill="#ffca28"></rect>
+</g>
+
+<!-- run mode overlays -->
+<g opacity="{{A.mode.shared}}">
+<rect x="95" y="45" width="49" height="2" fill="#42a5f5"></rect><rect x="95" y="45" width="2" height="194" fill="#42a5f5"></rect><rect x="142" y="45" width="2" height="57" fill="#42a5f5"></rect><rect x="142" y="100" width="43" height="2" fill="#42a5f5"></rect><rect x="183" y="100" width="2" height="139" fill="#42a5f5"></rect><rect x="95" y="237" width="90" height="2" fill="#42a5f5"></rect>
+<rect x="99" y="103" width="56" height="5" fill="#42a5f5"></rect><text x="127" y="106.9" text-anchor="middle" font-family="Silkscreen" font-size="2.9" fill="#15181c">SHARED CAGE · CAPTAIN + 5</text>
+</g>
+<g opacity="{{A.mode.fwOff}}">
+<rect x="211" y="48" width="57" height="54" fill="#2f343b"></rect>
+<rect x="211" y="48" width="57" height="2" fill="#ffa726"></rect><rect x="211" y="100" width="57" height="2" fill="#ffa726"></rect>
+<text x="239.5" y="70" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#9aa1ab">FIREWALL</text>
+<rect x="215" y="74" width="49" height="9" fill="#ffa726"></rect><text x="239.5" y="80.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#15181c">OFF · NO SANDBOX</text>
+<text x="239.5" y="91" text-anchor="middle" font-family="VT323" font-size="4" fill="#c9cdd4">agents use this computer</text>
+</g>
+
+</svg>
+<sc-for list="{{hits}}" as="h" hint-placeholder-count="4">
+<button type="button" onClick="{{h.pick}}" aria-label="Select {{h.name}}" style="position: absolute; left: {{h.left}}; top: {{h.top}}; width: 5%; height: 11%; background: transparent; border: none; cursor: pointer"></button>
+</sc-for>
+</div>
+
+<header class="hud" style="position: absolute; left: 8px; right: 8px; top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 5px 8px; background: rgba(31,35,40,0.94); border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55, inset 0 -5px 0 0 #ffca28">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0">
+<a href="Park.dc.html" aria-label="Industrial park: all factories" style="display: flex; align-items: center; gap: 8px; text-decoration: none; color: #f5f3ec">
+<svg width="26" height="26" viewBox="0 0 10 10" shape-rendering="crispEdges" aria-hidden="true"><rect x="0" y="4" width="10" height="6" fill="#ffca28"></rect><rect x="1" y="1" width="2" height="4" fill="#ffca28"></rect><rect x="4" y="2" width="2" height="3" fill="#ffca28"></rect><rect x="7" y="0" width="2" height="5" fill="#ffca28"></rect><rect x="1" y="6" width="2" height="2" fill="#15181c"></rect><rect x="4" y="6" width="2" height="2" fill="#15181c"></rect><rect x="7" y="6" width="2" height="2" fill="#15181c"></rect></svg>
+<b style="font-family: 'Silkscreen', monospace; font-size: 17px; white-space: nowrap; color: #ffca28">AGENT WORKS</b>
+</a>
+<span style="font-size: 11px; font-weight: 700; padding: 0 5px; background: #ffca28; color: #15181c; border: 2px solid #15181c">Demo data</span>
+<a href="Park.dc.html" aria-label="Switch factory. Current: my-app. 2 items need you in other factories" style="display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 8px; background: #15181c; color: #f5f3ec; text-decoration: none; border: 2px solid #454b55; font-size: 13px; white-space: nowrap"><span style="font-family: 'Silkscreen', monospace; font-size: 10px; color: #9aa1ab">FACTORY</span><b>my-app</b><span style="font-family: 'VT323', monospace; font-size: 15px; color: #9aa1ab">3 lines</span><span title="Waiting on you in other factories" style="font-size: 10px; font-weight: 700; padding: 0 4px; background: #ef5350; color: #f5f3ec">+2 elsewhere</span><span aria-hidden="true">▾</span></a>
+</div>
+<div style="flex: 1"></div>
+<label style="display: flex; align-items: center; gap: 5px; font-size: 12px"><span style="color: #c9cdd4">Order board</span>
+<select aria-label="Board shown on the order board" style="min-height: 32px; padding: 0 4px; background: #454b55; color: #f5f3ec; font-size: 12px; border: 2px solid #15181c"><option>First active (Sprint 1)</option><option>Backlog · planned</option></select></label>
+<div role="group" aria-label="Line speed" style="display: flex; gap: 3px">
+<sc-for list="{{speeds}}" as="sp" hint-placeholder-count="3">
+<button type="button" aria-pressed="{{sp.pressed}}" onClick="{{sp.pick}}" style="min-width: 34px; min-height: 32px; background: {{sp.bg}}; color: {{sp.fg}}; font-size: 12px; font-weight: 700; border: 2px solid #15181c; cursor: pointer">{{sp.label}}</button>
+</sc-for>
+</div>
+<div role="group" aria-label="Zoom" style="display: flex; gap: 3px">
+<button type="button" aria-label="Zoom out" style="width: 32px; min-height: 32px; background: #454b55; color: #f5f3ec; font-size: 16px; border: 2px solid #15181c; cursor: pointer">−</button>
+<button type="button" aria-label="Zoom in" style="width: 32px; min-height: 32px; background: #454b55; color: #f5f3ec; font-size: 16px; border: 2px solid #15181c; cursor: pointer">+</button>
+</div>
+<button type="button" onClick="{{cycleMode}}" title="{{modeTip}} · click to preview another run mode" aria-label="Run mode: {{modeLabel}}. Click to preview the next mode" style="display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 3px 8px; background: #15181c; color: #f5f3ec; border: 2px solid {{modeDot}}; font-size: 12px; white-space: nowrap; cursor: pointer"><span title="Detected computer" style="font-family: 'Silkscreen', monospace; font-size: 9px; padding: 0 4px; background: #454b55; color: #f5f3ec">WIN · PWSH</span><span style="font-family: 'Silkscreen', monospace; font-size: 9px; color: #9aa1ab">MODE</span><b>{{modeLabel}}</b><span style="color: #9aa1ab">|</span>{{modeChip}}<b>{{modeN}}</b>{{modeTail}}<span class="blink" style="width: 8px; height: 8px; background: {{modeDot}}"></span></button>
+<nav aria-label="HQ menu" style="flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px">
+<a href="NewOrder.dc.html" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #66bb6a; color: #15181c; font-size: 12px; font-weight: 700; border: 2px solid #15181c">+ New order</a>
+<a href="PartySelect.dc.html" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Setup · 1</a>
+<a href="Preflight.dc.html" title="Checks this factory needs before the line starts" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Preflight · 4 ✕</a>
+<a href="ActionItems.dc.html" title="Everything waiting on you" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #ffca28; color: #15181c; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #c79a00">Action items · {{alertCount}}</a>
+<a href="Boards.dc.html" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Boards</a>
+<a href="Docs.dc.html" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Docs · 9</a>
+<a href="PRs.dc.html" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">PRs / MRs · 3</a>
+<a href="Terminal.dc.html" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Terminal</a>
+<a href="Settings.dc.html" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Settings</a>
+<a href="Debug.dc.html" title="Debug panel (D)" style="display: inline-flex; align-items: center; text-decoration: none; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Debug</a>
+</nav>
+</header>
+
+<div class="hud" style="position: absolute; left: 8px; top: 106px; width: 232px; display: flex; flex-direction: column; gap: 6px">
+<div style="background: #2f343b; border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55; padding: 6px 8px">
+<div style="height: 6px; margin: -2px -2px 6px; background: repeating-linear-gradient(135deg, #ffca28 0 8px, #15181c 8px 16px)"></div>
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="width: 40px; height: 40px; flex: none; display: flex; align-items: center; justify-content: center; background: #ffca28; border: 2px solid #15181c; box-shadow: inset -3px -3px 0 #c79a00; font-family: 'Press Start 2P', monospace; font-size: 14px; color: #15181c">3</span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+<span style="font-family: 'Silkscreen', monospace; font-size: 11px; color: #ffca28">FACTORY LEVEL</span>
+<span style="height: 9px; background: #15181c; border: 2px solid #15181c"><span style="display: block; height: 100%; width: 68%; background: #42a5f5"></span></span>
+<span style="font-family: 'VT323', monospace; font-size: 14px; color: #c9cdd4">340 / 500 XP</span>
+</span>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 0 2px">
+<span style="font-family: 'Silkscreen', monospace; font-size: 11px; text-shadow: 0 2px 0 #15181c">CREW · 6 <span style="color: #ffca28">{{needCount}} NEED YOU</span></span>
+<button type="button" style="min-height: 26px; padding: 0 6px; background: #ffca28; color: #15181c; font-size: 11px; font-weight: 700; border: 2px solid #15181c; cursor: pointer">+ Hire</button>
+</div>
+<sc-for list="{{party}}" as="p" hint-placeholder-count="5">
+<button type="button" onClick="{{p.pick}}" aria-label="{{p.name}}, level {{p.lv}}, {{p.stateLabel}}" style="display: flex; align-items: center; gap: 7px; width: 100%; padding: 4px 6px; background: rgba(47,52,59,0.95); color: #f5f3ec; text-align: left; border: 3px solid {{p.border}}; box-shadow: inset 0 0 0 2px #454b55; cursor: pointer">
+<span style="width: 34px; height: 34px; flex: none; background: #15181c; border: 2px solid #454b55; display: flex; align-items: center; justify-content: center; position: relative">
+<svg width="24" height="32" viewBox="0 -2 10 15" shape-rendering="crispEdges" aria-hidden="true"><rect x="1" y="-2" width="8" height="2" fill="{{p.hat}}"></rect><rect x="0" y="0" width="10" height="1" fill="{{p.hatd}}"></rect><rect x="1" y="1" width="1" height="2" fill="{{p.hair}}"></rect><rect x="8" y="1" width="1" height="2" fill="{{p.hair}}"></rect><rect x="2" y="1" width="6" height="4" fill="{{p.skin}}"></rect><rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="1" y="5" width="8" height="4" fill="{{p.shirt}}"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect><rect x="0" y="6" width="1" height="3" fill="{{p.skin}}"></rect><rect x="9" y="6" width="1" height="3" fill="{{p.skin}}"></rect><rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect></svg>
+<span style="position: absolute; left: -5px; top: -5px; font-family: 'VT323', monospace; font-size: 13px; line-height: 1; padding: 0 3px; background: #ffca28; color: #15181c">{{p.n}}</span>
+</span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+<span style="display: flex; justify-content: space-between; gap: 4px"><span style="font-family: 'Silkscreen', monospace; font-size: 10px"><span style="color: #ffca28">{{p.lv}}</span> {{p.name}}</span><span style="font-size: 10px; font-weight: 700; padding: 0 4px; background: {{p.stateColor}}; color: {{p.stateFg}}">{{p.stateLabel}}</span></span>
+<span style="display: flex; align-items: center; gap: 4px"><span style="font-family: 'Silkscreen', monospace; font-size: 7px; color: #c9cdd4; width: 10px">EN</span><span style="flex: 1; height: 7px; background: #15181c"><span style="display: block; height: 100%; width: {{p.hpW}}; background: {{p.hpC}}"></span></span></span>
+<span style="font-size: 11px; color: #c9cdd4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{p.station}}</span>
+</span>
+</button>
+</sc-for>
+</div>
+
+<section class="hud" aria-label="Activity" style="position: absolute; left: 8px; bottom: 8px; width: 300px; background: #2f343b; border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55; padding: 6px 8px">
+<div style="display: flex; align-items: center; gap: 6px; margin-bottom: 3px; font-family: 'Silkscreen', monospace; font-size: 10px; color: #ffca28"><span class="blink" style="width: 7px; height: 7px; background: #66bb6a"></span>SHIFT LOG</div>
+<ul style="list-style: none; margin: 0; padding: 0; font-family: 'VT323', monospace; font-size: 16px; line-height: 1">
+<sc-for list="{{feed}}" as="f" hint-placeholder-count="6">
+<li style="display: flex; gap: 5px; padding: 2px 0"><span style="width: 10px; flex: none; text-align: center; color: {{f.c}}">{{f.icon}}</span><span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #e3e6ea">{{f.text}}</span><span style="flex: none; color: #9aa1ab">{{f.ago}}</span></li>
+</sc-for>
+</ul>
+</section>
+
+<div class="hud" style="position: absolute; right: 8px; top: 106px; width: 252px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; gap: 6px">
+<div aria-label="Factory map" style="flex: none; width: 112px; height: 66px; background: #5a5f66; border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55; padding: 6px 8px; box-sizing: border-box">
+<div style="width: 100%; height: 100%; background: #d6d0bf; position: relative; border: 1px solid #15181c">
+<span style="position: absolute; left: 3%; right: 22%; top: 46%; height: 4px; background: #3a3f4a"></span>
+<span style="position: absolute; right: 2%; top: 4%; width: 18%; height: 70%; background: #b9b4a6"></span>
+<span style="position: absolute; left: 8%; top: 14%; width: 4px; height: 4px; background: #d97757"></span>
+<span style="position: absolute; left: 10%; top: 66%; width: 4px; height: 4px; background: #2fbf71"></span>
+<span class="blink" style="position: absolute; left: 46%; top: 66%; width: 4px; height: 4px; background: #ef5350"></span>
+<span style="position: absolute; left: 28%; top: 14%; width: 4px; height: 4px; background: #b06cff"></span>
+<span style="position: absolute; left: 30%; top: 86%; width: 4px; height: 4px; background: #ff9f43"></span>
+</div>
+</div>
+<div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; background: #2f343b; border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55">
+<span style="font-family: 'Silkscreen', monospace; font-size: 11px; color: #ffca28">SHIFT 2</span>
+<span style="font-family: 'Press Start 2P', monospace; font-size: 10px">19:58</span>
+<span style="font-size: 12px; color: #c9cdd4">4 shipped</span>
+</div>
+</div>
+
+<section aria-label="Production order" style="background: #2f343b; border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55; padding: 7px 9px; display: flex; flex-direction: column; gap: 6px">
+<div style="height: 6px; margin: -2px -2px 6px; background: repeating-linear-gradient(135deg, #ffca28 0 8px, #15181c 8px 16px)"></div>
+<span style="font-family: 'Silkscreen', monospace; font-size: 10px; color: #ffa726">PRODUCTION ORDER</span>
+<b style="font-size: 14px; color: #ffca28">Sprint 1 — Auth + Billing</b>
+<div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px">
+<sc-for list="{{stations}}" as="st" hint-placeholder-count="5">
+<span title="{{st.name}}" style="display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 3px 0; background: #15181c; border-top: 3px solid {{st.c}}"><span style="font-family: 'Press Start 2P', monospace; font-size: 9px">{{st.n}}</span><span style="font-size: 9px; color: #c9cdd4">{{st.short}}</span></span>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 3px">
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px"><span style="width: 8px; height: 8px; background: #ffca28"></span>L1 my-app-web<span style="margin-left: auto; color: #c9cdd4">2 boxes</span></span>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px"><span style="width: 8px; height: 8px; background: #42a5f5"></span>L2 my-app-api<span style="margin-left: auto; color: #ff8a80">{{l2Note}}</span></span>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px"><span style="width: 8px; height: 8px; background: #b06cff"></span>L3 shared-contracts ⇄<span style="margin-left: auto; color: #ff7043">TEMP-1 on it</span></span>
+</div>
+<span style="font-family: 'VT323', monospace; font-size: 14px; color: #c9cdd4">S-1 waits for L1 + L3 · 4 / 9 on the truck</span>
+</section>
+
+<sc-if value="{{hasSel}}" hint-placeholder-val="{{ true }}">
+<section aria-label="Selected worker" style="background: #2f343b; border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #ffca28; padding: 8px; display: flex; flex-direction: column; gap: 7px">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="width: 48px; height: 48px; flex: none; background: #15181c; border: 2px solid #454b55; display: flex; align-items: center; justify-content: center; position: relative">
+<svg class="bob" width="32" height="46" viewBox="0 -2 10 15" shape-rendering="crispEdges" aria-hidden="true"><rect x="1" y="-2" width="8" height="2" fill="{{sel.hat}}"></rect><rect x="0" y="0" width="10" height="1" fill="{{sel.hatd}}"></rect><rect x="1" y="1" width="1" height="2" fill="{{sel.hair}}"></rect><rect x="8" y="1" width="1" height="2" fill="{{sel.hair}}"></rect><rect x="2" y="1" width="6" height="4" fill="{{sel.skin}}"></rect><rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="1" y="5" width="8" height="4" fill="{{sel.shirt}}"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect><rect x="0" y="6" width="1" height="3" fill="{{sel.skin}}"></rect><rect x="9" y="6" width="1" height="3" fill="{{sel.skin}}"></rect><rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect></svg>
+<span style="position: absolute; right: -6px; bottom: -6px; font-family: 'Press Start 2P', monospace; font-size: 7px; padding: 2px 3px; background: #ffca28; color: #15181c; border: 2px solid #15181c">{{sel.lv}}</span>
+</span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+<span style="display: flex; align-items: center; justify-content: space-between; gap: 4px"><b style="font-family: 'Silkscreen', monospace; font-size: 14px">{{sel.name}}</b><button type="button" aria-label="Close" onClick="{{closeSel}}" style="width: 26px; height: 26px; background: #454b55; color: #f5f3ec; font-size: 12px; border: 2px solid #15181c; cursor: pointer">✕</button></span>
+<span style="font-size: 11px; color: #c9cdd4">{{sel.role}} · {{sel.runtime}} · {{sel.station}}</span>
+<span style="display: flex; align-items: center; gap: 4px"><span style="font-family: 'Silkscreen', monospace; font-size: 8px; color: #66bb6a; width: 14px">EN</span><span style="flex: 1; height: 7px; background: #15181c"><span style="display: block; height: 100%; width: {{sel.hpW}}; background: {{sel.hpC}}"></span></span></span>
+<span style="display: flex; align-items: center; gap: 4px"><span style="font-family: 'Silkscreen', monospace; font-size: 8px; color: #42a5f5; width: 14px">XP</span><span style="flex: 1; height: 5px; background: #15181c"><span style="display: block; height: 100%; width: {{sel.xpW}}; background: #42a5f5"></span></span></span>
+</span>
+</div>
+<div style="padding: 6px 8px; background: #f5f3ec; color: #1f2328; border: 2px solid #15181c; font-size: 13px; line-height: 1.3">
+<span style="font-family: 'Silkscreen', monospace; font-size: 9px; color: #c62828">{{sel.stateLabel}}</span><br>“{{sel.say}}”
+</div>
+<div style="display: flex; gap: 4px; align-items: center">
+<span style="font-family: 'Silkscreen', monospace; font-size: 8px; color: #c9cdd4">TOOLS</span>
+<sc-for list="{{sel.gear}}" as="g" hint-placeholder-count="5">
+<span title="{{g.name}}" style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; background: #454b55; border: 2px solid #15181c"><span style="width: 11px; height: 11px; background: {{g.c}}; box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3)"></span></span>
+</sc-for>
+</div>
+<div style="background: #0d1a24; border: 2px solid #15181c; padding: 5px 7px; font-family: 'VT323', monospace; font-size: 15px; line-height: 1.1; display: flex; flex-direction: column; gap: 1px">
+<sc-for list="{{sel.term}}" as="ln" hint-placeholder-count="4"><span style="color: {{ln.c}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{ln.t}}</span></sc-for>
+<span><span style="color: #ffca28">❯</span> <span class="blink">█</span></span>
+</div>
+<sc-for list="{{sel.blocked}}" as="b" hint-placeholder-count="1">
+<div style="display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: #ffe0b2; color: #1f2328; border: 2px solid #15181c">
+<span style="flex: 1; min-width: 0; font-family: 'VT323', monospace; font-size: 15px; overflow-wrap: anywhere">⚠ {{b.host}}</span>
+<button type="button" onClick="{{b.allow}}" style="min-height: 28px; padding: 0 6px; background: #66bb6a; font-size: 11px; font-weight: 700; border: 2px solid #15181c; cursor: pointer">{{allowLabel}}</button>
+<button type="button" onClick="{{b.dismiss}}" style="min-height: 28px; padding: 0 6px; background: #f5f3ec; font-size: 11px; border: 2px solid #15181c; cursor: pointer">{{dismissLabel}}</button>
+</div>
+</sc-for>
+<div style="display: flex; gap: 5px">
+<a href="AgentSheet.dc.html" style="flex: 1; display: inline-flex; align-items: center; justify-content: center; min-height: 34px; background: #ffca28; color: #15181c; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #c79a00">Worker file</a>
+<button type="button" style="flex: 1; min-height: 34px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; border: 2px solid #15181c; cursor: pointer">Message</button>
+</div>
+</section>
+</sc-if>
+</div>
+
+<sc-if value="{{toast}}" hint-placeholder-val="{{ true }}">
+<div class="hud pop" role="status" style="position: absolute; left: 50%; top: 108px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: #2f343b; border: 3px solid #ffca28; box-shadow: 0 0 0 3px #15181c; white-space: nowrap">
+<svg width="34" height="26" viewBox="0 0 13 10" shape-rendering="crispEdges" aria-hidden="true"><rect x="0" y="2" width="8" height="6" fill="#eceff1"></rect><rect x="8" y="4" width="4" height="4" fill="#1565c0"></rect><rect x="9" y="5" width="2" height="1" fill="#90caf9"></rect><rect x="1" y="8" width="2" height="2" fill="#15181c"></rect><rect x="9" y="8" width="2" height="2" fill="#15181c"></rect><rect x="1" y="3" width="3" height="2" fill="#c49a6c"></rect><rect x="4" y="3" width="3" height="2" fill="#c49a6c"></rect></svg>
+<span style="display: flex; flex-direction: column; gap: 3px"><span style="font-family: 'Press Start 2P', monospace; font-size: 8px; color: #ffca28">SHIPMENT DELIVERED</span><span style="font-size: 14px">PR #12 merged · +50 XP</span></span>
+<button type="button" aria-label="Dismiss" onClick="{{closeToast}}" style="width: 28px; height: 28px; background: transparent; color: #f5f3ec; font-size: 12px; border: 2px solid #454b55; cursor: pointer">✕</button>
+</div>
+</sc-if>
+
+<nav class="hud" aria-label="Control panel" style="position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); display: flex; gap: 6px; padding: 6px 8px; background: #2f343b; border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55, inset 0 5px 0 0 #ffca28">
+<sc-for list="{{hotbar}}" as="h" hint-placeholder-count="6">
+<a href="{{h.href}}" title="{{h.label}}" aria-label="{{h.label}} ({{h.key}})" style="text-decoration: none; position: relative; width: 54px; height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: #15181c; color: #f5f3ec; border: 2px solid #454b55; cursor: pointer">
+<span style="width: 22px; height: 22px; border-radius: 50%; background: {{h.color}}; box-shadow: inset -3px -3px 0 rgba(0,0,0,0.35), 0 0 0 2px #15181c"></span>
+<span style="font-size: 10px; line-height: 1">{{h.short}}</span>
+<span style="position: absolute; left: 3px; top: 0; font-family: 'VT323', monospace; font-size: 13px; color: #ffca28">{{h.key}}</span>
+<sc-if value="{{h.hasBadge}}" hint-placeholder-val="{{ false }}"><span style="position: absolute; right: -6px; top: -6px; min-width: 15px; height: 15px; background: #ef5350; border: 2px solid #15181c; font-family: 'Press Start 2P', monospace; font-size: 7px; line-height: 15px; text-align: center">{{h.badge}}</span></sc-if>
+</a>
+</sc-for>
+</nav>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":980}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { sel: 'nova', speed: 1, gone: {}, toast: true, mode: 'cages' };
+  }
+  renderVals() {
+    var self = this;
+    var s = this.state;
+    var ST = {
+      working: { label: 'Working', color: '#42a5f5', fg: '#15181c' },
+      needs: { label: 'Needs you', color: '#ef5350', fg: '#f5f3ec' },
+      review: { label: 'At QC', color: '#ffca28', fg: '#15181c' },
+      idle: { label: 'On break', color: '#9aa1ab', fg: '#15181c' }
+    };
+    var G = { go: { name: 'Go', c: '#00add8' }, kafka: { name: 'Kafka', c: '#ffca28' }, mq: { name: 'IBM MQ', c: '#4589ff' }, ora: { name: 'Oracle', c: '#c74634' }, next: { name: 'Next.js', c: '#f5f3ec' }, git: { name: 'Git + gh / glab', c: '#ef5350' } };
+    var blockedAll = { byte: ['docs.clerk.com:443'], nova: ['api.stripe.com:443', 'mcp.notion.com:443'] };
+    var base = [
+      { id: 'captain', name: 'CAPTAIN', role: 'Lead', runtime: 'Claude Code', station: 'Dispatch office', hat: '#f5f3ec', hatd: '#9aa1ab', hair: '#4a2f27', skin: '#f2c79b', shirt: '#d97757', lv: 7, hp: 71, xp: 60, st: 'working', say: 'Writing work orders. T-06 goes to Nova.', gear: ['next', 'go', 'kafka', 'git'], term: [{ t: '● Write(docs/tasks/T-06.md)', c: '#66bb6a' }, { t: '  └ Wrote 31 lines', c: '#9aa1ab' }, { t: '✉ → Nova: start T-06', c: '#ffa726' }] },
+      { id: 'byte', name: 'BYTE', role: 'Developer', runtime: 'Claude Code', station: 'L1 web · Cage 1 · T-03', hat: '#ffca28', hatd: '#c79a00', hair: '#4a2f27', skin: '#e0a878', shirt: '#2fbf71', lv: 4, hp: 62, xp: 35, st: 'working', say: 'Building the sign-in page. Tests next.', gear: ['go', 'kafka', 'mq', 'ora', 'git'], term: [{ t: '● Update(app/sign-in/page.tsx)', c: '#66bb6a' }, { t: '  └ +38 −0', c: '#9aa1ab' }, { t: '● Bash(pnpm typecheck)', c: '#66bb6a' }, { t: '  └ No errors', c: '#9aa1ab' }] },
+      { id: 'pixel', name: 'PIXEL', role: 'Developer', runtime: 'Codex', station: 'L1 web · PR #14 at QC', hat: '#ffca28', hatd: '#c79a00', hair: '#e2557a', skin: '#f2c79b', shirt: '#ff9f43', lv: 5, hp: 40, xp: 80, st: 'review', say: 'Taking PR #14 to the QC gate.', gear: ['next', 'git'], term: [{ t: '● Bash(gh pr create)', c: '#66bb6a' }, { t: '  └ PR #14 opened', c: '#9aa1ab' }] },
+      { id: 'nova', name: 'NOVA', role: 'Developer', runtime: 'Claude Code', station: 'L2 api · Cage 3 · T-06', hat: '#ffca28', hatd: '#c79a00', hair: '#1b1730', skin: '#c68642', shirt: '#5ab0ff', lv: 3, hp: 22, xp: 20, st: 'needs', say: 'My cage blocked api.stripe.com. Can you open it?', gear: ['go', 'ora'], term: [{ t: '● Bash(curl api.stripe.com)', c: '#66bb6a' }, { t: '  └ blocked by sandbox policy', c: '#ff8a80' }, { t: '✻ Asking HQ for access…', c: '#e3e6ea' }] },
+      { id: 'temp1', name: 'TEMP-1', role: 'Temp developer', runtime: 'Claude Code', station: 'L3 contracts · Cage 5 · C-2', hat: '#ff7043', hatd: '#bf360c', hair: '#6d4c41', skin: '#e0a878', shirt: '#78909c', lv: 1, hp: 88, xp: 5, st: 'working', say: 'Hired 4 minutes ago for the contracts line. Working on C-2.', gear: ['go', 'kafka', 'git'], term: [{ t: '● Read(proto/events/v1/events.proto)', c: '#66bb6a' }, { t: '● Bash(buf breaking --against main)', c: '#66bb6a' }, { t: '  └ no breaking changes', c: '#9aa1ab' }] },
+      { id: 'echo', name: 'ECHO', role: 'Tester', runtime: 'Codex', station: 'Break room', hat: '#ffca28', hatd: '#c79a00', hair: '#9b9b9b', skin: '#f2c79b', shirt: '#b06cff', lv: 2, hp: 100, xp: 10, st: 'idle', say: 'Zzz… wake me when a box needs testing.', gear: ['go'], term: [{ t: '✻ Idle · waiting for a task', c: '#9aa1ab' }] }
+    ];
+    var A = {};
+    var MODES = { cages: { label: 'Cages', chip: 'Sandbox cages · ', n: '6', tail: ' running', dot: '#66bb6a', tip: 'Each worker runs in its own sandbox cage' }, 'subagents-cage': { label: 'Subagents · 1 cage', chip: 'Shared cage · ', n: '1', tail: ' running · 5 subagents', dot: '#42a5f5', tip: 'Captain runs Claude Code in one cage; workers are its subagents' }, 'subagents-local': { label: 'Subagents · no sandbox', chip: 'No sandbox · ', n: '5', tail: ' subagents', dot: '#ffa726', tip: 'Subagents run on this computer. Firewall is off.' } };
+    var MO = ['cages', 'subagents-cage', 'subagents-local'];
+    var mo = MODES[s.mode];
+    A.mode = { cage: s.mode === 'cages' ? 1 : 0, desk: s.mode === 'cages' ? 0 : 1, shared: s.mode === 'subagents-cage' ? 1 : 0, fwOff: s.mode === 'subagents-local' ? 1 : 0, fwOn: s.mode === 'subagents-local' ? 0 : 1 };
+    var sub = s.mode !== 'cages', loc = s.mode === 'subagents-local';
+    if (loc) blockedAll = { byte: ['WebFetch(docs.clerk.com)'], nova: ['Bash(curl api.stripe.com)', 'mcp__notion (first use)'] };
+    base = base.map(function (a) {
+      if (!sub) return a;
+      var b = Object.assign({}, a, { runtime: a.id === 'captain' ? 'Claude Code · ' + (loc ? 'this computer' : 'shared cage') : 'Claude Code subagent', station: a.station.replace(/Cage \d+/, 'Subagent') });
+      if (loc && a.id === 'nova') { b.say = 'Claude Code wants to run curl api.stripe.com. Allow it?'; b.term = [{ t: '● Bash(curl api.stripe.com)', c: '#66bb6a' }, { t: '  └ waiting for your permission', c: '#ffca28' }, { t: '✻ Asking you in HQ…', c: '#e3e6ea' }]; }
+      if (s.mode === 'subagents-cage' && a.id === 'nova') { b.say = 'The shared cage blocked api.stripe.com. Can you open it?'; }
+      return b;
+    });
+    var list = base.map(function (a, i) {
+      var on = a.id === s.sel;
+      var st = ST[a.st];
+      var work = a.st === 'working';
+      var bl = (blockedAll[a.id] || []).filter(function (h) { return !s.gone[a.id + h]; });
+      var o = Object.assign({}, a, {
+        n: String(i + 1),
+        ring: on ? 1 : 0,
+        anim: work ? 'bob' : (a.st === 'needs' ? 'jump' : ''),
+        armA: work ? 'typeA' : '',
+        armB: work ? 'typeB' : 'hide',
+        eyeY: a.st === 'idle' ? 3.4 : 3,
+        eyeH: a.st === 'idle' ? 0.5 : 1,
+        dots: work ? 1 : 0,
+        bang: a.st === 'needs' ? 1 : 0,
+        zzOn: a.st === 'idle' ? 1 : 0,
+        hpS: 24 * a.hp / 100,
+        hpC: a.hp > 50 ? '#66bb6a' : (a.hp > 25 ? '#ffca28' : '#ef5350'),
+        hpW: a.hp + '%',
+        xpW: a.xp + '%',
+        stateLabel: st.label, stateColor: st.color, stateFg: st.fg,
+        border: on ? '#ffca28' : (a.st === 'needs' ? '#ef5350' : '#15181c'),
+        gear: a.gear.map(function (k) { return G[k]; }),
+        blocked: bl.map(function (h) {
+          var go = function () { var g = Object.assign({}, self.state.gone); g[a.id + h] = true; self.setState({ gone: g }); };
+          return { host: h, allow: go, dismiss: go };
+        }),
+        blockedCount: bl.length,
+        pick: function () { self.setState({ sel: a.id }); }
+      });
+      A[a.id] = o;
+      return o;
+    });
+    var sel = A[s.sel] || null;
+    var pos = { captain: [114, 80], byte: [114, 126], nova: [114, 170], echo: [188, 76], temp1: [114, 214] };
+    var hits = ['captain', 'byte', 'nova', 'echo', 'temp1'].map(function (id) {
+      var p = pos[id];
+      return { name: A[id].name, left: ((p[0] - 7) / 480 * 100).toFixed(2) + '%', top: ((p[1] - 12) / 270 * 100).toFixed(2) + '%', pick: A[id].pick };
+    });
+    var speeds = [1, 2, 4].map(function (v) {
+      var on = s.speed === v;
+      return { label: v + 'x', pressed: on ? 'true' : 'false', bg: on ? '#ffca28' : '#454b55', fg: on ? '#15181c' : '#f5f3ec', pick: function () { self.setState({ speed: v }); } };
+    });
+    var blockedTotal = list.reduce(function (n, a) { return n + a.blockedCount; }, 0);
+    return {
+      A: A,
+      modeLabel: mo.label, modeChip: mo.chip, modeN: mo.n, modeTail: mo.tail, modeDot: mo.dot, modeTip: mo.tip, noSandbox: s.mode === 'subagents-local',
+      cycleMode: function () { self.setState({ mode: MO[(MO.indexOf(self.state.mode) + 1) % MO.length] }); },
+      party: list,
+      hits: hits,
+      sel: sel || list[0],
+      hasSel: !!sel,
+      closeSel: function () { self.setState({ sel: null }); },
+      needCount: list.filter(function (a) { return a.st === 'needs'; }).length,
+      alertCount: 3 + blockedTotal,
+      l2Note: loc ? '1 asks you' : '1 blocked', allowLabel: loc ? 'Allow once' : 'Allow', dismissLabel: loc ? 'Deny' : 'Dismiss',
+      speeds: speeds,
+      toast: s.toast,
+      closeToast: function () { self.setState({ toast: false }); },
+      stations: [
+        { name: 'Orders waiting', short: 'ORDER', n: 2, c: '#9aa1ab' },
+        { name: 'Being coded', short: 'CODE', n: 2, c: '#42a5f5' },
+        { name: 'In test', short: 'TEST', n: 0, c: '#ffa726' },
+        { name: 'At QC review', short: 'QC', n: 1, c: '#ffca28' },
+        { name: 'Shipped', short: 'SHIP', n: 4, c: '#66bb6a' }
+      ],
+      hotbar: [
+        { href: 'NewOrder.dc.html', key: 'Q', short: 'Order', label: 'New order: feature or defect', color: '#9aa1ab', hasBadge: false, badge: '' },
+        { href: 'PRs.dc.html', key: 'W', short: 'QC', label: 'Inspect PRs at the QC gate', color: '#ffca28', hasBadge: true, badge: '2' },
+        { href: 'ActionItems.dc.html', key: 'E', short: 'Unlock', label: loc ? 'Answer permission requests' : 'Open blocked sites for a cage', color: '#66bb6a', hasBadge: blockedTotal > 0, badge: String(blockedTotal) },
+        { href: 'Settings-Project.dc.html', key: 'R', short: 'Stop', label: 'Stop the line (pause all)', color: '#ef5350', hasBadge: false, badge: '' },
+        { href: 'Terminal.dc.html', key: 'T', short: 'Term', label: 'Open a terminal', color: '#42a5f5', hasBadge: false, badge: '' },
+        { href: 'Settings.dc.html', key: 'Y', short: 'Hire', label: 'Hire or edit workers', color: '#ffa726', hasBadge: false, badge: '' }
+      ],
+      feed: [
+        { icon: '!', c: '#ef5350', text: 'Cage 3 blocked api.stripe.com (Nova)', ago: '7s' },
+        { icon: '+', c: '#ff7043', text: 'You approved TEMP-1 for L3 contracts', ago: '4m' },
+        { icon: '▸', c: '#42a5f5', text: 'Byte picked up box T-03 Clerk sign-in', ago: '13s' },
+        { icon: '✉', c: '#ffa726', text: 'Captain → Byte: Pull main, start T-03', ago: '15s' },
+        { icon: '▸', c: '#ffca28', text: 'Pixel carried PR #14 to QC', ago: '1m' },
+        { icon: '✦', c: '#ff8a80', text: 'Echo (peer) sent PR #14 back: 1 change', ago: '1m' },
+        { icon: '▸', c: '#ff8a65', text: 'Nova opened MR !8 on GitLab (draft)', ago: '2m' },
+        { icon: '★', c: '#66bb6a', text: 'PR #12 merged · loaded on truck', ago: '4m' },
+        { icon: '▲', c: '#ffca28', text: 'Pixel reached level 5', ago: '4m' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

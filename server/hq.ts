@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
@@ -28,6 +29,7 @@ export interface HqOptions {
   readonly executors?: Partial<Record<CommandKind, Executor>>;
   readonly mode?: ModeFactory;
   readonly assets?: string;
+  readonly readOnly?: string;
 }
 
 export interface RunningHq {
@@ -42,6 +44,15 @@ export interface RunningHq {
 const MAX_BODY = 1024 * 1024;
 const MAX_DENIALS = 50;
 const DASHBOARD = readFileSync(join(fileURLToPath(new URL('.', import.meta.url)), 'dashboard.html'));
+
+const sha256 = (text: string): string => `'sha256-${createHash('sha256').update(text).digest('base64')}'`;
+const inlineOf = (tag: string): string =>
+  new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(DASHBOARD.toString('utf8'))?.[1] ?? '';
+const SOCKETS = 'ws://127.0.0.1:* ws://localhost:*';
+const POLICY = (script: string, style: string): string =>
+  `default-src 'self'; script-src ${script}; style-src ${style}; img-src 'self' data:; font-src 'self'; connect-src 'self' ${SOCKETS}; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+const FLOOR_POLICY = POLICY("'self'", "'self'");
+const DASHBOARD_POLICY = POLICY(`'self' ${sha256(inlineOf('script'))}`, `'self' ${sha256(inlineOf('style'))}`);
 
 class HttpError extends Error {
   readonly status: number;
@@ -187,6 +198,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
       return;
     }
     if (method === 'GET' && url.pathname === '/') {
+      res.setHeader('content-security-policy', DASHBOARD_POLICY);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       res.end(DASHBOARD);
       return;
@@ -204,6 +216,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
       const read = mode?.route(method, url.pathname, () => readBody(req));
       if (read !== undefined) return send(200, await read);
     }
+    if (options.readOnly !== undefined && method !== 'GET') throw new HttpError(403, options.readOnly);
     if (method !== 'POST' && method !== 'DELETE') throw new HttpError(404, 'not found');
 
     if (method === 'POST' && url.pathname === '/api/events') {
@@ -273,6 +286,8 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
   };
 
   const server: Server = createServer((req, res) => {
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('content-security-policy', FLOOR_POLICY);
     if (!sameOrigin(req)) {
       res.writeHead(403, { 'content-type': 'application/json' }).end('{"error":"forbidden host or origin"}');
       return;

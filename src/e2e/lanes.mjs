@@ -2,7 +2,21 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { AXE, change, green, human, launch, moods, OUT, ROOT, review, sha, startHq } from './harness.mjs';
+import { canvasCompare, pageText } from './canvas-compare.mjs';
+import {
+  change,
+  green,
+  human,
+  launch,
+  moods,
+  OUT,
+  ROOT,
+  review,
+  runAxe,
+  sceneLabelContrast,
+  sha,
+  startHq,
+} from './harness.mjs';
 
 /** @type {{ n: number, name: string, ok: boolean }[]} */
 const results = [];
@@ -21,18 +35,35 @@ const shot = (/** @type {import('playwright').Page} */ page, /** @type {string} 
 const browser = await launch();
 const FIXTURE = join(ROOT, 'fixtures', 'demo', 'events.jsonl');
 
+let labels = [];
+let demoText = '';
+const axe = { violations: [], incomplete: [], states: [] };
+const audit = async (/** @type {import('playwright').Page} */ target, /** @type {string} */ label) => {
+  const out = await runAxe(target, label);
+  axe.violations.push(...out.violations);
+  axe.incomplete.push(...out.incomplete);
+  axe.states.push(label);
+};
 const demo = await startHq({ demo: true, port: 7471, intervalMs: 900 });
 try {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
-  const external = [];
-  page.on('request', (request) => {
-    if (!request.url().startsWith(demo.url) && !request.url().startsWith('data:') && !request.url().startsWith('blob:'))
-      external.push(request.url());
+  const blocked = [];
+  await ctx.route(/.*/, (route) => {
+    const url = route.request().url();
+    if (url.startsWith(demo.url)) return route.continue();
+    blocked.push(url);
+    return route.abort();
   });
-  await page.goto(demo.url);
+  const policyErrors = [];
+  page.on('console', (message) => {
+    if (/Content Security Policy|violates the following/i.test(message.text())) policyErrors.push(message.text());
+  });
+  const first = await page.goto(demo.url);
+  const firstHeaders = first.headers();
 
   const seen = [];
+  const where = {};
   const stationShots = new Set();
   const deadline = Date.now() + 40_000;
   let last = '';
@@ -40,13 +71,15 @@ try {
     const state = await page
       .$eval(
         '[data-box]',
-        (node) => `${node.getAttribute('data-station')}|${node.textContent?.includes('SHIPPED') ? 'SHIPPED' : ''}`,
+        (node) =>
+          `${node.getAttribute('data-station')}|${node.textContent?.includes('SHIPPED') ? 'SHIPPED' : ''}|${/translate\(([\d.]+)px/.exec(node.style.transform)?.[1]}`,
       )
       .catch(() => '');
-    const [station, stamp] = state.split('|');
+    const [station, stamp, x] = state.split('|');
     if (station && station !== last) {
       seen.push(station);
       last = station;
+      where[station] = Number(x);
       if (!stationShots.has(station)) {
         stationShots.add(station);
         await shot(page, `station-${station}.png`);
@@ -58,11 +91,16 @@ try {
   await sleep(1200);
   await shot(page, 'demo-run.png');
   const wanted = ['ORDER', 'CODE', 'TEST', 'QC', 'TEST', 'QC', 'MERGE', 'SHIPPING'];
+  const gantry = { TEST: [250, 267], QC: [276, 298], MERGE: [305, 319] };
+  const onGantry = Object.entries(gantry).every(([station, [from, to]]) => {
+    const x = where[station] === undefined ? Number.NaN : where[station] + 4.5;
+    return x >= from && x <= to;
+  });
   lane(
     1,
     'demo run',
-    JSON.stringify(seen) === JSON.stringify(wanted) && (await page.locator('text=SHIPPED').count()) > 0,
-    `stations seen ${seen.join(' > ')}`,
+    JSON.stringify(seen) === JSON.stringify(wanted) && (await page.locator('text=SHIPPED').count()) > 0 && onGantry,
+    `stations seen ${seen.join(' > ')}; box x at TEST ${where.TEST}, QC ${where.QC}, MERGE ${where.MERGE} (gantries 250-267, 276-298, 305-319)`,
   );
 
   const bytes = readFileSync(FIXTURE);
@@ -86,44 +124,39 @@ try {
   );
   lane(2, 'demo source', fileHash === info.sha256 && same, `sha256 ${fileHash.slice(0, 16)} equal ${same}`);
 
+  const outside = blocked.length;
+  const probe = await ctx.newPage();
+  await probe.goto('http://192.0.2.1:9/').catch(() => {});
+  await probe.close();
+  const blockerWorks = blocked.length === outside + 1;
   lane(
     7.5,
     'no network at runtime',
-    external.length === 0,
-    external.length === 0 ? 'every request went to HQ' : external.join(' '),
+    outside === 0 &&
+      blockerWorks &&
+      policyErrors.length === 0 &&
+      firstHeaders['x-content-type-options'] === 'nosniff' &&
+      /script-src 'self';/.test(firstHeaders['content-security-policy'] ?? ''),
+    `${outside} requests to a host other than HQ (blocked and counted; the blocker itself ${blockerWorks ? 'caught' : 'MISSED'} a probe to 192.0.2.1), ${policyErrors.length} CSP violations ${policyErrors.join(' ').slice(0, 300)}, nosniff and script-src 'self' on /`,
   );
 
-  const axeSource = readFileSync(AXE, 'utf8');
-  const runAxe = async (/** @type {import('playwright').Page} */ target, /** @type {string} */ label) => {
-    await target.evaluate(axeSource);
-    const out = await target.evaluate(() => globalThis.axe.run(document, { resultTypes: ['violations'] }));
-    return out.violations.map(
-      (v) =>
-        `${label} ${v.id} (${v.impact}) ${v.nodes.length} nodes: ${v.nodes
-          .slice(0, 3)
-          .map((n) => n.target.join(' '))
-          .join(' | ')}`,
-    );
-  };
-  const axeLines = [...(await runAxe(page, 'en floor'))];
+  await audit(page, 'demo EN floor (SHIPPED, all on break)');
   await page.click('[data-testid=open-actions]');
-  axeLines.push(...(await runAxe(page, 'en actions drawer')));
+  await audit(page, 'demo EN Action items drawer (empty)');
   await page.keyboard.press('Escape');
   await page.keyboard.press('d');
   await page.click('[data-testid=lang-th]');
-  axeLines.push(...(await runAxe(page, 'th debug drawer')));
+  await audit(page, 'demo TH Debug drawer');
   await page.keyboard.press('Escape');
-  axeLines.push(...(await runAxe(page, 'th floor')));
+  await audit(page, 'demo TH floor');
+  labels = await sceneLabelContrast(page);
   await page.click('[data-testid=open-debug]');
   await page.click('[data-testid=lang-en]');
   await page.keyboard.press('Escape');
-  const serious = axeLines.filter((line) => /\((serious|critical)\)/.test(line));
-  writeFileSync(
-    join(OUT, 'axe.txt'),
-    `${axeLines.length === 0 ? 'axe-core 4.14.1: 0 violations of any impact on 5 states (EN floor, EN Action items drawer, TH Debug drawer, TH floor)\n' : `${axeLines.join('\n')}\n`}serious or critical: ${serious.length}\n`,
-  );
-  lane(7, 'axe-core', axeLines.length === 0, `${axeLines.length} violations, ${serious.length} serious`);
 
+  const toastText = () => page.$eval('.toast span', (node) => node.textContent);
+  const htmlLang = () => page.evaluate(() => document.documentElement.lang);
+  const toastEn = await toastText();
   const before = await page.evaluate(() => {
     globalThis.__marker = 1;
     return document.body.textContent;
@@ -133,17 +166,48 @@ try {
   await page.keyboard.press('Escape');
   const after = await page.evaluate(() => document.body.textContent);
   const marker = await page.evaluate(() => globalThis.__marker);
+  const toastTh = await toastText();
+  const langTh = await htmlLang();
   const svgText = await page.$$eval('svg text', (nodes) => nodes.map((node) => node.textContent ?? '').join(' '));
   const thai = /[฀-๿]/;
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send('DOM.enable');
+  await cdp.send('CSS.enable');
+  const { root } = await cdp.send('DOM.getDocument');
+  const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: 'h2.pixel' });
+  const heading = await page.$eval('h2.pixel', (node) => node.textContent ?? '');
+  const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId });
+  const families = fonts.map((font) => font.familyName);
   await shot(page, 'thai.png');
+  await page.reload();
+  await page.waitForSelector('[data-worker]');
+  const keptTh = {
+    lang: await htmlLang(),
+    text: thai.test(await page.evaluate(() => document.body.textContent ?? '')),
+  };
   lane(
     8,
     'Thai',
-    before !== after && marker === 1 && thai.test(after) && !thai.test(svgText) && svgText.includes('SHIPPED'),
-    `HUD changed, no reload (marker kept), scene text has no Thai and keeps SHIPPED`,
+    before !== after &&
+      marker === 1 &&
+      thai.test(after) &&
+      !thai.test(svgText) &&
+      svgText.includes('SHIPPED') &&
+      langTh === 'th' &&
+      thai.test(toastTh ?? '') &&
+      !/merged and shipped/.test(toastTh ?? '') &&
+      /merged and shipped/.test(toastEn ?? '') &&
+      thai.test(heading) &&
+      families.includes('Sarabun') &&
+      families.every((family) => ['Sarabun', 'Silkscreen'].includes(family)) &&
+      keptTh.lang === 'th' &&
+      keptTh.text,
+    `HUD changed with no reload (marker kept), html lang ${langTh}, toast re-rendered in Thai ("${toastTh}"), scene text has no Thai and keeps SHIPPED, Thai in .pixel drawn with ${families.join(' + ')}, Thai kept after a reload (lang ${keptTh.lang})`,
   );
   await page.keyboard.press('d');
   await page.click('[data-testid=lang-en]');
+  const langEn = await htmlLang();
+  lane(8.5, 'html lang follows the switch', langEn === 'en', `back to ${langEn}`);
   await page.keyboard.press('Escape');
 
   await page.keyboard.press('1');
@@ -212,65 +276,14 @@ try {
   );
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  const animating = async (/** @type {import('playwright').Page} */ target) =>
-    target.evaluate(
-      () =>
-        document.getAnimations().filter((a) => a.constructor.name === 'CSSAnimation' && a.playState === 'running')
-          .length,
-    );
-  const motionOn = await animating(page);
-  const calm = await ctx.newPage();
-  await calm.emulateMedia({ reducedMotion: 'reduce' });
-  await calm.goto(demo.url);
-  await calm.waitForSelector('[data-worker]');
-  await sleep(500);
-  const motionOff = await animating(calm);
-  const moving = await calm.evaluate(
-    () => document.getAnimations().filter((a) => a.constructor.name === 'CSSTransition').length,
-  );
-  await shot(calm, 'reduced-motion.png');
-  lane(
-    6,
-    'reduced motion',
-    motionOn > 0 && motionOff === 0 && moving === 0,
-    `running CSS animations: ${motionOn} normal, ${motionOff} with prefers-reduced-motion, transitions ${moving}`,
-  );
-  await calm.close();
-
-  const canvasPage = await ctx.newPage();
-  await canvasPage.goto(demo.url);
-  await canvasPage.waitForSelector('[data-box]');
-  await canvasPage.evaluate(() => {
-    const notes = [
-      ['.logo', '1'],
-      ['[data-testid=open-actions]', '2'],
-      ['.crew', '3'],
-      ['.counts', '4'],
-      ['.scene svg', '5'],
-    ];
-    for (const [selector, label] of notes) {
-      const node = document.querySelector(selector);
-      if (!node) continue;
-      const r = node.getBoundingClientRect();
-      const badge = document.createElement('div');
-      badge.textContent = label;
-      badge.style.cssText = `position:fixed;left:${r.left + r.width / 2 - 12}px;top:${r.bottom - 12}px;z-index:99;background:#ef5350;color:#15181c;font:700 16px sans-serif;padding:2px 7px;border:2px solid #15181c`;
-      document.body.append(badge);
-    }
-  });
-  await shot(canvasPage, 'canvas-compare.png');
-  lane(
-    9,
-    'canvas compare',
-    true,
-    'floor annotated against the artboard source text; the differences are listed in the PR body (artboard not rendered, it needs the Design runtime on claude.ai)',
-  );
+  demoText = await pageText(page);
   await ctx.close();
 } finally {
   await demo.stop();
 }
 
 const live = await startHq({ port: 7472 });
+let builtShot = '';
 try {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
@@ -318,15 +331,33 @@ try {
       ),
     };
   });
-  writeFileSync(join(OUT, 'sprite-states.txt'), `${JSON.stringify({ steps, anim }, null, 1)}\n`);
+  const bangs = await page.evaluate(() => ({
+    buttons: [...document.querySelectorAll('[data-testid^=bang-]')].map((node) =>
+      node.getAttribute('data-testid')?.slice(5),
+    ),
+    art: [...document.querySelectorAll('[data-worker]')]
+      .filter((node) => [...node.querySelectorAll('text')].some((text) => text.textContent === '!'))
+      .map((node) => node.getAttribute('data-worker')),
+  }));
+  const needing = Object.entries(final)
+    .filter(([, mood]) => mood === 'needs')
+    .map(([name]) => name);
+  writeFileSync(join(OUT, 'sprite-states.txt'), `${JSON.stringify({ steps, anim, bangs }, null, 1)}\n`);
   lane(
     3,
     'sprite states',
-    hasAll && anim.working && anim.needs && anim.break && anim.qcMoved,
-    `moods ${JSON.stringify(final)} animations ${JSON.stringify(anim)}`,
+    hasAll &&
+      anim.working &&
+      anim.needs &&
+      anim.break &&
+      anim.qcMoved &&
+      JSON.stringify(bangs.buttons) === JSON.stringify(needing) &&
+      JSON.stringify(bangs.art) === JSON.stringify(needing),
+    `moods ${JSON.stringify(final)} animations ${JSON.stringify(anim)}; "!" button on ${bangs.buttons}, "!" art on ${bangs.art}, workers that need you ${needing}`,
   );
 
-  await page.click('[data-testid^=bang-]');
+  await audit(page, 'live EN floor (Needs you, At QC, Working, On break)');
+  await page.click('[data-testid=bang-nova]');
   await page.waitForSelector('[data-testid=drawer-actions]');
   const dim = await page.evaluate(() => {
     const overlay = /** @type {HTMLElement} */ (document.querySelector('.dim'));
@@ -346,6 +377,105 @@ try {
     dim.full && dim.inert && /rgba\(8, 10, 12, 0\.72\)/.test(dim.background) && /nova/i.test(ticket ?? ''),
     `drawer over dimmed floor ${JSON.stringify(dim)}; ticket "${ticket}"`,
   );
+  await audit(page, 'live EN Action items drawer (one ticket for nova)');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('1');
+  await audit(page, 'live EN floor with the worker card open');
+  await page.keyboard.press('Escape');
+  await page.click('[data-testid=open-debug]');
+  await page.click('[data-testid=lang-th]');
+  await page.keyboard.press('Escape');
+  await audit(page, 'live TH floor (Needs you)');
+  await page.keyboard.press('d');
+  await page.click('[data-testid=lang-en]');
+  await page.keyboard.press('Escape');
+
+  const incompleteTargets = [...new Set(axe.incomplete.map((line) => line.replace(/^.*? (\S+ \(\S+\) )/, '$1')))];
+  const firewall = labels.find((row) => row.text === 'FIREWALL');
+  const lowest = [...labels].sort((a, b) => a.ratio - b.ratio).slice(0, 8);
+  writeFileSync(
+    join(OUT, 'axe.txt'),
+    [
+      `axe-core 4.14.1 on ${axe.states.length} states:`,
+      ...axe.states.map((state) => `  ${state}`),
+      `violations of any impact: ${axe.violations.length}`,
+      ...axe.violations.map((line) => `  ${line}`),
+      `incomplete (axe could not decide, NOT passes): ${axe.incomplete.length} nodes over ${axe.states.length} states, ${incompleteTargets.length} distinct rule/target pairs`,
+      ...axe.incomplete.map((line) => `  ${line}`),
+      '',
+      'Estimated contrast of the scene labels (SVG text against the rect painted under it, an estimate, not axe):',
+      ...lowest.map((row) => `  ${row.ratio}:1  "${row.text}" size ${row.size}  rgb(${row.fg}) on rgb(${row.bg})`),
+      `  FIREWALL art label: ${firewall?.ratio}:1 (needs 4.5)`,
+      '',
+    ].join('\n'),
+  );
+  lane(
+    7,
+    'axe-core',
+    axe.violations.length === 0 && firewall !== undefined && firewall.ratio >= 4.5,
+    `${axe.violations.length} violations on ${axe.states.length} states, ${axe.incomplete.length} incomplete nodes recorded in axe.txt (undecided, not passed), FIREWALL art label ${firewall?.ratio}:1`,
+  );
+
+  const sprites = async (/** @type {import('playwright').Page} */ target) =>
+    target.$$eval('[data-worker]', (nodes) => nodes.length);
+  const motion = await ctx.newPage();
+  const calm = await (
+    await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' })
+  ).newPage();
+  for (const target of [motion, calm]) {
+    await target.goto(live.url);
+    await target.waitForSelector('[data-worker]');
+  }
+  const counting = (/** @type {string} */ kind) =>
+    document.getAnimations().filter((a) => a.constructor.name === kind && a.playState === 'running').length;
+  const watch = async (/** @type {import('playwright').Page} */ target, /** @type {number} */ ms) => {
+    const peak = { CSSAnimation: 0, CSSTransition: 0 };
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      for (const kind of /** @type {const} */ (['CSSAnimation', 'CSSTransition']))
+        peak[kind] = Math.max(peak[kind], await target.evaluate(counting, kind));
+      await sleep(30);
+    }
+    return peak;
+  };
+  const watching = Promise.all([watch(motion, 3600), watch(calm, 3600)]);
+  await sleep(300);
+  await live.post(human('order', { task: 'gamma/three', shipment: null }));
+  await sleep(500);
+  await live.post(human('hire', { task: 'gamma/three', worker: 'vega' }));
+  await sleep(500);
+  await live.post(change('gamma/three', 3, 'vega', sha('c'), 'open', 1010));
+  await sleep(500);
+  await live.post(green(sha('c'), 1011));
+  const [moving, still] = await watching;
+  await shot(calm, 'reduced-motion.png');
+  lane(
+    6,
+    'reduced motion',
+    moving.CSSAnimation > 0 && moving.CSSTransition > 0 && still.CSSAnimation === 0 && still.CSSTransition === 0,
+    `sampled every 30 ms for 3.6 s while a box moved through four stations: peak running CSS animations ${moving.CSSAnimation} and transitions ${moving.CSSTransition} normally, ${still.CSSAnimation} and ${still.CSSTransition} with prefers-reduced-motion`,
+  );
+  await calm.context().close();
+  await motion.close();
+
+  for (const worker of ['atlas', 'juno', 'kai']) await live.post(human('add_worker', { worker }));
+  await page.waitForFunction(() => document.querySelectorAll('.crew li').length === 7);
+  await sleep(500);
+  const crew = await page.$$eval('.crew li', (nodes) => nodes.length);
+  const drawn = await sprites(page);
+  lane(
+    3.5,
+    'six cages, seven workers',
+    crew === 7 && drawn === 6,
+    `roster lists ${crew} workers, the scene draws ${drawn} (one per cage)`,
+  );
+
+  await page.setViewportSize({ width: 1440, height: 980 });
+  await sleep(300);
+  builtShot = join(OUT, 'floor-live.png');
+  await page.screenshot({ path: builtShot });
+  const verdict = await canvasCompare(browser, page, builtShot, demoText);
+  lane(9, 'canvas compare', verdict.ok, verdict.note);
   await ctx.close();
 } finally {
   await live.stop();

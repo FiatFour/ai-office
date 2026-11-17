@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readAsset } from '../../server/assets.ts';
@@ -14,12 +14,13 @@ afterEach(async () => {
   await Promise.all(running.splice(0).map((hq) => hq.close()));
 });
 
-const boot = async (options: { demo?: boolean; assets?: string } = {}): Promise<RunningHq> => {
+const boot = async (options: { demo?: boolean; assets?: string; readOnly?: string } = {}): Promise<RunningHq> => {
   const hq = await startHq({
     home: tempDir('demo'),
     port: 0,
     ...(options.demo === true ? { mode: demoMode(loadDemo(FIXTURE, 'fixtures/demo/events.jsonl'), 5) } : {}),
     ...(options.assets === undefined ? {} : { assets: options.assets }),
+    ...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
   });
   running.push(hq);
   return hq;
@@ -47,6 +48,64 @@ describe('built assets', () => {
     expect(readAsset(root, '/nope.js')).toBeNull();
     expect(readAsset(root, '/%E0%A4%A')).toBeNull();
   });
+
+  it('refuses a path with no leading slash that climbs out of the folder', () => {
+    const inner = join(root, 'inner');
+    mkdirSync(inner, { recursive: true });
+    writeFileSync(join(inner, 'a.js'), 'x');
+    expect(readAsset(inner, '../app.js')).toBeNull();
+    expect(readAsset(inner, 'a.js')?.body.toString()).toBe('x');
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a symlink to a file outside the folder and one inside it', () => {
+    const outside = join(tempDir('outside'), 'secret.txt');
+    writeFileSync(outside, 'secret');
+    symlinkSync(outside, join(root, 'leak.txt'));
+    symlinkSync(join(root, 'app.js'), join(root, 'alias.js'));
+    mkdirSync(join(root, 'sub'), { recursive: true });
+    writeFileSync(join(root, 'sub', 'b.js'), 'b');
+    symlinkSync(join(root, 'sub'), join(root, 'linked-dir'));
+    expect(readAsset(root, '/leak.txt')).toBeNull();
+    expect(readAsset(root, '/alias.js')).toBeNull();
+    expect(readAsset(root, '/linked-dir/b.js')).toBeNull();
+    expect(readAsset(root, '/sub/b.js')?.body.toString()).toBe('b');
+  });
+
+  it.skipIf(!hasSqlite)('HQ serves only GET requests for assets', async () => {
+    const hq = await boot({ assets: root });
+    for (const method of ['POST', 'PUT', 'DELETE'])
+      expect((await fetch(`${hq.url}/app.js`, { method })).status).toBe(404);
+  });
+
+  it.skipIf(!hasSqlite)(
+    'HQ answers every response with nosniff and a policy that allows no inline script',
+    async () => {
+      const hq = await boot({ assets: root });
+      for (const path of ['/', '/app.js', '/api/health', '/api/missing']) {
+        const res = await fetch(`${hq.url}${path}`);
+        expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+        const policy = res.headers.get('content-security-policy') ?? '';
+        expect(policy).toContain("default-src 'self'");
+        expect(policy).toContain("script-src 'self';");
+        expect(policy).not.toContain('unsafe-inline');
+        expect(policy).not.toMatch(/https?:\/\//);
+      }
+      const forbidden = await fetch(`${hq.url}/app.js`, { headers: { origin: 'http://evil.test' } });
+      expect(forbidden.status).toBe(403);
+      expect(forbidden.headers.get('x-content-type-options')).toBe('nosniff');
+    },
+  );
+
+  it.skipIf(!hasSqlite)(
+    'the plain dashboard allows its one inline script and style by hash, nothing else',
+    async () => {
+      const hq = await boot();
+      const policy = (await fetch(`${hq.url}/`)).headers.get('content-security-policy') ?? '';
+      expect(policy).toMatch(/script-src 'self' 'sha256-[\w+/=]+';/);
+      expect(policy).toMatch(/style-src 'self' 'sha256-[\w+/=]+';/);
+      expect(policy).not.toContain('unsafe-inline');
+    },
+  );
 
   it.skipIf(!hasSqlite)('HQ serves them on GET and keeps the API', async () => {
     const hq = await boot({ assets: root });
@@ -97,9 +156,58 @@ describe.skipIf(!hasSqlite)('demo mode', () => {
     expect((await fetch(`${hq.url}/api/demo`)).status).toBe(404);
   });
 
-  it('refuses a fixture line that is not an event', () => {
+  it('names the file and the line of a fixture line that is not an event or not JSON', () => {
     const dir = tempDir('badfixture');
-    writeFileSync(join(dir, 'e.jsonl'), '{"seq":1,"event":{"source":"human","kind":"nope"}}\n');
-    expect(() => loadDemo(join(dir, 'e.jsonl'), 'x')).toThrow();
+    const good = '{"seq":1,"event":{"source":"human","kind":"add_worker","worker":"nova"}}';
+    writeFileSync(join(dir, 'e.jsonl'), `${good}\n\n{"seq":2,"event":{"source":"human","kind":"nope"}}\n`);
+    expect(() => loadDemo(join(dir, 'e.jsonl'), 'x.jsonl')).toThrow(/^x\.jsonl line 3: /);
+    writeFileSync(join(dir, 'f.jsonl'), `${good}\nnot json\n`);
+    expect(() => loadDemo(join(dir, 'f.jsonl'), 'x.jsonl')).toThrow(/^x\.jsonl line 2: not a JSON line/);
+    expect(() => loadDemo(join(dir, 'missing.jsonl'), 'x.jsonl')).toThrow(/cannot read/);
+  });
+});
+
+describe.skipIf(!hasSqlite)('demo mode is read-only', () => {
+  const MESSAGE = 'demo mode is read-only';
+  const event = { source: 'human', kind: 'add_worker', worker: 'mallory' };
+  const writes: [string, string, unknown][] = [
+    ['POST', '/api/events', event],
+    ['POST', '/api/factories', { root: '/tmp/x' }],
+    ['POST', '/api/repos', { factory: 'x', path: '/tmp/x' }],
+    ['POST', '/api/stop', {}],
+    ['POST', '/api/cages', { task: 't', worker: 'w', source: 's' }],
+    ['DELETE', '/api/cages/anything', undefined],
+    ['PUT', '/api/events', event],
+    ['POST', '/api/anything-else', {}],
+  ];
+
+  it.each(writes)('%s %s is refused with 403 and says why', async (method, path, body) => {
+    const hq = await boot({ demo: true, readOnly: MESSAGE });
+    const res = await fetch(`${hq.url}${path}`, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toContain(MESSAGE);
+    expect(hq.snapshot().state.staff.mallory).toBeUndefined();
+  });
+
+  it('still replays the recorded run and answers reads', async () => {
+    const hq = await boot({ demo: true, readOnly: MESSAGE });
+    await until(() => hq.snapshot().state.boxes['alpha/p12c']?.state === 'shipped');
+    expect((await fetch(`${hq.url}/api/health`)).status).toBe(200);
+    expect((await fetch(`${hq.url}/api/demo`)).status).toBe(200);
+    expect((await fetch(`${hq.url}/api/missing`)).status).toBe(404);
+  });
+
+  it('a normal HQ still takes writes', async () => {
+    const hq = await boot();
+    const res = await fetch(`${hq.url}/api/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(event),
+    });
+    expect(res.status).toBe(200);
   });
 });

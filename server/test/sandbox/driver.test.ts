@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -227,12 +227,16 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
     }, 120_000);
 
     it('refuses an export when git archive fails half way, leaving a tar that looks whole', async () => {
-      const source = fixtureRepo(tempDir('driver-halfway'), canary);
+      const source = folder(tempDir('driver-halfway'), 'source');
+      git(source, 'init', '-q', '-b', 'main');
+      writeFileSync(join(source, 'a.txt'), 'a'.repeat(8704));
       writeFileSync(join(source, 'zz.txt'), 'last\n');
       git(source, 'add', '-A');
-      git(source, 'commit', '-qm', 'second file');
+      git(source, 'commit', '-qm', 'two files');
       const blob = execFileSync('git', ['rev-parse', 'HEAD:zz.txt'], { cwd: source, encoding: 'utf8' }).trim();
-      rmSync(join(source, '.git', 'objects', blob.slice(0, 2), blob.slice(2)), { force: true });
+      const loose = join(source, '.git', 'objects', blob.slice(0, 2), blob.slice(2));
+      chmodSync(loose, 0o644);
+      writeFileSync(loose, 'garbage');
       const dest = join(tempDir('driver-halfway-dest'), 'repo');
       await expect(exportRepo(source, dest, (args, mounts) => driver.throwaway(args, mounts))).rejects.toThrow(
         /git archive/,

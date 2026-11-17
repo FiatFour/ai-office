@@ -155,6 +155,21 @@ live('the CLI as a process', () => {
     expect(res.err).toContain('--port');
   });
 
+  it('names the other HQ when a second home asks for a port an HQ already holds', async () => {
+    const root = tempDir('cli-other-hq');
+    const [one, two] = [folder(root, 'home-one'), folder(root, 'home-two')] as [string, string];
+    homes.push(one);
+    const port = String(await freePort());
+    const first = cli(folder(root, 'a'), one, ['--no-open', '--port', port]);
+    expect(first.code).toBe(0);
+    const pid = /pid (\d+)/.exec(first.out)?.[1];
+    const second = cli(folder(root, 'b'), two, ['--no-open', '--port', port]);
+    expect(second.code).toBe(2);
+    expect(second.err).toContain(`another HQ (pid ${pid})`);
+    expect(second.err).not.toContain('Another program');
+    expect(second.err).toContain('--port');
+  });
+
   it('adds one repo to two factories with one entry in repos.json', async () => {
     const root = tempDir('cli-many');
     const home = folder(root, 'home');

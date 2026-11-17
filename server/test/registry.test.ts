@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Registry, repoIdFrom } from '../registry.ts';
@@ -76,5 +76,60 @@ describe('registry', () => {
     const home = folder(root, 'home');
     writeFileSync(join(home, 'repos.json'), '{not json');
     expect(() => new Registry(home)).toThrow();
+  });
+
+  it('keeps one id for one clone whether or not a remote is given, in either order', () => {
+    for (const order of [
+      [null, 'https://github.com/acme/app.git'],
+      ['https://github.com/acme/app.git', null],
+    ]) {
+      const root = tempDir('registry-remote');
+      const registry = new Registry(folder(root, 'home'));
+      const a = folder(root, 'a');
+      const clone = folder(root, 'clone');
+      registry.addFactory(a);
+      for (const remote of order) registry.addRepo(a, { path: clone, remote });
+      const view = registry.view();
+      expect(view.repos.map((r) => r.id)).toEqual(['github.com/acme/app']);
+      expect(view.factories[0]?.repos).toEqual(['github.com/acme/app']);
+    }
+  });
+
+  it('moves every factory to the remote id when a clone first known by path gains a remote', () => {
+    const root = tempDir('registry-upgrade');
+    const registry = new Registry(folder(root, 'home'));
+    const [a, b, clone] = [folder(root, 'a'), folder(root, 'b'), folder(root, 'clone')] as [string, string, string];
+    registry.addFactory(a);
+    registry.addFactory(b);
+    registry.addRepo(a, { path: clone, remote: null });
+    registry.addRepo(b, { path: clone, remote: null });
+    registry.addRepo(a, { path: clone, remote: 'git@github.com:acme/app.git' });
+    const view = registry.view();
+    expect(view.repos.map((r) => r.id)).toEqual(['github.com/acme/app']);
+    expect(view.factories.map((f) => f.repos)).toEqual([['github.com/acme/app'], ['github.com/acme/app']]);
+  });
+
+  it('sees a symlinked path as the same clone and the same factory', () => {
+    const root = tempDir('registry-link');
+    const registry = new Registry(folder(root, 'home'));
+    const real = folder(root, 'real');
+    const link = join(root, 'link');
+    symlinkSync(real, link);
+    const first = registry.addFactory(real).factory;
+    expect(registry.addFactory(link)).toMatchObject({ created: false, factory: { id: first.id } });
+    registry.addRepo(real, { path: real, remote: null });
+    expect(registry.addRepo(link, { path: link, remote: null }).changed).toBe(false);
+    expect(registry.view().repos).toHaveLength(1);
+  });
+
+  it('keeps the first clone path when a second clone of the same remote is added', () => {
+    const root = tempDir('registry-second');
+    const registry = new Registry(folder(root, 'home'));
+    const [a, one, two] = [folder(root, 'a'), folder(root, 'one'), folder(root, 'two')] as [string, string, string];
+    registry.addFactory(a);
+    const remote = 'https://github.com/acme/app.git';
+    registry.addRepo(a, { path: one, remote });
+    registry.addRepo(a, { path: two, remote });
+    expect(registry.view().repos[0]?.path).toBe(one);
   });
 });

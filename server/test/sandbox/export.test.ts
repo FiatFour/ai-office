@@ -1,3 +1,4 @@
+import { CageError, homeName } from '../../sandbox/container.ts';
 import { describe, expect, it } from 'vitest';
 import { ExportError, exportRepo, scanInContainer } from '../../sandbox/export.ts';
 import { tempDir } from '../helpers.ts';
@@ -34,5 +35,19 @@ describe('export', () => {
   it('fails when the contained archive step fails', async () => {
     const root = tempDir('export');
     await expect(exportRepo(root, join(root, 'd'), answering(1, '', 'boom'))).rejects.toThrow('boom');
+  });
+});
+
+describe('worker home names', () => {
+  it('give different workers different homes, including ones that slug alike', () => {
+    const names = ['Nova', 'nova', 'nova!', 'nova-', '!!!', '???', 'a b', 'a-b', 'é', 'è'].map(homeName);
+    expect(new Set(names).size).toBe(names.length);
+    for (const name of names) expect(name).toMatch(/^[a-z0-9-]+$/);
+  });
+
+  it('names a home deterministically and refuses an empty worker', () => {
+    expect(homeName('nova')).toBe(homeName('nova'));
+    expect(() => homeName('')).toThrow(CageError);
+    expect(() => homeName('  ')).toThrow(CageError);
   });
 });

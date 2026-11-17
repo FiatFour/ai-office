@@ -110,6 +110,12 @@ export const ensureHq = async (
     return { runtime: running, reused: true };
   }
   const state = await portState(wantedPort);
+  if (state.state === 'hq') {
+    throw new CliError(
+      `Port ${wantedPort} is held by another HQ (pid ${state.pid}) that uses a different home. Stop it with agent-works stop from its home, or start this one on a free port with: agent-works --port <number>`,
+      2,
+    );
+  }
   if (state.state !== 'free') {
     throw new CliError(
       `Port ${wantedPort} is busy. Another program holds it. Start HQ on a free port with: agent-works --port <number>`,

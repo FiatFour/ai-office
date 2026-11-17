@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coldStarts, pushLatencies, stats } from '../perf/probe.ts';
+import { cliStarts, coldStarts, pushLatencies, stats } from '../perf/probe.ts';
 
 const canRun =
   (process.features as { typescript?: boolean | string }).typescript !== undefined &&
@@ -17,6 +17,8 @@ describe('perf probe', () => {
     async () => {
       const [cold] = await coldStarts(1);
       expect(cold).toBeGreaterThan(0);
+      const [cli] = await cliStarts(1);
+      expect(cli).toBeGreaterThan(0);
       const push = await pushLatencies(20);
       expect(push.client).toHaveLength(20);
       expect(stats(push.client).p95).toBeLessThan(1000);

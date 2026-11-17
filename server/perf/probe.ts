@@ -87,6 +87,32 @@ export const coldStarts = async (count: number): Promise<number[]> => {
   return out;
 };
 
+const runCli = (home: string, cwd: string, args: string[]): Promise<{ code: number | null; ms: number }> =>
+  new Promise((resolve, reject) => {
+    const started = now();
+    const child = spawn(process.execPath, [...process.execArgv, BIN, ...args, '--home', home], {
+      cwd,
+      stdio: 'ignore',
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => resolve({ code, ms: now() - started }));
+  });
+
+export const cliStarts = async (count: number): Promise<number[]> => {
+  const out: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const home = mkdtempSync(join(tmpdir(), 'aw-cli-'));
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'aw-cli-f-')));
+    const started = await runCli(home, cwd, ['--no-open', '--port', String(await freePort())]);
+    await runCli(home, cwd, ['stop']);
+    rmSync(home, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+    if (started.code !== 0) throw new Error(`agent-works exited ${started.code} while starting HQ`);
+    out.push(started.ms);
+  }
+  return out;
+};
+
 export const pushLatencies = async (changes: number): Promise<{ client: number[]; server: number[] }> => {
   const home = mkdtempSync(join(tmpdir(), 'aw-push-'));
   const factories = realpathSync(mkdtempSync(join(tmpdir(), 'aw-push-f-')));
@@ -136,8 +162,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   };
   const wantedCold = arg('cold', 10);
   const wantedChanges = arg('changes', 500);
-  const cold = stats(await coldStarts(wantedCold));
-  console.log(`cold start to first snapshot (measured): ${fmt(cold)}`);
+  const cold = stats(await cliStarts(wantedCold));
+  console.log(`agent-works --no-open to HQ up, the real CLI start path (measured): ${fmt(cold)}`);
+  console.log(`serve process to first snapshot, no CLI (measured): ${fmt(stats(await coldStarts(wantedCold)))}`);
   const push = await pushLatencies(wantedChanges);
   const client = stats(push.client);
   console.log(`registry change to pushed revision, client clock (measured): ${fmt(client)}`);

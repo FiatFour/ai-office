@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { insideCage } from '../config.ts';
@@ -45,6 +45,11 @@ const slug = (text: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 40);
+
+export const homeName = (worker: string): string => {
+  if (worker.trim() === '') throw new CageError('a worker name cannot be empty');
+  return `${slug(worker) || 'worker'}-${createHash('sha256').update(worker).digest('hex').slice(0, 24)}`;
+};
 
 export class SandboxDriver {
   readonly engine: Engine;
@@ -135,10 +140,11 @@ export class SandboxDriver {
         `${spec.source} is inside a cage or a worker home, which an agent can write. Export from the operator's own clone instead.`,
       );
     await this.requireImage();
+    const homeSlug = homeName(spec.worker);
     const id = `${slug(spec.task)}-${randomBytes(3).toString('hex')}`;
     const cageDir = join(this.home, 'cages', id);
     const repo = exportPath(join(this.home, 'cages'), id);
-    const homeDir = join(this.home, 'homes', slug(spec.worker));
+    const homeDir = join(this.home, 'homes', homeSlug);
     mkdirSync(homeDir, { recursive: true });
     try {
       const run = (args: string[], mounts: string[]) => this.throwaway(args, mounts);

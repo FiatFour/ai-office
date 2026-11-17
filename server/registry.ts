@@ -22,10 +22,10 @@ export interface RegistryView {
 
 export class RegistryError extends Error {}
 
-const canonicalPath = (path: string): string => {
-  const real = realpathSync(resolve(path));
-  return process.platform === 'win32' || process.platform === 'darwin' ? real.toLowerCase() : real;
-};
+const caseKey = (path: string): string =>
+  process.platform === 'win32' || process.platform === 'darwin' ? path.toLowerCase() : path;
+
+const canonicalPath = (path: string): string => caseKey(realpathSync(resolve(path)));
 
 export const repoIdFrom = (remote: string | null, path: string): string => {
   if (remote === null) return `local:${canonicalPath(path)}`;
@@ -79,16 +79,26 @@ export class Registry {
   addRepo(factoryRoot: string, spec: { path: string; remote?: string | null }): { repo: RepoEntry; changed: boolean } {
     const factory = this.factories[canonicalPath(factoryRoot)];
     if (factory === undefined) throw new RegistryError(`no factory at ${factoryRoot}`);
+    const real = realpathSync(resolve(spec.path));
     const remote = spec.remote ?? null;
-    const id = repoIdFrom(remote, spec.path);
-    const repo = this.repos[id] ?? { id, remote, path: resolve(spec.path) };
-    const isNew = this.repos[id] === undefined;
-    const joins = !factory.repos.includes(id);
-    if (!isNew && !joins) return { repo, changed: false };
-    if (isNew) this.repos = { ...this.repos, [id]: repo };
-    if (joins) {
-      this.factories = { ...this.factories, [factory.id]: { ...factory, repos: [...factory.repos, id].sort() } };
-    }
+    const known = Object.values(this.repos).find((entry) => caseKey(entry.path) === caseKey(real));
+    const id = remote === null && known !== undefined ? known.id : repoIdFrom(remote, real);
+    const renamed = known !== undefined && known.id !== id;
+    const existing = this.repos[id];
+    const repo = existing ?? { id, remote: remote ?? known?.remote ?? null, path: known?.path ?? real };
+    const joins = !(this.factories[factory.id]?.repos ?? factory.repos).includes(id);
+    if (existing !== undefined && !joins && !renamed) return { repo, changed: false };
+    const repos = { ...this.repos };
+    if (renamed && known !== undefined) delete repos[known.id];
+    repos[id] = repo;
+    this.repos = repos;
+    this.factories = Object.fromEntries(
+      Object.entries(this.factories).map(([key, each]) => {
+        const swapped = renamed && known !== undefined ? each.repos.map((r) => (r === known.id ? id : r)) : each.repos;
+        const list = key === factory.id && joins ? [...swapped, id] : swapped;
+        return [key, { ...each, repos: [...new Set(list)].sort() }];
+      }),
+    );
     this.save();
     return { repo, changed: true };
   }

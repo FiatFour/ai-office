@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRuntime } from '../agents/runtime.ts';
 import { scripted } from '../agents/scripted.ts';
@@ -6,6 +8,7 @@ import { gitlab } from '../githost/gitlab.ts';
 import type { ApiCall, GitHost } from '../githost/host.ts';
 import { type RunningHq, startHq } from '../hq.ts';
 import { type ActionItem, cagesMode } from '../modes/cages.ts';
+import { exportEvents } from '../modes/events-export.ts';
 import type { Denial } from '../sandbox/firewall.ts';
 import type { Snapshot } from '../snapshot.ts';
 import { FakeGithub } from './fakes/github-api.ts';
@@ -142,6 +145,15 @@ describe.skipIf(!hasSqlite)('one ticket through the cages mode', () => {
     expect(calls.length).toBeGreaterThan(10);
     expect(calls.filter((c) => /merge/.test(c.path))).toEqual([]);
     expect(fake.calls.filter((c) => /\/merge$/.test(c.path))).toEqual([]);
+    const out = join(tempDir('export'), 'events.jsonl');
+    const written = await exportEvents(hq.url, out);
+    const lines = readFileSync(out, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(lines).toHaveLength(written);
+    expect(lines.map((l) => l.seq)).toEqual(lines.map((_, i) => i + 1));
+    expect(lines.some((l) => l.event.source === 'poll' && l.event.state === 'merged')).toBe(true);
   });
 
   it('stops after three fix rounds and files an Action item for the human', async () => {

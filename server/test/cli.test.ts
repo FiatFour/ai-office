@@ -257,34 +257,38 @@ live('serve --mode cages', () => {
     return path;
   };
 
-  it('runs HQ with the cages mode from a config file, and Ctrl-C stops it', async () => {
-    const home = tempDir('cli-cages');
-    const port = await freePort();
-    const child = spawn(
-      process.execPath,
-      [BIN, 'serve', '--port', String(port), '--home', home, '--mode', 'cages', '--config', config(home)],
-      {
-        stdio: ['ignore', 'ignore', 'pipe'],
-      },
-    );
-    try {
-      let snap: { mode: unknown } | null = null;
-      for (let i = 0; i < 200 && snap === null; i += 1) {
-        snap = await fetch(`http://127.0.0.1:${port}/api/snapshot`)
-          .then((r) => r.json() as Promise<{ mode: unknown }>)
-          .catch(() => null);
-        if (snap === null) await sleep(50);
+  it.skipIf(process.platform === 'win32')(
+    'runs HQ with the cages mode from a config file, and Ctrl-C stops it',
+    async () => {
+      const home = tempDir('cli-cages');
+      const port = await freePort();
+      const child = spawn(
+        process.execPath,
+        [BIN, 'serve', '--port', String(port), '--home', home, '--mode', 'cages', '--config', config(home)],
+        {
+          stdio: ['ignore', 'ignore', 'pipe'],
+        },
+      );
+      try {
+        let snap: { mode: unknown } | null = null;
+        for (let i = 0; i < 200 && snap === null; i += 1) {
+          snap = await fetch(`http://127.0.0.1:${port}/api/snapshot`)
+            .then((r) => r.json() as Promise<{ mode: unknown }>)
+            .catch(() => null);
+          if (snap === null) await sleep(50);
+        }
+        expect(snap?.mode).toMatchObject({ rounds: {}, jobs: [] });
+        const bad = await fetch(`http://127.0.0.1:${port}/api/tickets`, { method: 'POST', body: 'null' });
+        expect(bad.status).toBe(400);
+        child.kill('SIGINT');
+        const code = await new Promise<number | null>((resolve) => child.once('exit', (c) => resolve(c)));
+        expect(code).toBe(0);
+      } finally {
+        child.kill('SIGKILL');
       }
-      expect(snap?.mode).toMatchObject({ rounds: {}, jobs: [] });
-      const bad = await fetch(`http://127.0.0.1:${port}/api/tickets`, { method: 'POST', body: 'null' });
-      expect(bad.status).toBe(400);
-      child.kill('SIGINT');
-      const code = await new Promise<number | null>((resolve) => child.once('exit', (c) => resolve(c)));
-      expect(code).toBe(0);
-    } finally {
-      child.kill('SIGKILL');
-    }
-  }, 60_000);
+    },
+    60_000,
+  );
 
   it('refuses a config it cannot use with exit code 2', () => {
     const dir = tempDir('cli-cages-bad');

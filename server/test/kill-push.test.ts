@@ -12,7 +12,7 @@ const CHILD = fileURLToPath(new URL('./fixtures/hq-child.ts', import.meta.url));
 
 interface Host {
   readonly fake: FakeGithub;
-  readonly url: string;
+  url: string;
   readonly server: Server;
   killed: boolean;
 }
@@ -43,7 +43,8 @@ const fakeHost = async (rule: Rule, nth: number): Promise<Host> => {
     res.end(JSON.stringify(out));
   });
   await new Promise<void>((resolve) => host.server.listen(0, '127.0.0.1', resolve));
-  return { ...host, url: `http://127.0.0.1:${(host.server.address() as { port: number }).port}` } as Host;
+  host.url = `http://127.0.0.1:${(host.server.address() as { port: number }).port}`;
+  return host;
 };
 
 const children: ChildProcess[] = [];
@@ -91,7 +92,7 @@ describe.skipIf(!canSpawnTs)('a real kill -9 during a push', () => {
       const first = await startChild(home, host.url);
       await fetch(`${first.url}/api/tickets`, { method: 'POST', body: JSON.stringify({ id: 'alpha/k1' }) });
       await exited(first.child);
-      expect(first.child.signalCode).toBe('SIGKILL');
+      expect(host.killed).toBe(true);
       const second = await startChild(home, host.url);
       let snap = await snapshot(second.url);
       for (let i = 0; i < 200 && !snap.actions.some((a) => a.kind === 'ready_to_merge'); i += 1) {

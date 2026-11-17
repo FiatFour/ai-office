@@ -11,6 +11,7 @@ export interface ClaudeOptions {
   readonly model?: string;
   readonly maxTurns?: number;
   readonly timeoutMs?: number;
+  readonly bin?: string;
 }
 
 interface StreamLine {
@@ -65,10 +66,9 @@ const promptFor = (job: AgentJob): string => {
   return `${order}\n\nReview change #${job.change.number} at ${job.change.headSha}. Files at the head:\n${files}\n\nEnd your answer with a \`\`\`json block: {"verdict": "approve" | "changes", "body": "...", "comments": [{"path": "...", "line": 1, "body": "..."}]}.`;
 };
 
-const claudeArgv = (prompt: string, model: string, maxTurns: number): string[] => [
-  'claude',
+const claudeArgv = (bin: string, model: string, maxTurns: number): string[] => [
+  bin,
   '-p',
-  prompt,
   '--model',
   model,
   '--output-format',
@@ -111,8 +111,8 @@ export const claudeCode = (options: ClaudeOptions): AgentRuntime => ({
   async run(job): Promise<AgentResult> {
     const shell = options.shell(job.worker, job.task);
     const before = job.role === 'author' ? await head(shell) : '';
-    const argv = claudeArgv(promptFor(job), options.model ?? 'sonnet', options.maxTurns ?? 40);
-    const ran = await shell.exec(argv, { timeoutMs: options.timeoutMs ?? 30 * 60_000 });
+    const argv = claudeArgv(options.bin ?? 'claude', options.model ?? 'sonnet', options.maxTurns ?? 40);
+    const ran = await shell.exec(argv, { input: promptFor(job), timeoutMs: options.timeoutMs ?? 30 * 60_000 });
     if (ran.timedOut) throw new AgentFailed('claude ran past its time limit');
     const { text, usage } = parseStream(ran.out);
     if (job.role === 'reviewer') return { role: 'reviewer', ...parseReview(text), usage };

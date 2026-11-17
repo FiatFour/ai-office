@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import { domainToASCII } from 'node:url';
 import {
   type AlertReason,
   type Box,
@@ -14,9 +15,19 @@ import {
 import type { AgentRuntime, RuntimeId, Ticket, Usage } from '../agents/runtime.ts';
 import { briefMarker, mergeBrief, type ReviewRound, renderBrief } from '../brief/merge-brief.ts';
 import { InvalidEvent } from '../events.ts';
-import { type ChangeSnapshot, type CommentFact, type GitHost, type ReviewFact, toPoll } from '../githost/host.ts';
+import {
+  type ChangeSnapshot,
+  type CommentFact,
+  type GitHost,
+  type LineComment,
+  type ReviewDraft,
+  type ReviewFact,
+  toPoll,
+} from '../githost/host.ts';
+import { inlineCode, plainLine, quoteBlock, TASK_ID, unquote } from '../githost/sanitize.ts';
 import type { Executor } from '../hq.ts';
 import type { Denial } from '../sandbox/firewall.ts';
+import { parseAllowlist } from '../sandbox/proxy/allowlist.mjs';
 import { canonicalJson } from '../store/atomic.ts';
 import type { LoggedEvent, OutboxEntry } from '../store/store.ts';
 
@@ -31,7 +42,14 @@ export interface HqPort {
 export type ActionItem =
   | { readonly kind: 'ready_to_merge'; readonly task: TaskId; readonly url: string; readonly brief: string }
   | { readonly kind: 'round_limit'; readonly task: TaskId; readonly url: string; readonly fixRounds: number }
-  | { readonly kind: 'website'; readonly host: string; readonly agent: string; readonly count: number }
+  | {
+      readonly kind: 'website';
+      readonly site: string;
+      readonly host: string;
+      readonly port: number;
+      readonly agent: string;
+      readonly count: number;
+    }
   | { readonly kind: 'alert'; readonly reason: AlertReason; readonly subject: string }
   | { readonly kind: 'job_failed'; readonly task: TaskId; readonly job: string; readonly error: string };
 
@@ -55,8 +73,25 @@ export interface Mode {
 export type ModeFactory = (hq: HqPort) => Mode;
 
 export interface EgressControl {
-  allow(host: string): Promise<void>;
+  allow(site: string): Promise<void>;
 }
+
+export const siteOf = (
+  rawHost: string,
+  rawPort: unknown = 443,
+): { site: string; host: string; port: number } | null => {
+  const split = /^([^:]*)(?::(\d{1,5}))?$/.exec(rawHost.trim());
+  if (split === null) return null;
+  const port = split[2] === undefined ? Number(rawPort) : Number(split[2]);
+  const host = domainToASCII((split[1] ?? '').replace(/\.$/, ''));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  try {
+    parseAllowlist(`${host}:${port}`);
+  } catch {
+    return null;
+  }
+  return { site: `${host}:${port}`, host, port };
+};
 
 export interface CagesOptions {
   readonly host: GitHost;
@@ -88,15 +123,44 @@ type Job =
     }
   | { readonly kind: 'brief'; readonly box: Box & { pr: string }; readonly change: Change };
 
-const REVIEW_MARK = /<!-- agent-works:review worker=(\S+) verdict=(approve|changes|comment) -->/;
+const REVIEW_MARK = /^<!-- agent-works:review worker=(\S+) verdict=(approve|changes|comment) -->$/m;
 const reviewMarker = (worker: string, verdict: Verdict) =>
   `<!-- agent-works:review worker=${worker} verdict=${verdict} -->`;
 const changeRef = (repo: string, number: number) => `${repo.toLowerCase()}#${number}`;
+export const workOrder = (ticket: Ticket): string =>
+  [
+    `Work order ${inlineCode(ticket.id)}${ticket.url === null ? '' : `: ${inlineCode(ticket.url)}`}`,
+    '',
+    quoteBlock(ticket.body),
+    '',
+    'Opened by an Agent Works worker. HQ never merges; a person merges on the host.',
+  ].join('\n');
 
-export const cagesMode =
-  (options: CagesOptions): ModeFactory =>
-  (hq) => {
+export const changeTitle = (ticket: Ticket): string => `${ticket.id}: ${plainLine(ticket.title)}`;
+
+export const reviewDraft = (
+  head: string,
+  worker: string,
+  result: { readonly verdict: Verdict; readonly body: string; readonly comments: readonly LineComment[] },
+): ReviewDraft => ({
+  commitId: head,
+  verdict: result.verdict,
+  body: `${quoteBlock(result.body)}\n\n${reviewMarker(worker, result.verdict)}`,
+  comments: result.comments.map((c) => ({ ...c, body: quoteBlock(c.body) })),
+});
+
+const objectOf = (raw: unknown): Record<string, unknown> => {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+    throw new InvalidEvent('the body must be a JSON object');
+  return raw as Record<string, unknown>;
+};
+
+export const cagesMode = (options: CagesOptions): ModeFactory => {
+  for (const task of Object.keys(options.tickets))
+    if (!TASK_ID.test(task)) throw new InvalidEvent(`the task id ${JSON.stringify(task)} is not <factory>/<task>`);
+  return (hq) => {
     const { host, repo } = options;
+    const reviewHost = options.reviewHost ?? host;
     const roundLimit = options.roundLimit ?? ROUND_LIMIT;
     const maxFailures = options.maxFailures ?? 3;
     const abort = new AbortController();
@@ -107,7 +171,7 @@ export const cagesMode =
     const failures = new Map<string, { count: number; error: string }>();
     const briefs = new Map<TaskId, { head: string; url: string; text: string }>();
     const usage = new Map<TaskId, (Usage | null)[]>();
-    const denials = new Map<string, { host: string; agent: string; count: number }>();
+    const denials = new Map<string, { site: string; host: string; port: number; agent: string; count: number }>();
     const allowed = new Set<string>();
     const lastPoll = new Map<string, string>();
     let timer: NodeJS.Timeout | null = null;
@@ -185,14 +249,12 @@ export const cagesMode =
     };
     const spend = (task: TaskId, used: Usage | null) => usage.set(task, [...(usage.get(task) ?? []), used]);
 
-    const workOrder = (ticket: Ticket) =>
-      [
-        `Work order ${ticket.id}${ticket.url === null ? '' : `: ${ticket.url}`}`,
-        '',
-        ticket.body,
-        '',
-        'Opened by an Agent Works worker. HQ never merges; a person merges on the host.',
-      ].join('\n');
+    const askedBy = async (comments: readonly CommentFact[], head: string) => {
+      const reviewer = await reviewHost.login();
+      return comments
+        .filter((c) => c.commitId === head && c.author.toLowerCase() === reviewer)
+        .map((c) => ({ ...c, body: unquote(c.body) }));
+    };
 
     const runAuthor = async (task: TaskId, worker: string, round: number, comments: readonly CommentFact[]) => {
       const result = await runtimeOf(worker).run({
@@ -210,7 +272,7 @@ export const cagesMode =
         branch: branchOf(task),
         base: options.base,
         files: result.files,
-        message: result.message,
+        message: plainLine(result.message),
       });
     };
 
@@ -226,7 +288,7 @@ export const cagesMode =
         (await host.openChange(repo, {
           branch,
           base: options.base,
-          title: `${ticket.id}: ${ticket.title}`,
+          title: changeTitle(ticket),
           body: workOrder(ticket),
         }));
       await settle(opened.number, head);
@@ -236,7 +298,7 @@ export const cagesMode =
       const task = job.box.id;
       const now = await poll(job.change.number);
       if (now.headSha !== job.change.head.v) return;
-      const asked = (await host.comments(repo, job.change.number)).filter((c) => c.commitId === job.change.head.v);
+      const asked = await askedBy(await host.comments(repo, job.change.number), job.change.head.v);
       const head = await runAuthor(task, options.author, job.round, asked);
       if (head === job.change.head.v) throw new Error('the fix round changed no file');
       await settle(job.change.number, head);
@@ -263,8 +325,9 @@ export const cagesMode =
       const head = job.change.head.v;
       const snapshot = await host.snapshot(repo, job.change.number);
       if (snapshot.change.headSha !== head) return void take(snapshot);
+      const self = await reviewHost.login();
       const mine = snapshot.reviews
-        .filter((r) => r.commitId === head)
+        .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === self)
         .map((r) => ({ r, mark: REVIEW_MARK.exec(r.body) }))
         .find(({ mark }) => mark?.[1] === job.reviewer);
       if (mine !== undefined)
@@ -281,18 +344,14 @@ export const cagesMode =
       });
       if (result.role !== 'reviewer') throw new Error('the reviewer runtime returned a change');
       spend(task, result.usage);
-      const posted = await (options.reviewHost ?? host).postReview(repo, job.change.number, {
-        commitId: head,
-        verdict: result.verdict,
-        body: `${result.body}\n\n${reviewMarker(job.reviewer, result.verdict)}`,
-        comments: result.comments,
-      });
+      const posted = await reviewHost.postReview(repo, job.change.number, reviewDraft(head, job.reviewer, result));
       ingest(reviewFact(posted, job.change, job.reviewer, result.verdict));
     };
 
     const roundsFor = async (change: Change): Promise<ReviewRound[]> => {
       project();
       const comments = await host.comments(repo, change.number);
+      const reviewer = await reviewHost.login();
       const list = votes.get(changeRef(change.repo, change.number)) ?? [];
       const heads = [...new Set(list.map((v) => v.head))];
       return list
@@ -305,8 +364,8 @@ export const cagesMode =
           verdict: v.verdict,
           headSha: v.head,
           asked: comments
-            .filter((c) => c.commitId === v.head && c.line !== null)
-            .map((c) => `${c.path}:${c.line} ${c.body}`),
+            .filter((c) => c.commitId === v.head && c.line !== null && c.author.toLowerCase() === reviewer)
+            .map((c) => `${c.path}:${c.line} ${unquote(c.body)}`),
         }));
     };
 
@@ -431,7 +490,7 @@ export const cagesMode =
             });
         }
       }
-      for (const denial of denials.values()) if (!allowed.has(denial.host)) items.push({ kind: 'website', ...denial });
+      for (const denial of denials.values()) if (!allowed.has(denial.site)) items.push({ kind: 'website', ...denial });
       for (const entry of hq.outbox())
         if (entry.command.kind === 'alert_human')
           items.push({ kind: 'alert', reason: entry.command.reason, subject: entry.command.subject });
@@ -465,7 +524,8 @@ export const cagesMode =
     const route = (method: string, path: string, body: () => Promise<unknown>): Promise<unknown> | undefined => {
       if (method === 'POST' && path === '/api/tickets')
         return body().then((raw) => {
-          const id = String((raw as { id?: unknown }).id ?? '');
+          const id = objectOf(raw).id;
+          if (typeof id !== 'string') throw new InvalidEvent('id must be a task id of the form <factory>/<task>');
           ticketOf(id);
           for (const worker of [options.author, options.reviewer])
             ingest({ source: 'human', kind: 'add_worker', worker });
@@ -475,8 +535,10 @@ export const cagesMode =
         });
       if (method === 'POST' && path === '/api/actions/allow')
         return body().then(async (raw) => {
-          const site = String((raw as { host?: unknown }).host ?? '');
-          if (!denials.has(site)) throw new InvalidEvent(`no blocked website ${site} is waiting`);
+          const { host: rawHost, port } = objectOf(raw);
+          const site = typeof rawHost === 'string' ? siteOf(rawHost, port)?.site : undefined;
+          if (site === undefined || !denials.has(site))
+            throw new InvalidEvent(`no blocked website ${JSON.stringify(rawHost)} is waiting`);
           await options.egress?.allow(site);
           allowed.add(site);
           hq.changed();
@@ -500,8 +562,10 @@ export const cagesMode =
       view,
       route,
       noteDenial: (denial) => {
-        const seenBefore = denials.get(denial.host);
-        denials.set(denial.host, { host: denial.host, agent: denial.agent, count: (seenBefore?.count ?? 0) + 1 });
+        const key = siteOf(denial.host, denial.port);
+        if (key === null) return;
+        const seenBefore = denials.get(key.site);
+        denials.set(key.site, { ...key, agent: denial.agent, count: (seenBefore?.count ?? 0) + 1 });
       },
       start: () => {
         pokeAll();
@@ -515,3 +579,4 @@ export const cagesMode =
       },
     };
   };
+};

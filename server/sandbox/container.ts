@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { insideCage } from '../config.ts';
-import type { Engine } from './engine.ts';
+import type { Engine, RunResult } from './engine.ts';
 import { exportPath, exportRepo, scanInContainer, userArgs } from './export.ts';
 import {
   DEFAULT_ALLOWLIST,
@@ -15,7 +15,9 @@ import {
   lowerFirewall,
   PROXY_PORT,
   raiseFirewall,
+  writeAllowlist,
 } from './firewall.ts';
+import { parseAllowlist } from './proxy/allowlist.mjs';
 
 export interface CageView {
   readonly id: string;
@@ -205,6 +207,23 @@ export class SandboxDriver {
       rmSync(cageDir, { recursive: true, force: true });
       throw error;
     }
+  }
+
+  async exec(
+    id: string,
+    argv: readonly string[],
+    options: { input?: string; timeoutMs?: number } = {},
+  ): Promise<RunResult> {
+    const view = this.cages.get(id);
+    if (view === undefined) throw new CageError(`no cage ${id} is running`);
+    return this.engine.run(['exec', '-i', '-w', '/work', view.container, ...argv], options);
+  }
+
+  async allow(rule: string): Promise<void> {
+    parseAllowlist(rule);
+    const { allowlistPath } = await this.raise();
+    const current = lines(readFileSync(allowlistPath, 'utf8'));
+    if (!current.includes(rule)) writeAllowlist(allowlistPath, [...current, rule]);
   }
 
   async releaseCage(id: string): Promise<boolean> {

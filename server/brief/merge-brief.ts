@@ -1,6 +1,7 @@
 import type { Verdict } from '@agent-works/core';
 import type { RuntimeId, Ticket } from '../agents/runtime.ts';
 import type { ChangeFact, CheckFact } from '../githost/host.ts';
+import { inlineCode, plainLine, quoteBlock } from '../githost/sanitize.ts';
 
 export const BRIEF_FIELDS = [
   'summary',
@@ -60,6 +61,7 @@ const collected = (lines: readonly string[]): Section => ({ state: 'collected', 
 const missing = (reason: string): Section => ({ state: 'not_collected', reason });
 const orMissing = (lines: readonly string[] | undefined, reason: string): Section =>
   lines !== undefined && lines.length > 0 ? collected(lines) : missing(reason);
+const plain = (lines: readonly string[] | undefined) => lines?.map((line) => plainLine(line, 500));
 
 const EVIDENCE_REASONS: Record<Exclude<EvidenceKind, 'ci_runs'>, string> = {
   screenshots: 'the worker attached no before and after screenshots',
@@ -70,25 +72,25 @@ const EVIDENCE_REASONS: Record<Exclude<EvidenceKind, 'ci_runs'>, string> = {
 export const mergeBrief = (input: BriefInput): MergeBrief => {
   const { ticket, change, checks, rounds } = input;
   const head = checks.filter((check) => check.headSha === change.headSha);
-  const checkLines = head.map((check) => `${check.name}: ${check.state}`);
+  const checkLines = head.map((check) => `${inlineCode(check.name)}: ${check.state}`);
   const ciRuns = orMissing(checkLines, `the host reported no checks on ${change.headSha.slice(0, 12)}`);
   const evidence: Record<EvidenceKind, Section> = {
-    screenshots: orMissing(input.evidence.screenshots, EVIDENCE_REASONS.screenshots),
+    screenshots: orMissing(plain(input.evidence.screenshots), EVIDENCE_REASONS.screenshots),
     ci_runs: ciRuns,
     test_output: orMissing(
-      input.evidence.test_output,
+      plain(input.evidence.test_output),
       ticket.kind === 'defect'
         ? EVIDENCE_REASONS.test_output
         : `${EVIDENCE_REASONS.test_output}; the work order is a ${ticket.kind}`,
     ),
-    logs: orMissing(input.evidence.logs, EVIDENCE_REASONS.logs),
+    logs: orMissing(plain(input.evidence.logs), EVIDENCE_REASONS.logs),
   };
   const anyEvidence = Object.values(evidence).some((section) => section.state === 'collected');
   const sameRuntime = rounds.some((round) => round.runtime === input.author.runtime);
   const reviewLines = rounds.map(
     (round) =>
       `Round ${round.round}: ${round.reviewer} (${round.runtime}) gave ${round.verdict} on ${round.headSha.slice(0, 12)}${
-        round.asked.length > 0 ? `, asked: ${round.asked.join('; ')}` : ''
+        round.asked.length > 0 ? `, asked:\n${quoteBlock(round.asked.join('\n'))}` : ''
       }`,
   );
   if (sameRuntime)
@@ -96,18 +98,28 @@ export const mergeBrief = (input: BriefInput): MergeBrief => {
       `Cross-runtime review not collected: the reviewer ran on ${input.author.runtime}, the author's runtime, because Codex is deferred (G0).`,
     );
   const sections: Record<BriefField, Section> = {
-    summary: collected([`${ticket.title}. ${ticket.body.split(/(?<=\.)\s/)[0] ?? ''}`.trim()]),
-    what_changed: orMissing(input.files, 'the host listed no changed files'),
+    summary: collected([
+      `${plainLine(ticket.title)}. ${plainLine(ticket.body.split(/(?<=\.)\s/)[0] ?? '', 500)}`.trim(),
+    ]),
+    what_changed: orMissing(
+      input.files.map((file) => inlineCode(file)),
+      'the host listed no changed files',
+    ),
     tests: orMissing(checkLines, 'no check ran on the head commit, so no test result is known'),
     review: orMissing(reviewLines, 'no peer review was recorded'),
     risk:
       ticket.risk === null
         ? missing('the work order sets no risk level')
-        : collected([`${ticket.risk.level}: ${ticket.risk.reason}`]),
-    before_merge: orMissing(input.notes.beforeMerge, 'neither the work order nor the worker named a step before merge'),
-    how_to_check: orMissing(input.notes.howToCheck, 'the work order names no manual check'),
+        : collected([`${ticket.risk.level}: ${plainLine(ticket.risk.reason, 500)}`]),
+    before_merge: orMissing(
+      plain(input.notes.beforeMerge),
+      'neither the work order nor the worker named a step before merge',
+    ),
+    how_to_check: orMissing(plain(input.notes.howToCheck), 'the work order names no manual check'),
     roll_back: collected([`Revert the merge commit of ${change.host === 'gitlab' ? 'MR !' : 'PR #'}${change.number}.`]),
-    based_on: collected([`Work order ${ticket.id}${ticket.url === null ? '' : ` (${ticket.url})`}`]),
+    based_on: collected([
+      `Work order ${inlineCode(ticket.id)}${ticket.url === null ? '' : ` (${inlineCode(ticket.url)})`}`,
+    ]),
     evidence: anyEvidence
       ? collected(EVIDENCE_KINDS.filter((kind) => evidence[kind].state === 'collected'))
       : missing('no evidence of any kind was collected'),
@@ -158,7 +170,7 @@ export const briefMarker = (task: string, headSha: string): string =>
 
 export const renderBrief = (brief: MergeBrief): string =>
   [
-    `## Merge brief for ${brief.task}`,
+    `## Merge brief for ${inlineCode(brief.task)}`,
     '',
     brief.flagged ? 'HIGH risk with no evidence. Read the change before you merge.\n' : '',
     ...BRIEF_FIELDS.filter((field) => field !== 'evidence').flatMap((field) =>

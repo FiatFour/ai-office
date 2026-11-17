@@ -77,13 +77,14 @@ export const runDoctor = async (ctx: DoctorContext): Promise<Check[]> => {
       : check('git', 'git', 'PASS', git),
   );
 
-  const probed: EngineProbeResult[] = [];
   const order: readonly EngineName[] =
     ctx.preferred === 'docker' || ctx.preferred === 'podman' ? [ctx.preferred] : ENGINE_NAMES;
-  for (const name of order) {
-    const version = await ctx.engines[name].version();
-    probed.push({ name, version, info: version === null ? null : await ctx.engines[name].info() });
-  }
+  const probed: EngineProbeResult[] = await Promise.all(
+    order.map(async (name) => {
+      const version = await ctx.engines[name].version();
+      return { name, version, info: version === null ? null : await ctx.engines[name].info() };
+    }),
+  );
   const usable = probed.find((p) => p.info?.ok === true);
   if (usable !== undefined) {
     checks.push(check('engine', 'Container engine', 'PASS', `${usable.name} ${usable.info?.version ?? ''}`.trim()));

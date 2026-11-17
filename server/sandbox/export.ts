@@ -79,7 +79,7 @@ export const exportRepo = async (
     [
       'sh',
       '-c',
-      'git init -q -b main && git add -A && git -c user.name=agent-works -c user.email=agent-works@localhost -c commit.gpgsign=false commit -q --allow-empty -m export',
+      'cd /work && git init -q -b main && git add -A && git -c user.name=agent-works -c user.email=agent-works@localhost -c commit.gpgsign=false commit -q --allow-empty -m export',
     ],
     mount(dest, '/work'),
   );

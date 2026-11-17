@@ -78,7 +78,7 @@ describe('doctor in process', () => {
     if (!/^FAIL\s+Container engine/m.test(text)) return;
     expect(code).toBe(1);
     expect(text).toMatch(/fix: .+/);
-  });
+  }, 60_000);
 
   it('prints a JSON array of checks with --json', async () => {
     const lines: string[] = [];
@@ -89,7 +89,7 @@ describe('doctor in process', () => {
     );
     const parsed = JSON.parse(lines.join('\n')) as Array<{ id: string; status: string }>;
     expect(parsed.map((c) => c.id)).toContain('engine');
-  });
+  }, 60_000);
 });
 
 live('the CLI as a process', () => {

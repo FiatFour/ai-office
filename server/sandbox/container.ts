@@ -92,8 +92,6 @@ export class SandboxDriver {
         ...(await this.user()),
         '-e',
         'HOME=/tmp',
-        '-w',
-        '/work',
         ...mounts,
         '--entrypoint',
         args[0] ?? 'true',

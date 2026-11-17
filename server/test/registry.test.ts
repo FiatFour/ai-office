@@ -125,11 +125,19 @@ describe('registry', () => {
   it('keeps the first clone path when a second clone of the same remote is added', () => {
     const root = tempDir('registry-second');
     const registry = new Registry(folder(root, 'home'));
-    const [a, one, two] = [folder(root, 'a'), folder(root, 'one'), folder(root, 'two')] as [string, string, string];
+    const [a, b, one, two] = ['a', 'b', 'one', 'two'].map((name) => folder(root, name)) as [
+      string,
+      string,
+      string,
+      string,
+    ];
     registry.addFactory(a);
+    registry.addFactory(b);
     const remote = 'https://github.com/acme/app.git';
     registry.addRepo(a, { path: one, remote });
-    registry.addRepo(a, { path: two, remote });
+    registry.addRepo(b, { path: two, remote });
+    expect(registry.view().repos).toHaveLength(1);
     expect(registry.view().repos[0]?.path).toBe(one);
+    expect(new Registry(join(root, 'home')).view().repos[0]?.path).toBe(one);
   });
 });

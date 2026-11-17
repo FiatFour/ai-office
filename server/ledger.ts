@@ -27,7 +27,7 @@ export class Ledger {
   constructor(store: Store, config: Config = DEFAULT_CONFIG) {
     this.store = store;
     const loaded = store.load();
-    const saved = loaded ?? {
+    this.persisted = loaded ?? {
       v: 1 as const,
       eventSeq: 0,
       rev: 0,
@@ -35,10 +35,7 @@ export class Ledger {
       outbox: [],
       superseded: [],
     };
-    this.persisted = saved;
-    const replay = store.events(saved.eventSeq);
-    for (const logged of replay) this.apply(logged.seq, logged.event);
-    if (replay.length > 0 || loaded === null) this.store.commit(this.persisted);
+    if (loaded === null) store.commit(this.persisted);
   }
 
   get state(): State {
@@ -52,15 +49,17 @@ export class Ledger {
   }
 
   ingest(event: Event): Ingested {
-    const seq = this.store.append(event);
-    const commands = this.apply(seq, event);
-    this.store.commit(this.persisted);
-    return { rev: this.persisted.rev, commands };
+    let fresh: OutboxEntry[] = [];
+    this.persisted = this.store.record(event, (seq) => {
+      const next = this.next(seq, event);
+      fresh = next.fresh;
+      return next.persisted;
+    });
+    return { rev: this.persisted.rev, commands: fresh };
   }
 
   bump(): number {
-    this.persisted = { ...this.persisted, rev: this.persisted.rev + 1 };
-    this.store.commit(this.persisted);
+    this.save({ ...this.persisted, rev: this.persisted.rev + 1 });
     return this.persisted.rev;
   }
 
@@ -70,15 +69,19 @@ export class Ledger {
         ? { ...entry, status, error, attempts: status === 'failed' ? entry.attempts + 1 : entry.attempts }
         : entry,
     );
-    this.persisted = { ...this.persisted, rev: this.persisted.rev + 1, outbox: settle(outbox) };
-    this.store.commit(this.persisted);
+    this.save({ ...this.persisted, rev: this.persisted.rev + 1, outbox: settle(outbox) });
   }
 
   pending(): readonly OutboxEntry[] {
     return this.persisted.outbox.filter((entry) => entry.status === 'pending');
   }
 
-  private apply(seq: number, event: Event): OutboxEntry[] {
+  private save(next: Persisted): void {
+    this.store.commit(next);
+    this.persisted = next;
+  }
+
+  private next(seq: number, event: Event): { persisted: Persisted; fresh: OutboxEntry[] } {
     const before = this.persisted;
     const reduced = reduce(before.state, event);
     const fresh = entriesFor(seq, reduced.commands);
@@ -86,14 +89,16 @@ export class Ledger {
     const superseded =
       moved.length === 0 ? before.superseded : [...new Set([...before.superseded, ...moved])].slice(-SUPERSEDED_CAP);
     const state = moved.length > 0 ? pruneSuperseded(reduced.state, new Set(superseded)) : reduced.state;
-    this.persisted = {
-      ...before,
-      eventSeq: seq,
-      rev: before.rev + 1,
-      state,
-      outbox: settle([...before.outbox, ...fresh]),
-      superseded,
+    return {
+      fresh,
+      persisted: {
+        ...before,
+        eventSeq: seq,
+        rev: before.rev + 1,
+        state,
+        outbox: settle([...before.outbox, ...fresh]),
+        superseded,
+      },
     };
-    return fresh;
   }
 }

@@ -1,4 +1,5 @@
 import { closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const RETRIES = 20;
@@ -14,8 +15,8 @@ export const canonicalJson = (value: unknown): string =>
       : inner,
   );
 
-const writeFlagged = (path: string, data: string, flag: 'w' | 'a'): void => {
-  const fd = openSync(path, flag);
+const writeSynced = (path: string, data: string): void => {
+  const fd = openSync(path, 'w');
   try {
     writeSync(fd, data);
     fsyncSync(fd);
@@ -24,14 +25,23 @@ const writeFlagged = (path: string, data: string, flag: 'w' | 'a'): void => {
   }
 };
 
-export const appendDurable = (path: string, data: string): void => writeFlagged(path, data, 'a');
+const syncDirectory = (dir: string): void => {
+  if (process.platform === 'win32') return;
+  const fd = openSync(dir, 'r');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+};
 
 export const writeAtomic = (path: string, data: string): void => {
   const temp = `${path}.${process.pid}.tmp`;
-  writeFlagged(temp, data, 'w');
+  writeSynced(temp, data);
   for (let attempt = 0; ; attempt += 1) {
     try {
       renameSync(temp, path);
+      syncDirectory(dirname(path));
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code ?? '';

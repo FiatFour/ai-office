@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+export const hasSqlite = process.getBuiltinModule?.('node:sqlite') !== undefined;
+
 export const tempDir = (label: string): string => realpathSync(mkdtempSync(join(tmpdir(), `aw-${label}-`)));
 
 export const folder = (root: string, name: string): string => {

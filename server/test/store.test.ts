@@ -1,12 +1,13 @@
-import { appendFileSync, readFileSync, truncateSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { initialState, type State } from '@agent-works/core';
 import { describe, expect, it } from 'vitest';
 import { parseEvent } from '../events.ts';
 import { Ledger } from '../ledger.ts';
 import { pruneSuperseded } from '../store/prune.ts';
-import { Store, StoreLockedError } from '../store/store.ts';
-import { change, check, human, tempDir } from './helpers.ts';
+import { type OutboxEntry, type Persisted, Store, StoreCorruptError, StoreLockedError } from '../store/store.ts';
+import { change, check, hasSqlite, human, tempDir } from './helpers.ts';
 
 const ev = (raw: unknown) => parseEvent(raw);
 
@@ -24,7 +25,7 @@ const story = [
   check(),
 ];
 
-describe('ledger and store', () => {
+describe.skipIf(!hasSqlite)('ledger and store', () => {
   it('survives a restart with the same state, revision and no repeated commands', () => {
     const dir = tempDir('ledger-restart');
     const first = open(dir);
@@ -39,50 +40,106 @@ describe('ledger and store', () => {
     second.store.close();
   });
 
-  it('replays an event that reached the log but not the state file', () => {
-    const dir = tempDir('ledger-crash');
-    const first = open(dir);
-    for (const event of story.slice(0, 4)) first.ledger.ingest(ev(event));
-    const committedState = readFileSync(join(dir, 'state.json'), 'utf8');
-    const lastRev = first.ledger.rev;
-    first.ledger.ingest(ev(story[4]));
-    first.ledger.ingest(ev(story[5]));
-    const full = first.ledger.state;
-    first.store.close();
-    writeFileSync(join(dir, 'state.json'), committedState);
-    const recovered = open(dir);
-    expect(recovered.ledger.state).toEqual(full);
-    expect(recovered.ledger.rev).toBe(lastRev + 2);
-    const ids = recovered.ledger.outbox.map((entry) => entry.id);
-    expect(new Set(ids).size).toBe(ids.length);
-    recovered.store.close();
+  it('writes an event and the state it produced together or not at all', () => {
+    const dir = tempDir('ledger-atomic');
+    const { store, ledger } = open(dir);
+    for (const event of story.slice(0, 3)) ledger.ingest(ev(event));
+    const before = { state: ledger.state, rev: ledger.rev };
+    expect(() =>
+      store.record(ev(story[3]), () => {
+        throw new Error('boom');
+      }),
+    ).toThrow();
+    expect(store.events(0).map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(ledger.state).toEqual(before.state);
+    ledger.ingest(ev(story[3]));
+    expect(store.events(0).map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    store.close();
+    const again = open(dir);
+    expect(again.ledger.rev).toBe(before.rev + 1);
+    expect(again.store.events(0)).toHaveLength(4);
+    again.store.close();
   });
 
-  it('drops a torn last line and keeps every complete event', () => {
-    const dir = tempDir('ledger-torn');
+  it('opens with every acknowledged event and no repeated command after a restart', () => {
+    const dir = tempDir('ledger-replay');
     const first = open(dir);
-    for (const event of story.slice(0, 3)) first.ledger.ingest(ev(event));
+    for (const event of story) first.ledger.ingest(ev(event));
+    const ids = first.ledger.outbox.map((entry) => entry.id);
     first.store.close();
-    appendFileSync(join(dir, 'events.jsonl'), 'deadbeef\t{"seq":4,"event":{"sour');
     const second = open(dir);
-    expect(second.store.events(0).map((e) => e.seq)).toEqual([1, 2, 3]);
-    second.ledger.ingest(ev(story[3]));
-    expect(second.store.events(0).map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    expect(second.store.events(0).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(second.ledger.outbox.map((entry) => entry.id)).toEqual(ids);
+    expect(new Set(ids).size).toBe(ids.length);
     second.store.close();
   });
 
-  it('rejects a corrupted middle line instead of trusting its checksum', () => {
-    const dir = tempDir('ledger-corrupt');
-    const first = open(dir);
-    for (const event of story.slice(0, 3)) first.ledger.ingest(ev(event));
-    first.store.close();
-    const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n');
-    lines[1] = (lines[1] ?? '').replace('reviewer', 'attacker');
-    writeFileSync(join(dir, 'events.jsonl'), lines.join('\n'));
-    truncateSync(join(dir, 'state.json'), 0);
-    const second = Store.open(dir);
-    expect(second.events(0).map((e) => e.seq)).toEqual([1]);
-    second.close();
+  describe('a damaged database fails loudly, never by dropping events', () => {
+    const seeded = (label: string, count = 4) => {
+      const dir = tempDir(label);
+      const first = open(dir);
+      for (const event of story.slice(0, count)) first.ledger.ingest(ev(event));
+      first.store.close();
+      return dir;
+    };
+    const rawSql = (dir: string, sql: string) => {
+      const db = new (createRequire(import.meta.url)('node:sqlite').DatabaseSync)(join(dir, 'hq.db'));
+      db.exec(sql);
+      db.close();
+    };
+    const countEvents = (dir: string): number => {
+      const db = new (createRequire(import.meta.url)('node:sqlite').DatabaseSync)(join(dir, 'hq.db'));
+      const n = Number(db.prepare('SELECT count(*) AS n FROM events').get().n);
+      db.close();
+      return n;
+    };
+
+    it('refuses one altered byte in a middle event and keeps every event', () => {
+      const dir = seeded('corrupt-middle');
+      const file = join(dir, 'hq.db');
+      const bytes = readFileSync(file);
+      const needle = '"kind":"add_worker","source":"human","worker":"reviewer"';
+      const at = bytes.indexOf(needle);
+      expect(at).toBeGreaterThan(0);
+      bytes[at + needle.length - 3] = 'X'.charCodeAt(0);
+      writeFileSync(file, bytes);
+      expect(() => Store.open(dir)).toThrow(StoreCorruptError);
+      expect(() => Store.open(dir)).toThrow(/event 2/);
+      expect(countEvents(dir)).toBe(4);
+    });
+
+    it('refuses a changed event body that kept its length', () => {
+      const dir = seeded('corrupt-sql');
+      rawSql(dir, "UPDATE events SET body = replace(body, 'reviewer', 'attacker') WHERE seq = 2");
+      expect(() => Store.open(dir)).toThrow(StoreCorruptError);
+      expect(countEvents(dir)).toBe(4);
+    });
+
+    it('refuses a log with a missing event and does not reuse its number', () => {
+      const dir = seeded('corrupt-gap');
+      rawSql(dir, 'DELETE FROM events WHERE seq = 2');
+      expect(() => Store.open(dir)).toThrow(StoreCorruptError);
+      expect(countEvents(dir)).toBe(3);
+    });
+
+    it('refuses a state row that is ahead of or behind the log', () => {
+      const dir = seeded('corrupt-behind');
+      rawSql(dir, 'DELETE FROM events WHERE seq = 4');
+      expect(() => Store.open(dir)).toThrow(StoreCorruptError);
+    });
+
+    it('releases the lock when it refuses, so the operator can repair and retry', () => {
+      const dir = seeded('corrupt-lock');
+      rawSql(dir, "UPDATE events SET sum = 'x' WHERE seq = 1");
+      expect(() => Store.open(dir)).toThrow(StoreCorruptError);
+      expect(existsSync(join(dir, 'hq.lock'))).toBe(false);
+    });
+  });
+
+  it('commits through the write-ahead log with a full sync on every commit', () => {
+    const store = Store.open(tempDir('ledger-durable'));
+    expect(store.durability()).toEqual({ journal: 'wal', synchronous: 2 });
+    store.close();
   });
 
   it('lets one HQ own the directory', () => {
@@ -105,6 +162,23 @@ describe('ledger and store', () => {
     ledger.mark(entry?.id ?? '', 'done');
     expect(ledger.rev).toBe(rev + 1);
     expect(ledger.outbox.find((e) => e.id === entry?.id)?.status).toBe('done');
+    store.close();
+  });
+
+  it('trims closed commands to the newest 200 and keeps every open one', () => {
+    const { store, ledger } = open(tempDir('ledger-trim'));
+    for (const event of story) ledger.ingest(ev(event));
+    const saved = store.load() as Persisted;
+    const open1 = saved.outbox.find((entry) => entry.status === 'pending') as OutboxEntry;
+    const closed = Array.from({ length: 250 }, (_, i) => ({ ...open1, id: `old.${i}`, status: 'done' as const }));
+    store.commit({ ...saved, outbox: [...closed, open1] });
+    const reloaded = new Ledger(store);
+    reloaded.mark(open1.id, 'done');
+    const ids = reloaded.outbox.map((entry) => entry.id);
+    expect(ids).toHaveLength(200);
+    expect(ids).toContain(open1.id);
+    expect(ids).not.toContain('old.0');
+    expect(ids).toContain('old.249');
     store.close();
   });
 

@@ -102,16 +102,15 @@ describe('commands refuse to start from inside a cage', () => {
   };
   const quiet = { out: () => {}, err: () => {} };
 
-  it.each([
-    ['cage', 'start', '--task', 't', '--worker', 'w'],
-    ['open'],
-    ['add-repo', '.'],
-  ])('%s from a cage workdir', async (...argv) => {
-    const { home, cwd } = inCage();
-    const failure = await main([...argv, '--home', home], { AGENT_WORKS_CWD: cwd }, quiet).catch((e: unknown) => e);
-    expect(failure).toBeInstanceOf(CliError);
-    expect(String((failure as Error).message)).toContain('inside a cage');
-  });
+  it.each([['cage', 'start', '--task', 't', '--worker', 'w'], ['open'], ['add-repo', '.']])(
+    '%s from a cage workdir',
+    async (...argv) => {
+      const { home, cwd } = inCage();
+      const failure = await main([...argv, '--home', home], { AGENT_WORKS_CWD: cwd }, quiet).catch((e: unknown) => e);
+      expect(failure).toBeInstanceOf(CliError);
+      expect(String((failure as Error).message)).toContain('inside a cage');
+    },
+  );
 });
 
 live('the CLI as a process', () => {

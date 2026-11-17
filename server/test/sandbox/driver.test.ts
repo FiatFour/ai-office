@@ -3,7 +3,6 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CageError, SandboxDriver } from '../../sandbox/container.ts';
 import { exportRepo } from '../../sandbox/export.ts';
@@ -208,7 +207,7 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
     }, 180_000);
 
     it('runs the throwaway container with no network interface but loopback', async () => {
-      const result = await driver['throwaway'](['sh', '-c', 'ls /sys/class/net'], []);
+      const result = await driver.throwaway(['sh', '-c', 'ls /sys/class/net'], []);
       expect(result.out.trim()).toBe('lo');
     }, 120_000);
 
@@ -220,7 +219,7 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       git(source, 'add', '-A', '-f');
       git(source, 'commit', '-qm', 'more secrets');
       const dest = join(tempDir('driver-many-dest'), 'repo');
-      const { removed } = await exportRepo(source, dest, (args, mounts) => driver['throwaway'](args, mounts));
+      const { removed } = await exportRepo(source, dest, (args, mounts) => driver.throwaway(args, mounts));
       expect(removed.length).toBeGreaterThanOrEqual(3);
       for (const path of ['.env', 'sub/.env', 'id_rsa']) expect(existsSync(join(dest, path))).toBe(false);
       expect(existsSync(join(dest, 'hello.js'))).toBe(true);

@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs';
+import { connect } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { readRuntime } from '../config.ts';
 import { type RunningHq, startHq } from '../hq.ts';
 import type { Snapshot } from '../snapshot.ts';
-import { change, folder, human, tempDir } from './helpers.ts';
+import { change, folder, hasSqlite, human, tempDir } from './helpers.ts';
 
 const running: RunningHq[] = [];
 const boot = async (
@@ -53,7 +55,7 @@ const watch = (hq: RunningHq) =>
     );
   });
 
-describe('HQ', () => {
+describe.skipIf(!hasSqlite)('HQ', () => {
   it('answers health, snapshot and the dashboard on loopback', async () => {
     const { hq } = await boot();
     expect((await call(hq, '/api/health')).json).toMatchObject({ ok: true, service: 'agent-works', pid: process.pid });
@@ -138,6 +140,55 @@ describe('HQ', () => {
       socket.on('unexpected-response', () => resolve('refused'));
     });
     expect(refused).toBe('refused');
+  });
+
+  it('refuses a Host header with a port other than the one HQ is bound to', async () => {
+    const { hq } = await boot();
+    const { request } = await import('node:http');
+    const statusFor = (host: string) =>
+      new Promise<number>((resolve) => {
+        const req = request(
+          { host: '127.0.0.1', port: new URL(hq.url).port, path: '/api/snapshot', headers: { host } },
+          (res) => resolve(res.statusCode ?? 0),
+        );
+        req.end();
+      });
+    expect(await statusFor(`127.0.0.1:${hq.port}`)).toBe(200);
+    expect(await statusFor(`localhost:${hq.port}`)).toBe(200);
+    expect(await statusFor('127.0.0.1:1')).toBe(403);
+    expect(await statusFor('localhost')).toBe(403);
+    expect(await statusFor(`127.0.0.1:${hq.port + 1}`)).toBe(403);
+  });
+
+  const outside = Object.values(networkInterfaces())
+    .flat()
+    .find((entry) => entry !== undefined && entry.family === 'IPv4' && !entry.internal)?.address;
+
+  it.skipIf(outside === undefined)('listens on loopback only, so another machine cannot reach it', async () => {
+    const { hq } = await boot();
+    const reached = await new Promise<boolean>((resolve) => {
+      const socket = connect({ host: outside as string, port: hq.port, timeout: 2000 });
+      socket.once('connect', () => resolve(true));
+      socket.once('error', () => resolve(false));
+      socket.once('timeout', () => resolve(false));
+      socket.on('connect', () => socket.destroy());
+    });
+    expect(reached).toBe(false);
+  });
+
+  it('pushes a higher revision over the WebSocket when a repo is registered', async () => {
+    const { hq } = await boot();
+    const root = tempDir('hq-ws-repo');
+    const ws = await watch(hq);
+    await ws.next(0);
+    const factory = folder(root, 'f');
+    await call(hq, '/api/factories', { root: factory });
+    await ws.next(1);
+    const added = await call(hq, '/api/repos', { factory, path: folder(root, 'clone'), remote: null });
+    expect(added.json).toMatchObject({ changed: true, rev: 2 });
+    await Promise.race([ws.next(2), new Promise((_, reject) => setTimeout(() => reject(new Error('no push')), 2000))]);
+    expect(ws.revs.at(-1)).toBe(2);
+    ws.socket.close();
   });
 
   it('marks commands skipped when no executor is wired and failed when one throws', async () => {

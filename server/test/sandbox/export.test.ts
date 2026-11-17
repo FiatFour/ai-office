@@ -1,10 +1,12 @@
-import { CageError, homeName } from '../../sandbox/container.ts';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { CageError, homeName } from '../../sandbox/container.ts';
 import { ExportError, exportRepo, scanInContainer } from '../../sandbox/export.ts';
 import { tempDir } from '../helpers.ts';
-import { join } from 'node:path';
 
-const answering = (code: number, out: string, err = '') => async () => ({ code, out, err });
+const answering =
+  (code: number, out: string, err = '') =>
+  async () => ({ code, out, err });
 
 describe('contained scan', () => {
   it.each([

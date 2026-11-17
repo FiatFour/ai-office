@@ -82,7 +82,7 @@ export class SandboxDriver {
     return userArgs(this.engine, this.rootless);
   }
 
-  private async throwaway(args: string[], mounts: string[]) {
+  async throwaway(args: string[], mounts: string[]) {
     return this.engine.run(
       [
         'run',

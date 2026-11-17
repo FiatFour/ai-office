@@ -18,5 +18,6 @@ const usable = async (name: EngineName): Promise<Engine | null> => {
   return engine;
 };
 
-export const engines = (await Promise.all((['docker', 'podman'] as const).map(usable))).filter((e): e is Engine => e !== null);
-
+export const engines = (await Promise.all((['docker', 'podman'] as const).map(usable))).filter(
+  (e): e is Engine => e !== null,
+);

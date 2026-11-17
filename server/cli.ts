@@ -4,7 +4,16 @@ import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_PORT, hqIdFor, imageFor, insideCage, pidAlive, type RuntimeFile, readRuntime, resolveHome } from './config.ts';
+import {
+  DEFAULT_PORT,
+  hqIdFor,
+  imageFor,
+  insideCage,
+  pidAlive,
+  type RuntimeFile,
+  readRuntime,
+  resolveHome,
+} from './config.ts';
 import { startHq } from './hq.ts';
 import { type DoctorContext, exitCodeOf, formatChecks, type PortState, runDoctor } from './preflight/checks.ts';
 import { realHostProbe } from './preflight/host.ts';

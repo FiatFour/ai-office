@@ -90,7 +90,7 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       expect(cage).toBeDefined();
       const [inspect] = JSON.parse(await engine.ok(['inspect', cage?.container ?? ''])) as Array<{
         Config: { User: string };
-        HostConfig: { CapDrop: string[]; SecurityOpt: string[]; ReadonlyRootfs: boolean };
+        HostConfig: { CapDrop: string[]; SecurityOpt: string[] };
         NetworkSettings: { Networks: Record<string, unknown> };
       }>;
       const dropped = (inspect?.HostConfig.CapDrop ?? []).map((c) => c.toUpperCase().replace(/^CAP_/, ''));
@@ -98,7 +98,14 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
         expect(dropped).toContain(cap);
       expect(dropped.length).toBeGreaterThan(0);
       expect(inspect?.HostConfig.SecurityOpt.join(' ')).toContain('no-new-privileges');
-      expect(inspect?.HostConfig.ReadonlyRootfs).toBe(true);
+      const rootMount = await engine.run([
+        'exec',
+        cage?.container ?? '',
+        'sh',
+        '-c',
+        'awk \'$2=="/"{print $4}\' /proc/mounts',
+      ]);
+      expect(rootMount.out.split(',')).toContain('ro');
       expect(inspect?.Config.User).toBe(`${process.getuid?.()}:${process.getgid?.()}`);
       expect(Object.keys(inspect?.NetworkSettings.Networks ?? {})).toEqual([`aw-${hq}-internal`]);
       const net = JSON.parse(await engine.ok(['network', 'inspect', `aw-${hq}-internal`])) as Array<{

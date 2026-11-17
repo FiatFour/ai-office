@@ -464,8 +464,7 @@ const MUTANTS = [
   },
   {
     name: 'v-allow-case-insensitive',
-    claim:
-      'superseded by M9: Allow now normalizes on purpose; allow-unnormalized and allow-ignores-port test the new rule',
+    claim: 'Allow turns an IDN name into its ASCII form before it matches a denial (M9 replaced exact match)',
     edits: [
       [
         'server/modes/cages.ts',
@@ -474,7 +473,6 @@ const MUTANTS = [
       ],
     ],
     tests: [CAGES],
-    survives: true,
   },
   {
     name: 'v-brief-drops-not-collected-reason',
@@ -623,9 +621,7 @@ const MUTANTS = [
   {
     name: 'm2-brief-marker-any-author',
     claim: 'a brief marker counts only on a comment the HQ account wrote',
-    edits: [
-      ['server/githost/github.ts', "(c) => str(c, 'user.login').toLowerCase() === self &&", '(c) =>'],
-    ],
+    edits: [['server/githost/github.ts', "(c) => str(c, 'user.login').toLowerCase() === self &&", '(c) =>']],
     tests: [CONTRACT, CAGES],
   },
   {

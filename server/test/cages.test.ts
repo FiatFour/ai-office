@@ -197,6 +197,10 @@ describe.skipIf(!hasSqlite)('one ticket through the cages mode', () => {
     expect((await post(hq, '/api/actions/allow', { host: 'API.Stripe.com.' })).json).toEqual({
       allowed: 'api.stripe.com:443',
     });
+    proxy.sink({ host: 'xn--bcher-kva.example', port: 443, agent: 'nova', reason: 'not-allowlisted', at: '' });
+    expect((await post(hq, '/api/actions/allow', { host: 'B\u00fccher.example' })).json).toEqual({
+      allowed: 'xn--bcher-kva.example:443',
+    });
     await until(hq, (s) => station('alpha/web')(s) === 'merge');
     expect(fake.prs).toHaveLength(1);
     expect(proxy.denies).toBeGreaterThan(0);

@@ -1,8 +1,16 @@
+import type { ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export const hasSqlite = process.getBuiltinModule?.('node:sqlite') !== undefined;
+
+export const canSpawnTs = (process.features as { typescript?: boolean | string }).typescript ? hasSqlite : false;
+
+export const exited = (child: ChildProcess): Promise<void> =>
+  new Promise((resolve) =>
+    child.exitCode !== null || child.signalCode !== null ? resolve() : child.once('exit', () => resolve()),
+  );
 
 export const tempDir = (label: string): string => realpathSync(mkdtempSync(join(tmpdir(), `aw-${label}-`)));
 

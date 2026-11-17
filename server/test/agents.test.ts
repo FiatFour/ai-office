@@ -11,9 +11,10 @@ const ticket = TICKETS['alpha/t1'] as NonNullable<(typeof TICKETS)['alpha/t1']>;
 const signal = new AbortController().signal;
 const result = (out: string, code = 0) => ({ code, out, err: '', timedOut: false });
 
-const shell = (stream: string, calls: string[][]): CageShell => ({
-  exec: async (argv) => {
+const shell = (stream: string, calls: string[][], inputs: string[] = []): CageShell => ({
+  exec: async (argv, options) => {
     calls.push([...argv]);
+    inputs.push(options?.input ?? '');
     if (argv[0] === 'claude') return result(stream);
     const sub = argv.find((a) => ['rev-parse', 'diff', 'show'].includes(a));
     if (sub === 'rev-parse') return result('base000\n');
@@ -45,7 +46,8 @@ describe('the Claude Code runtime', () => {
 
   it('runs claude headless in the cage and reads the commit through git inside the cage', async () => {
     const calls: string[][] = [];
-    const runtime = claudeCode({ shell: () => shell(fixture('claude-stream-author.jsonl'), calls) });
+    const inputs: string[] = [];
+    const runtime = claudeCode({ shell: () => shell(fixture('claude-stream-author.jsonl'), calls, inputs) });
     const done = await runtime.run(authorJob);
     expect(done).toMatchObject({
       role: 'author',
@@ -55,10 +57,49 @@ describe('the Claude Code runtime', () => {
     expect(claude).toEqual(
       expect.arrayContaining(['-p', '--output-format', 'stream-json', '--no-session-persistence']),
     );
-    expect(claude.join(' ')).toContain('Do not push');
+    expect(claude.join(' ')).not.toContain('Do not push');
+    expect(inputs[calls.indexOf(claude)]).toContain('Do not push');
     for (const git of calls.filter((c) => c[0] === 'git'))
       expect(git).toEqual(expect.arrayContaining(['core.fsmonitor=false', 'core.hooksPath=/dev/null']));
     expect(calls.find((c) => c.includes('diff'))).toEqual(expect.arrayContaining(['base000', 'HEAD']));
+  });
+
+  it('sends a large PR to the reviewer on stdin, so the argv stays small', async () => {
+    const calls: string[][] = [];
+    const inputs: string[] = [];
+    const big = 'x'.repeat(1024 * 1024);
+    const files = Array.from({ length: 4 }, (_, i) => ({ path: `src/big${i}.txt`, content: `${big}${i}` }));
+    await claudeCode({ shell: () => shell(fixture('claude-stream-review.jsonl'), calls, inputs) }).run({
+      role: 'reviewer',
+      task: 'alpha/t1',
+      worker: 'vega',
+      ticket,
+      round: 1,
+      change: {
+        host: 'github',
+        kind: 'change',
+        repo: 'acme/app',
+        headRepo: 'acme/app',
+        number: 1,
+        branch: 'aw/alpha/t1',
+        author: 'aw-nova',
+        state: 'open',
+        headSha: 'abc',
+        url: 'u',
+        at: 1,
+      },
+      files,
+      signal,
+    });
+    const claude = calls.findIndex((c) => c[0] === 'claude');
+    expect(calls[claude]?.join(' ').length).toBeLessThan(4096);
+    expect(inputs[claude]?.length).toBeGreaterThan(4 * 1024 * 1024);
+    expect(inputs[claude]).toContain('--- src/big3.txt');
+  });
+
+  it('reads the last result line when a stream holds more than one', () => {
+    const early = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true });
+    expect(parseStream(`${early}\n${fixture('claude-stream-author.jsonl')}`).usage.outputTokens).toBe(227);
   });
 
   it('returns the reviewer verdict and line comments from the final json block', async () => {

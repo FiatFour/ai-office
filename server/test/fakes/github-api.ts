@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { HttpRequest, HttpResponse, Transport } from '../../githost/host.ts';
+import { paged } from './page.ts';
 
 interface Pr {
   number: number;
@@ -10,6 +11,7 @@ interface Pr {
   author: string;
   state: 'open' | 'closed';
   merged: boolean;
+  draft: boolean;
   updated: number;
 }
 
@@ -47,6 +49,8 @@ export class FakeGithub {
   readonly calls: HttpRequest[] = [];
   readonly refs = new Map<string, string>();
   readonly trees = new Map<string, Map<string, string>>();
+  readonly parents = new Map<string, string>();
+  private readonly treeFiles = new Map<string, Map<string, string>>();
   readonly prs: Pr[] = [];
   readonly reviews: Review[] = [];
   readonly comments: Comment[] = [];
@@ -73,7 +77,7 @@ export class FakeGithub {
   transport(account: string): Transport {
     return async (request) => {
       this.calls.push(request);
-      return this.route(account, request);
+      return paged(request, this.route(account, request), ['check_runs', 'statuses']);
     };
   }
 
@@ -84,6 +88,29 @@ export class FakeGithub {
     pr.merged = true;
     pr.updated = this.tick();
     this.refs.set(pr.base, this.refs.get(pr.head) ?? '');
+  }
+
+  commitOn(branch: string, files: Record<string, string>, base = 'main'): string {
+    const from = this.refs.get(branch) ?? this.refs.get(base) ?? '';
+    const next = new Map(this.trees.get(from) ?? []);
+    for (const [path, content] of Object.entries(files)) next.set(path, content);
+    const commit = sha(`${from}|human|${this.next++}`);
+    this.trees.set(commit, next);
+    this.parents.set(commit, from);
+    this.moveRef(branch, commit);
+    return commit;
+  }
+
+  private treeOf(files: Map<string, string>): string {
+    const tree = sha(`tree|${JSON.stringify([...files].sort())}`);
+    this.treeFiles.set(tree, files);
+    return tree;
+  }
+
+  private moveRef(branch: string, commit: string): void {
+    this.refs.set(branch, commit);
+    if (this.ci !== null) this.setStatus(commit, 'ci', this.ci);
+    for (const pr of this.prs) if (pr.head === branch && pr.state === 'open') pr.updated = this.tick();
   }
 
   setStatus(headSha: string, context: string, state: string): void {
@@ -103,6 +130,7 @@ export class FakeGithub {
       body: pr.body,
       state: pr.state,
       merged: pr.merged,
+      draft: pr.draft,
       merged_at: pr.merged ? iso(pr.updated) : null,
       user: { login: pr.author },
       head: { ref: pr.head, sha: this.refs.get(pr.head) ?? '', repo },
@@ -126,6 +154,7 @@ export class FakeGithub {
     const ok = (b: unknown, status = 200): HttpResponse => ({ status, body: b });
     const fail = (status: number, message: string): HttpResponse => ({ status, body: { message } });
     const url = new URL(path, 'https://api.github.com');
+    if (method === 'GET' && path === '/user') return ok({ login: account });
     const prefix = `/repos/${this.repo}`;
     if (!url.pathname.startsWith(prefix)) return fail(404, 'Not Found');
     const rest = decodeURIComponent(url.pathname.slice(prefix.length));
@@ -140,31 +169,57 @@ export class FakeGithub {
     if (method === 'POST' && rest === '/git/refs') {
       const name = String(input.ref).replace('refs/heads/', '');
       if (this.refs.has(name)) return fail(422, 'Reference already exists');
-      this.refs.set(name, String(input.sha));
+      if (!this.trees.has(String(input.sha))) return fail(422, 'Object does not exist');
+      this.moveRef(name, String(input.sha));
       return ok({ ref: input.ref }, 201);
     }
-    m = /^\/contents\/(.+)$/.exec(rest);
+    m = method === 'PATCH' ? /^\/git\/refs\/heads\/(.+)$/.exec(rest) : null;
     if (m) {
-      const file = m[1] ?? '';
-      const branch = method === 'GET' ? (url.searchParams.get('ref') ?? 'main') : String(input.branch);
-      const head = this.refs.get(branch) ?? (this.trees.has(branch) ? branch : undefined);
-      if (head === undefined) return fail(404, 'No such branch');
-      const tree = this.trees.get(head) ?? new Map();
-      const current = tree.get(file);
-      if (method === 'GET')
-        return current === undefined
-          ? fail(404, 'Not Found')
-          : ok({ sha: blob(current), content: Buffer.from(current).toString('base64') });
-      if (method !== 'PUT') return fail(405, 'Method Not Allowed');
-      if (current !== undefined && input.sha !== blob(current)) return fail(409, 'sha does not match');
-      const next = new Map(tree);
-      next.set(file, Buffer.from(String(input.content), 'base64').toString('utf8'));
-      const commit = sha(`${head}|${file}|${input.content}|${this.next++}`);
-      this.trees.set(commit, next);
-      this.refs.set(branch, commit);
-      if (this.ci !== null) this.setStatus(commit, 'ci', this.ci);
-      for (const pr of this.prs) if (pr.head === branch && pr.state === 'open') pr.updated = this.tick();
-      return ok({ commit: { sha: commit } }, current === undefined ? 201 : 200);
+      const name = m[1] ?? '';
+      const current = this.refs.get(name);
+      const next = String(input.sha);
+      if (current === undefined) return fail(422, 'Reference does not exist');
+      if (input.force !== true && this.parents.get(next) !== current) return fail(422, 'Update is not a fast forward');
+      this.moveRef(name, next);
+      return ok({ ref: `refs/heads/${name}`, object: { sha: next } });
+    }
+    m = method === 'GET' ? /^\/git\/commits\/([0-9a-f]+)$/.exec(rest) : null;
+    if (m) {
+      const files = this.trees.get(m[1] ?? '');
+      return files === undefined ? fail(404, 'Not Found') : ok({ sha: m[1], tree: { sha: this.treeOf(files) } });
+    }
+    m = method === 'GET' ? /^\/git\/trees\/([0-9a-f]+)$/.exec(rest) : null;
+    if (m) {
+      const files = this.treeFiles.get(m[1] ?? '');
+      if (files === undefined) return fail(404, 'Not Found');
+      return ok({
+        truncated: false,
+        tree: [...files].map(([path, content]) => ({ path, type: 'blob', sha: blob(content) })),
+      });
+    }
+    if (method === 'POST' && rest === '/git/trees') {
+      const base = this.treeFiles.get(String(input.base_tree));
+      if (base === undefined) return fail(422, 'base_tree is not a tree');
+      const files = new Map(base);
+      for (const entry of input.tree as Array<{ path: string; content: string }>) files.set(entry.path, entry.content);
+      return ok({ sha: this.treeOf(files) }, 201);
+    }
+    if (method === 'POST' && rest === '/git/commits') {
+      const files = this.treeFiles.get(String(input.tree));
+      const [parent] = input.parents as string[];
+      if (files === undefined || parent === undefined || !this.trees.has(parent)) return fail(422, 'bad commit');
+      const commit = sha(`${input.tree}|${parent}|${input.message}|${this.next++}`);
+      this.trees.set(commit, files);
+      this.parents.set(commit, parent);
+      return ok({ sha: commit }, 201);
+    }
+    m = method === 'GET' ? /^\/contents\/(.+)$/.exec(rest) : null;
+    if (m) {
+      const ref = url.searchParams.get('ref') ?? 'main';
+      const current = this.trees.get(this.refs.get(ref) ?? ref)?.get(m[1] ?? '');
+      return current === undefined
+        ? fail(404, 'Not Found')
+        : ok({ sha: blob(current), content: Buffer.from(current).toString('base64') });
     }
     if (rest === '/pulls' && method === 'GET') {
       const head = url.searchParams.get('head')?.split(':')[1];
@@ -192,6 +247,7 @@ export class FakeGithub {
         author: account,
         state: 'open',
         merged: false,
+        draft: input.draft === true,
         updated: this.tick(),
       };
       this.prs.push(pr);

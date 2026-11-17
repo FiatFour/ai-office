@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { HttpRequest, HttpResponse, Transport } from '../../githost/host.ts';
+import { paged } from './page.ts';
 
 interface Mr {
   iid: number;
@@ -37,7 +38,7 @@ export class FakeGitlab {
   transport(account: string): Transport {
     return async (request) => {
       this.calls.push(request);
-      return this.route(account, request);
+      return paged(request, this.route(account, request));
     };
   }
 
@@ -64,6 +65,7 @@ export class FakeGitlab {
   private route(account: string, { method, path, body }: HttpRequest): HttpResponse {
     const ok = (b: unknown, status = 200): HttpResponse => ({ status, body: b });
     const fail = (status: number, message: string): HttpResponse => ({ status, body: { message } });
+    if (method === 'GET' && path === '/user') return ok({ username: account });
     const url = new URL(path, 'https://gitlab.com');
     const prefix = `/projects/${encodeURIComponent(this.repo)}`;
     if (!url.pathname.startsWith(prefix)) return fail(404, '404 Project Not Found');

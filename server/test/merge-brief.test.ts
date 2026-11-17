@@ -96,12 +96,12 @@ describe('the merge brief', () => {
       ],
       evidence: { screenshots: ['before.png', 'after.png'] },
     });
-    expect(brief.evidence.ci_runs).toEqual({ state: 'collected', lines: ['ci: success'] });
+    expect(brief.evidence.ci_runs).toEqual({ state: 'collected', lines: ['`ci`: success'] });
     expect(brief.evidence.screenshots).toEqual({ state: 'collected', lines: ['before.png', 'after.png'] });
     expect(brief.sections.evidence).toEqual({ state: 'collected', lines: ['screenshots', 'ci_runs'] });
     const review = brief.sections.review;
     expect(review.state === 'collected' && review.lines.join('\n')).toMatch(
-      /Round 1: vega \(claude-code\) gave changes.*say hi/,
+      /Round 1: vega \(claude-code\) gave changes[^\n]*asked:\n```text\n│ src\/greet\.txt:1 say hi\n```/,
     );
     expect(review.state === 'collected' && review.lines.join('\n')).toContain('Cross-runtime review not collected');
   });

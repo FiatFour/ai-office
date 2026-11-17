@@ -132,6 +132,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     if (executor === undefined) {
       ledger.mark(entry.id, 'skipped', 'no executor is wired for this command yet');
     } else {
+      ledger.begin(entry.id);
       try {
         await executor(entry);
         ledger.mark(entry.id, 'done');

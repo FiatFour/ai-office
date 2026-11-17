@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { type Command, type Config, type Event, initialState, reduce, type State } from '@agent-works/core';
 import { pruneSuperseded, supersededBy } from './store/prune.ts';
 import type { OutboxEntry, OutboxStatus, Persisted, Store } from './store/store.ts';
@@ -7,31 +8,47 @@ const SUPERSEDED_CAP = 10_000;
 const DONE_KEPT = 200;
 export const MAX_ATTEMPTS = 3;
 
-const retryable = (entry: OutboxEntry): boolean => entry.status === 'failed' && entry.attempts < MAX_ATTEMPTS;
+const runnable = (entry: OutboxEntry): boolean =>
+  (entry.status === 'pending' || entry.status === 'failed') && entry.attempts < MAX_ATTEMPTS;
+
+const gaveUp = (error: string | null, attempts: number): string => `${error} (gave up after ${attempts} attempts)`;
 
 export interface Ingested {
   readonly rev: number;
   readonly commands: readonly OutboxEntry[];
 }
 
-const entriesFor = (seq: number, commands: readonly Command[]): OutboxEntry[] =>
-  commands.map((command, index) => ({ id: `${seq}.${index}`, command, status: 'pending', attempts: 0, error: null }));
+const entriesFor = (epoch: string, seq: number, commands: readonly Command[]): OutboxEntry[] =>
+  commands.map((command, index) => ({
+    id: `${epoch}.${seq}.${index}`,
+    command,
+    status: 'pending',
+    attempts: 0,
+    error: null,
+  }));
 
 const settle = (outbox: readonly OutboxEntry[]): OutboxEntry[] => {
-  const isOpen = (entry: OutboxEntry): boolean => entry.status === 'pending' || retryable(entry);
-  const open = outbox.filter(isOpen);
-  const closed = outbox.filter((entry) => !isOpen(entry));
+  const open = outbox.filter(runnable);
+  const closed = outbox.filter((entry) => !runnable(entry));
   return [...open, ...closed.slice(-DONE_KEPT)];
 };
+
+const crashed = (entry: OutboxEntry): OutboxEntry =>
+  entry.status === 'pending' && entry.attempts >= MAX_ATTEMPTS
+    ? { ...entry, status: 'failed', error: gaveUp('HQ stopped while it ran', entry.attempts) }
+    : entry;
 
 export class Ledger {
   private readonly store: Store;
   private persisted: Persisted;
+  private readonly epoch = randomBytes(4).toString('hex');
 
   constructor(store: Store, config: Config = DEFAULT_CONFIG) {
     this.store = store;
     const loaded = store.load();
-    this.persisted = loaded ?? {
+    if (loaded?.outbox.some((entry) => crashed(entry) !== entry))
+      store.commit({ ...loaded, outbox: settle(loaded.outbox.map(crashed)) });
+    this.persisted = store.load() ?? {
       v: 1 as const,
       eventSeq: 0,
       rev: 0,
@@ -67,15 +84,16 @@ export class Ledger {
     return this.persisted.rev;
   }
 
+  begin(id: string): void {
+    this.update(id, (entry) => ({ ...entry, attempts: entry.attempts + 1 }));
+  }
+
   mark(id: string, status: OutboxStatus, error: string | null = null): void {
-    const outbox = this.persisted.outbox.map((entry) => {
-      if (entry.id !== id) return entry;
-      const attempts = status === 'failed' ? entry.attempts + 1 : entry.attempts;
-      const reason =
-        status === 'failed' && attempts >= MAX_ATTEMPTS ? `${error} (gave up after ${attempts} attempts)` : error;
-      return { ...entry, status, error: reason, attempts };
-    });
-    this.save({ ...this.persisted, rev: this.persisted.rev + 1, outbox: settle(outbox) });
+    this.update(id, (entry) => ({
+      ...entry,
+      status,
+      error: status === 'failed' && entry.attempts >= MAX_ATTEMPTS ? gaveUp(error, entry.attempts) : error,
+    }));
   }
 
   pending(): readonly OutboxEntry[] {
@@ -83,7 +101,12 @@ export class Ledger {
   }
 
   runnable(): readonly OutboxEntry[] {
-    return this.persisted.outbox.filter((entry) => entry.status === 'pending' || retryable(entry));
+    return this.persisted.outbox.filter(runnable);
+  }
+
+  private update(id: string, change: (entry: OutboxEntry) => OutboxEntry): void {
+    const outbox = this.persisted.outbox.map((entry) => (entry.id === id ? change(entry) : entry));
+    this.save({ ...this.persisted, rev: this.persisted.rev + 1, outbox: settle(outbox) });
   }
 
   private save(next: Persisted): void {
@@ -94,7 +117,7 @@ export class Ledger {
   private next(seq: number, event: Event): { persisted: Persisted; fresh: OutboxEntry[] } {
     const before = this.persisted;
     const reduced = reduce(before.state, event);
-    const fresh = entriesFor(seq, reduced.commands);
+    const fresh = entriesFor(this.epoch, seq, reduced.commands);
     const moved = supersededBy(before.state, reduced.state);
     const superseded =
       moved.length === 0 ? before.superseded : [...new Set([...before.superseded, ...moved])].slice(-SUPERSEDED_CAP);

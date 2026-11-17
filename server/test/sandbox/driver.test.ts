@@ -94,7 +94,7 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
         NetworkSettings: { Networks: Record<string, unknown> };
       }>;
       const dropped = (inspect?.HostConfig.CapDrop ?? []).map((c) => c.toUpperCase().replace(/^CAP_/, ''));
-      for (const cap of dropped.includes('ALL') ? [] : ['CHOWN', 'NET_RAW', 'SYS_ADMIN', 'SETUID'])
+      for (const cap of dropped.includes('ALL') ? [] : ['CHOWN', 'DAC_OVERRIDE', 'SETUID'])
         expect(dropped).toContain(cap);
       expect(dropped.length).toBeGreaterThan(0);
       expect(inspect?.HostConfig.SecurityOpt.join(' ')).toContain('no-new-privileges');

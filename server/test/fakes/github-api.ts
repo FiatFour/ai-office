@@ -55,8 +55,11 @@ export class FakeGithub {
   private clock = Date.parse('2026-11-17T00:00:00Z');
   private next = 100;
 
-  constructor(repo = 'acme/app') {
+  readonly ci: string | null;
+
+  constructor(repo = 'acme/app', ci: string | null = 'success') {
     this.repo = repo;
+    this.ci = ci;
     const root = sha('root');
     this.refs.set('main', root);
     this.trees.set(root, new Map([['README.md', '# app\n']]));
@@ -144,11 +147,14 @@ export class FakeGithub {
     if (m) {
       const file = m[1] ?? '';
       const branch = method === 'GET' ? (url.searchParams.get('ref') ?? 'main') : String(input.branch);
-      const head = this.refs.get(branch);
+      const head = this.refs.get(branch) ?? (this.trees.has(branch) ? branch : undefined);
       if (head === undefined) return fail(404, 'No such branch');
       const tree = this.trees.get(head) ?? new Map();
       const current = tree.get(file);
-      if (method === 'GET') return current === undefined ? fail(404, 'Not Found') : ok({ sha: blob(current) });
+      if (method === 'GET')
+        return current === undefined
+          ? fail(404, 'Not Found')
+          : ok({ sha: blob(current), content: Buffer.from(current).toString('base64') });
       if (method !== 'PUT') return fail(405, 'Method Not Allowed');
       if (current !== undefined && input.sha !== blob(current)) return fail(409, 'sha does not match');
       const next = new Map(tree);
@@ -156,6 +162,7 @@ export class FakeGithub {
       const commit = sha(`${head}|${file}|${input.content}|${this.next++}`);
       this.trees.set(commit, next);
       this.refs.set(branch, commit);
+      if (this.ci !== null) this.setStatus(commit, 'ci', this.ci);
       for (const pr of this.prs) if (pr.head === branch && pr.state === 'open') pr.updated = this.tick();
       return ok({ commit: { sha: commit } }, current === undefined ? 201 : 200);
     }
@@ -199,6 +206,15 @@ export class FakeGithub {
       if (sub === '/merge') {
         this.mergeByHuman(pr.number);
         return ok({ merged: true });
+      }
+      if (sub === '/files' && method === 'GET') {
+        const base = this.trees.get(this.refs.get(pr.base) ?? '') ?? new Map();
+        const head = this.trees.get(this.refs.get(pr.head) ?? '') ?? new Map();
+        return ok(
+          [...head.entries()]
+            .filter(([path, content]) => base.get(path) !== content)
+            .map(([filename]) => ({ filename, status: 'modified' })),
+        );
       }
       if (sub === '/reviews' && method === 'GET')
         return ok(this.reviews.filter((r) => r.pr === pr.number).map((r) => this.reviewObject(r)));

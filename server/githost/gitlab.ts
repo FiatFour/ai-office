@@ -125,6 +125,7 @@ const PARSERS: Record<string, (b: unknown) => HostEvent | null> = {
         reviewer: str(b, 'user.username'),
         verdict: 'approve',
         commitId: headSha,
+        body: '',
         at,
       };
     return {
@@ -277,6 +278,7 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
         reviewer: str(a, 'user.username'),
         verdict: 'approve',
         commitId: now.headSha,
+        body: '',
         at: time(approvals, 'updated_at'),
       }));
       return { change: now, reviews, checks: await pipelines(repo, now.headSha) };
@@ -285,6 +287,20 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
     async comments(repo, number) {
       const list = (await call('GET', `${project(repo)}/merge_requests/${number}/notes?per_page=100`)) as unknown[];
       return list.filter((n) => field(n, 'system') !== true).map((n) => note(repo, number, n));
+    },
+
+    async files(repo, number, headSha) {
+      const mr = await call('GET', `${project(repo)}/merge_requests/${number}/changes`);
+      const files = [];
+      for (const change of (field(mr, 'changes') as unknown[]).filter((c) => field(c, 'deleted_file') !== true)) {
+        const path = str(change, 'new_path');
+        const raw = await call(
+          'GET',
+          `${project(repo)}/repository/files/${encodeURIComponent(path)}/raw?ref=${headSha}`,
+        );
+        files.push({ path, content: String(raw) });
+      }
+      return files;
     },
 
     async postReview(repo, number, draft) {
@@ -304,9 +320,8 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
         });
       if (draft.verdict === 'approve')
         await call('POST', `${project(repo)}/merge_requests/${number}/approve`, { sha: draft.commitId });
-      const summary = await call('POST', `${project(repo)}/merge_requests/${number}/notes`, {
-        body: `${draft.body}\n\nVerdict: ${draft.verdict}`,
-      });
+      const text = `${draft.body}\n\nVerdict: ${draft.verdict}`;
+      const summary = await call('POST', `${project(repo)}/merge_requests/${number}/notes`, { body: text });
       return {
         host: 'gitlab',
         kind: 'review',
@@ -316,6 +331,7 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
         reviewer: str(summary, 'author.username'),
         verdict: draft.verdict === 'approve' ? 'approve' : 'comment',
         commitId: draft.commitId,
+        body: text,
         at: time(summary, 'created_at'),
       };
     },

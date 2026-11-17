@@ -78,7 +78,8 @@ export class FakeGitlab {
     }
     m = method === 'GET' ? /^\/repository\/files\/(.+)\/raw$/.exec(rest) : null;
     if (m) {
-      const branch = this.branches.get(url.searchParams.get('ref') ?? 'main');
+      const ref = url.searchParams.get('ref') ?? 'main';
+      const branch = this.branches.get(ref) ?? [...this.branches.values()].find((b) => b.commit === ref);
       const content = branch?.files.get(decodeURIComponent(m[1] ?? ''));
       return content === undefined ? fail(404, '404 File Not Found') : ok(content);
     }
@@ -122,6 +123,15 @@ export class FakeGitlab {
       if (mr === undefined) return fail(404, '404 Not found');
       const sub = m[2] ?? '';
       if (sub === '' && method === 'GET') return ok(this.mrObject(mr));
+      if (sub === '/changes') {
+        const base = this.branches.get(mr.target)?.files ?? new Map();
+        const head = this.branches.get(mr.source)?.files ?? new Map();
+        return ok({
+          changes: [...head.entries()]
+            .filter(([path, content]) => base.get(path) !== content)
+            .map(([path]) => ({ new_path: path, deleted_file: false })),
+        });
+      }
       if (sub === '/approvals')
         return ok({
           updated_at: iso(mr.updated),
@@ -164,7 +174,10 @@ export class FakeGitlab {
         return ok(this.mrObject(mr));
       }
     }
-    if (method === 'GET' && rest === '/pipelines') return ok([]);
+    if (method === 'GET' && rest === '/pipelines') {
+      const head = url.searchParams.get('sha');
+      return ok([{ id: 9, sha: head, status: 'success', updated_at: iso(this.clock) }]);
+    }
     return fail(404, `404 Not Found: ${method} ${rest}`);
   }
 }

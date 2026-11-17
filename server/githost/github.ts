@@ -104,6 +104,7 @@ const review = (repo: string, number: number, r: unknown): ReviewFact => ({
   reviewer: str(r, 'user.login'),
   verdict: oneOf(r, 'state', REVIEW),
   commitId: str(r, 'commit_id'),
+  body: optStr(r, 'body') ?? '',
   at: time(r, 'submitted_at'),
 });
 
@@ -260,6 +261,17 @@ export const github = ({ send, log }: GithubOptions): GitHost => {
     async comments(repo, number) {
       const list = (await call('GET', `/repos/${repo}/pulls/${number}/comments?per_page=100`)) as unknown[];
       return list.map((c) => comment(repo, number, c));
+    },
+
+    async files(repo, number, headSha) {
+      const list = (await call('GET', `/repos/${repo}/pulls/${number}/files?per_page=100`)) as unknown[];
+      const files = [];
+      for (const entry of list.filter((f) => str(f, 'status') !== 'removed')) {
+        const path = str(entry, 'filename');
+        const got = await call('GET', `/repos/${repo}/contents/${segments(path)}?ref=${headSha}`);
+        files.push({ path, content: Buffer.from(str(got, 'content'), 'base64').toString('utf8') });
+      }
+      return files;
     },
 
     async postReview(repo, number, draft) {

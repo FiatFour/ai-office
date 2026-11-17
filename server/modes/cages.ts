@@ -1,0 +1,515 @@
+import {
+  type AlertReason,
+  type Box,
+  branchOf,
+  type Change,
+  type CommandKind,
+  type Event,
+  type State,
+  type TaskId,
+  toLogin,
+  type Verdict,
+} from '@agent-works/core';
+import type { AgentRuntime, RuntimeId, Ticket, Usage } from '../agents/runtime.ts';
+import { briefMarker, mergeBrief, type ReviewRound, renderBrief } from '../brief/merge-brief.ts';
+import { InvalidEvent } from '../events.ts';
+import { type GitHost, type ReviewFact, toPoll } from '../githost/host.ts';
+import type { Denial } from '../sandbox/firewall.ts';
+import type { LoggedEvent, OutboxEntry } from '../store/store.ts';
+
+export interface HqPort {
+  state(): State;
+  ingest(event: Event): void;
+  outbox(): readonly OutboxEntry[];
+  events(after: number): readonly LoggedEvent[];
+  changed(): void;
+}
+
+export type Executor = (entry: OutboxEntry) => Promise<void>;
+
+export type ActionItem =
+  | { readonly kind: 'ready_to_merge'; readonly task: TaskId; readonly url: string; readonly brief: string }
+  | { readonly kind: 'round_limit'; readonly task: TaskId; readonly url: string; readonly fixRounds: number }
+  | { readonly kind: 'website'; readonly host: string; readonly agent: string; readonly count: number }
+  | { readonly kind: 'alert'; readonly reason: AlertReason; readonly subject: string }
+  | { readonly kind: 'job_failed'; readonly task: TaskId; readonly job: string; readonly error: string };
+
+export interface ModeView {
+  readonly rounds: Readonly<Record<TaskId, number>>;
+  readonly usage: Readonly<Record<TaskId, readonly (Usage | null)[]>>;
+  readonly jobs: readonly string[];
+  readonly reviewGap: string | null;
+}
+
+export interface Mode {
+  readonly executors: Partial<Record<CommandKind, Executor>>;
+  actions(): ActionItem[];
+  view(): ModeView;
+  route(method: string, path: string, body: () => Promise<unknown>): Promise<unknown> | undefined;
+  noteDenial(denial: Denial): void;
+  start(): void;
+  close(): Promise<void>;
+}
+
+export type ModeFactory = (hq: HqPort) => Mode;
+
+export interface EgressControl {
+  allow(host: string): Promise<void>;
+}
+
+export interface CagesOptions {
+  readonly host: GitHost;
+  readonly reviewHost?: GitHost;
+  readonly repo: string;
+  readonly base: string;
+  readonly tickets: Readonly<Record<TaskId, Ticket>>;
+  readonly author: string;
+  readonly reviewer: string;
+  readonly workers: Readonly<Record<string, AgentRuntime>>;
+  readonly egress?: EgressControl;
+  readonly pollMs?: number;
+  readonly roundLimit?: number;
+  readonly maxFailures?: number;
+}
+
+export const ROUND_LIMIT = 3;
+
+type Job =
+  | { readonly kind: 'author'; readonly box: Box; readonly round: 0 }
+  | { readonly kind: 'fix'; readonly box: Box & { pr: string }; readonly change: Change; readonly round: number }
+  | {
+      readonly kind: 'review';
+      readonly box: Box & { pr: string };
+      readonly change: Change;
+      readonly reviewer: string;
+      readonly round: number;
+    }
+  | { readonly kind: 'brief'; readonly box: Box & { pr: string }; readonly change: Change };
+
+const REVIEW_MARK = /<!-- agent-works:review worker=(\S+) verdict=(approve|changes|comment) -->/;
+const reviewMarker = (worker: string, verdict: Verdict) =>
+  `<!-- agent-works:review worker=${worker} verdict=${verdict} -->`;
+const changeRef = (repo: string, number: number) => `${repo.toLowerCase()}#${number}`;
+
+export const cagesMode =
+  (options: CagesOptions): ModeFactory =>
+  (hq) => {
+    const { host, repo } = options;
+    const roundLimit = options.roundLimit ?? ROUND_LIMIT;
+    const maxFailures = options.maxFailures ?? 3;
+    const abort = new AbortController();
+    const changesOn = new Map<string, Map<string, number>>();
+    const votes = new Map<string, Array<{ reviewer: string; verdict: Verdict; head: string; at: number }>>();
+    let seen = 0;
+    const running = new Map<TaskId, Promise<void>>();
+    const again = new Set<TaskId>();
+    const failures = new Map<string, { count: number; error: string }>();
+    const briefs = new Map<TaskId, { head: string; url: string; text: string }>();
+    const usage = new Map<TaskId, (Usage | null)[]>();
+    const denials = new Map<string, { host: string; agent: string; count: number }>();
+    const allowed = new Set<string>();
+    const lastPoll = new Map<string, string>();
+    let timer: NodeJS.Timeout | null = null;
+
+    const record = (ref: string, reviewer: string, verdict: Verdict, head: string, at: number) => {
+      const list = votes.get(ref) ?? [];
+      list.push({ reviewer: reviewer.toLowerCase(), verdict, head, at });
+      votes.set(ref, list);
+      if (verdict !== 'changes') return;
+      const heads = changesOn.get(ref) ?? new Map<string, number>();
+      if (!heads.has(head)) heads.set(head, at);
+      changesOn.set(ref, heads);
+    };
+    const project = () => {
+      for (const { seq, event } of hq.events(seen)) {
+        seen = seq;
+        if (event.source === 'webhook' && event.kind === 'review')
+          record(changeRef(event.repo, event.number), event.reviewer, event.verdict, event.headSha, event.at);
+        if (event.source === 'poll')
+          for (const r of event.reviews)
+            record(changeRef(event.repo, event.number), r.reviewer, r.verdict, event.headSha, event.at);
+      }
+    };
+    const roundsOf = (change: Change): number => {
+      project();
+      return changesOn.get(changeRef(change.repo, change.number))?.size ?? 0;
+    };
+
+    const ingest = (event: Event | null) => {
+      if (event !== null) hq.ingest(event);
+    };
+    const poll = async (number: number) => {
+      const event = toPoll(await host.snapshot(repo, number));
+      const key = `${event.repo}#${event.number}`;
+      const body = JSON.stringify(event);
+      if (lastPoll.get(key) === body) return event;
+      lastPoll.set(key, body);
+      ingest(event);
+      return event;
+    };
+    const reviewed = (state: State, change: Change, reviewer: string): boolean =>
+      Object.hasOwn(state.reviews[`${change.repo}#${change.number}|${change.head.v}`] ?? {}, reviewer.toLowerCase());
+
+    const needed = (task: TaskId): Job | null => {
+      const state = hq.state();
+      const box = state.boxes[task];
+      if (box === undefined) return null;
+      if (box.state === 'building') return { kind: 'author', box, round: 0 };
+      if (box.state !== 'qc' && box.state !== 'merge') return null;
+      const change = state.changes[box.pr];
+      if (change === undefined || change.state !== 'open') return null;
+      if (box.state === 'merge')
+        return briefs.get(task)?.head === change.head.v ? null : { kind: 'brief', box, change };
+      const rounds = roundsOf(change);
+      if (box.changesRequested) return rounds > roundLimit ? null : { kind: 'fix', box, change, round: rounds };
+      if (box.reviewer !== null && !reviewed(state, change, box.reviewer))
+        return { kind: 'review', box, change, reviewer: box.reviewer, round: rounds + 1 };
+      return null;
+    };
+    const jobKey = (job: Job): string => `${job.box.id}|${job.kind}|${job.kind === 'author' ? 0 : job.change.head.v}`;
+
+    const runtimeOf = (worker: string): AgentRuntime => {
+      const runtime = options.workers[worker];
+      if (runtime === undefined) throw new Error(`no runtime is set for worker ${worker}`);
+      return runtime;
+    };
+    const ticketOf = (task: TaskId): Ticket => {
+      const ticket = options.tickets[task];
+      if (ticket === undefined) throw new InvalidEvent(`no work order for ${task}`);
+      return ticket;
+    };
+    const spend = (task: TaskId, used: Usage | null) => usage.set(task, [...(usage.get(task) ?? []), used]);
+
+    const workOrder = (ticket: Ticket) =>
+      [
+        `Work order ${ticket.id}${ticket.url === null ? '' : `: ${ticket.url}`}`,
+        '',
+        ticket.body,
+        '',
+        'Opened by an Agent Works worker. HQ never merges; a person merges on the host.',
+      ].join('\n');
+
+    const author = async (job: Extract<Job, { kind: 'author' }>) => {
+      const task = job.box.id;
+      const branch = branchOf(task);
+      const existing = await host.findChange(repo, branch);
+      if (existing !== null) return void (await poll(existing.number));
+      const ticket = ticketOf(task);
+      const worker = job.box.worker ?? options.author;
+      const result = await runtimeOf(worker).run({
+        role: 'author',
+        task,
+        worker,
+        ticket,
+        round: 0,
+        comments: [],
+        signal: abort.signal,
+      });
+      if (result.role !== 'author') throw new Error('the author runtime returned a review');
+      spend(task, result.usage);
+      await host.pushFiles(repo, { branch, base: options.base, files: result.files, message: result.message });
+      const opened =
+        (await host.findChange(repo, branch)) ??
+        (await host.openChange(repo, {
+          branch,
+          base: options.base,
+          title: `${ticket.id}: ${ticket.title}`,
+          body: workOrder(ticket),
+        }));
+      await poll(opened.number);
+    };
+
+    const fix = async (job: Extract<Job, { kind: 'fix' }>) => {
+      const task = job.box.id;
+      const now = await poll(job.change.number);
+      if (now.headSha !== job.change.head.v) return;
+      const asked = (await host.comments(repo, job.change.number)).filter((c) => c.commitId === job.change.head.v);
+      const worker = options.author;
+      const result = await runtimeOf(worker).run({
+        role: 'author',
+        task,
+        worker,
+        ticket: ticketOf(task),
+        round: job.round,
+        comments: asked,
+        signal: abort.signal,
+      });
+      if (result.role !== 'author') throw new Error('the author runtime returned a review');
+      spend(task, result.usage);
+      const head = await host.pushFiles(repo, {
+        branch: branchOf(task),
+        base: options.base,
+        files: result.files,
+        message: result.message,
+      });
+      if (head === job.change.head.v) throw new Error('the fix round changed no file');
+      await poll(job.change.number);
+    };
+
+    const reviewFact = (posted: ReviewFact, change: Change, worker: string, intended: Verdict): Event | null => {
+      const shared = toLogin(posted.reviewer) === change.author.v;
+      const verdict = shared ? (intended === 'changes' ? 'changes' : 'comment') : posted.verdict;
+      if (verdict === null) return null;
+      return {
+        source: 'webhook',
+        kind: 'review',
+        repo: posted.repo,
+        number: posted.number,
+        reviewer: shared ? worker : posted.reviewer,
+        verdict,
+        headSha: posted.commitId,
+        at: posted.at,
+      };
+    };
+
+    const review = async (job: Extract<Job, { kind: 'review' }>) => {
+      const task = job.box.id;
+      const head = job.change.head.v;
+      const snapshot = await host.snapshot(repo, job.change.number);
+      if (snapshot.change.headSha !== head) return void (await poll(job.change.number));
+      const mine = snapshot.reviews.find((r) => r.commitId === head && REVIEW_MARK.exec(r.body)?.[1] === job.reviewer);
+      if (mine !== undefined) {
+        const intended = (REVIEW_MARK.exec(mine.body)?.[2] ?? 'comment') as Verdict;
+        return ingest(reviewFact(mine, job.change, job.reviewer, intended));
+      }
+      const result = await runtimeOf(job.reviewer).run({
+        role: 'reviewer',
+        task,
+        worker: job.reviewer,
+        ticket: ticketOf(task),
+        round: job.round,
+        change: snapshot.change,
+        files: await host.files(repo, job.change.number, head),
+        signal: abort.signal,
+      });
+      if (result.role !== 'reviewer') throw new Error('the reviewer runtime returned a change');
+      spend(task, result.usage);
+      const posted = await (options.reviewHost ?? host).postReview(repo, job.change.number, {
+        commitId: head,
+        verdict: result.verdict,
+        body: `${result.body}\n\n${reviewMarker(job.reviewer, result.verdict)}`,
+        comments: result.comments,
+      });
+      ingest(reviewFact(posted, job.change, job.reviewer, result.verdict));
+    };
+
+    const roundsFor = async (change: Change): Promise<ReviewRound[]> => {
+      project();
+      const comments = await host.comments(repo, change.number);
+      const list = votes.get(changeRef(change.repo, change.number)) ?? [];
+      const heads = [...new Set(list.map((v) => v.head))];
+      return list
+        .filter((v, i) => list.findIndex((w) => w.reviewer === v.reviewer && w.head === v.head) === i)
+        .filter((v) => options.workers[v.reviewer] !== undefined)
+        .map((v) => ({
+          round: heads.indexOf(v.head) + 1,
+          reviewer: v.reviewer,
+          runtime: runtimeOf(v.reviewer).id,
+          verdict: v.verdict,
+          headSha: v.head,
+          asked: comments
+            .filter((c) => c.commitId === v.head && c.line !== null)
+            .map((c) => `${c.path}:${c.line} ${c.body}`),
+        }));
+    };
+
+    const brief = async (job: Extract<Job, { kind: 'brief' }>) => {
+      const task = job.box.id;
+      const head = job.change.head.v;
+      const snapshot = await host.snapshot(repo, job.change.number);
+      if (snapshot.change.headSha !== head) return void (await poll(job.change.number));
+      const text = renderBrief(
+        mergeBrief({
+          ticket: ticketOf(task),
+          change: snapshot.change,
+          files: (await host.files(repo, job.change.number, head)).map((f) => f.path),
+          checks: snapshot.checks,
+          rounds: await roundsFor(job.change),
+          author: { worker: options.author, runtime: runtimeOf(options.author).id },
+          evidence: {},
+          notes: {},
+        }),
+      );
+      const marker = briefMarker(task, head);
+      const posted =
+        (await host.findComment(repo, job.change.number, marker)) ??
+        (await host.postComment(repo, job.change.number, text));
+      briefs.set(task, { head, url: posted.url, text });
+      hq.changed();
+    };
+
+    const execute = (job: Job): Promise<void> => {
+      if (job.kind === 'author') return author(job);
+      if (job.kind === 'fix') return fix(job);
+      if (job.kind === 'review') return review(job);
+      return brief(job);
+    };
+
+    const work = async (task: TaskId) => {
+      let last: string | null = null;
+      for (;;) {
+        again.delete(task);
+        if (abort.signal.aborted) return;
+        const job = needed(task);
+        if (job === null) return;
+        const key = jobKey(job);
+        if ((failures.get(key)?.count ?? 0) >= maxFailures) return;
+        if (key === last) {
+          failures.set(key, { count: maxFailures, error: 'the job ran and the factory did not move' });
+          return hq.changed();
+        }
+        last = key;
+        try {
+          await execute(job);
+          failures.delete(key);
+        } catch (error) {
+          if (abort.signal.aborted) return;
+          const count = (failures.get(key)?.count ?? 0) + 1;
+          failures.set(key, { count, error: (error as Error).message });
+          if (count >= maxFailures && job.kind === 'author' && job.box.worker !== null)
+            ingest({ source: 'hook', kind: 'session_ended', task, worker: job.box.worker });
+          hq.changed();
+          if (!again.has(task)) return;
+        }
+      }
+    };
+
+    const poke = (task: TaskId) => {
+      if (running.has(task)) {
+        again.add(task);
+        return;
+      }
+      const run = work(task).finally(() => {
+        running.delete(task);
+        if (again.has(task)) poke(task);
+      });
+      running.set(task, run);
+    };
+    const pokeAll = () => {
+      for (const task of Object.keys(hq.state().boxes)) poke(task);
+    };
+
+    const watch = async () => {
+      const state = hq.state();
+      for (const box of Object.values(state.boxes)) {
+        if (box.state === 'shipped' || box.state === 'cancelled' || box.state === 'belt' || box.state === 'building')
+          continue;
+        const change = state.changes[box.pr];
+        if (change === undefined || change.state !== 'open') continue;
+        try {
+          await poll(change.number);
+        } catch {}
+      }
+      pokeAll();
+    };
+
+    const kick: Executor = async (entry) => {
+      const command = entry.command;
+      if ('task' in command) poke(command.task);
+    };
+    const done: Executor = async () => {};
+
+    const actions = (): ActionItem[] => {
+      const state = hq.state();
+      const items: ActionItem[] = [];
+      for (const box of Object.values(state.boxes)) {
+        if (box.state === 'merge') {
+          const written = briefs.get(box.id);
+          const change = state.changes[box.pr];
+          if (written !== undefined && change?.head.v === written.head)
+            items.push({
+              kind: 'ready_to_merge',
+              task: box.id,
+              url: written.url,
+              brief: written.text.split('\n').slice(0, 12).join('\n'),
+            });
+        }
+        if (box.state === 'qc' && box.changesRequested) {
+          const change = state.changes[box.pr];
+          const rounds = change === undefined ? 0 : roundsOf(change);
+          if (change !== undefined && rounds > roundLimit)
+            items.push({ kind: 'round_limit', task: box.id, url: `${repo}#${change.number}`, fixRounds: rounds - 1 });
+        }
+      }
+      for (const denial of denials.values()) if (!allowed.has(denial.host)) items.push({ kind: 'website', ...denial });
+      for (const entry of hq.outbox())
+        if (entry.command.kind === 'alert_human')
+          items.push({ kind: 'alert', reason: entry.command.reason, subject: entry.command.subject });
+      for (const [key, failure] of failures)
+        if (failure.count >= maxFailures) {
+          const [task = '', job = ''] = key.split('|');
+          items.push({ kind: 'job_failed', task, job, error: failure.error });
+        }
+      return items;
+    };
+
+    const view = (): ModeView => {
+      const state = hq.state();
+      const rounds: Record<TaskId, number> = {};
+      for (const box of Object.values(state.boxes)) {
+        const change = 'pr' in box ? state.changes[box.pr] : undefined;
+        if (change !== undefined) rounds[box.id] = roundsOf(change);
+      }
+      const runtimes = new Set<RuntimeId>([runtimeOf(options.author).id, runtimeOf(options.reviewer).id]);
+      return {
+        rounds,
+        usage: Object.fromEntries(usage),
+        jobs: [...running.keys()],
+        reviewGap:
+          runtimes.size === 1 ? `author and reviewer both run on ${[...runtimes][0]}; Codex is deferred (G0)` : null,
+      };
+    };
+
+    const route = (method: string, path: string, body: () => Promise<unknown>): Promise<unknown> | undefined => {
+      if (method === 'POST' && path === '/api/tickets')
+        return body().then((raw) => {
+          const id = String((raw as { id?: unknown }).id ?? '');
+          ticketOf(id);
+          for (const worker of [options.author, options.reviewer])
+            ingest({ source: 'human', kind: 'add_worker', worker });
+          ingest({ source: 'human', kind: 'order', task: id, shipment: null });
+          ingest({ source: 'human', kind: 'hire', task: id, worker: options.author });
+          return { task: id, branch: branchOf(id) };
+        });
+      if (method === 'POST' && path === '/api/actions/allow')
+        return body().then(async (raw) => {
+          const site = String((raw as { host?: unknown }).host ?? '');
+          if (!denials.has(site)) throw new InvalidEvent(`no blocked website ${site} is waiting`);
+          await options.egress?.allow(site);
+          allowed.add(site);
+          hq.changed();
+          return { allowed: site };
+        });
+      return undefined;
+    };
+
+    return {
+      executors: {
+        start_cage: kick,
+        request_review: kick,
+        send_review_to_author: kick,
+        notify_ready: kick,
+        close_task: kick,
+        release_cage: done,
+        dispatch_truck: done,
+        alert_human: done,
+      },
+      actions,
+      view,
+      route,
+      noteDenial: (denial) => {
+        const seenBefore = denials.get(denial.host);
+        denials.set(denial.host, { host: denial.host, agent: denial.agent, count: (seenBefore?.count ?? 0) + 1 });
+      },
+      start: () => {
+        pokeAll();
+        timer = setInterval(() => void watch(), options.pollMs ?? 35_000);
+        timer.unref();
+      },
+      close: async () => {
+        if (timer !== null) clearInterval(timer);
+        abort.abort();
+        await Promise.allSettled([...running.values()]);
+      },
+    };
+  };

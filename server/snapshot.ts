@@ -1,4 +1,5 @@
 import type { State } from '@agent-works/core';
+import type { ActionItem, ModeView } from './modes/cages.ts';
 import type { RegistryView } from './registry.ts';
 import type { CageView } from './sandbox/container.ts';
 import type { OutboxEntry } from './store/store.ts';
@@ -21,6 +22,8 @@ export interface Snapshot {
   readonly outbox: { readonly pending: number; readonly failed: readonly OutboxEntry[] };
   readonly cages: readonly CageView[];
   readonly denials: readonly Denial[];
+  readonly actions: readonly ActionItem[];
+  readonly mode: ModeView | null;
 }
 
 export const outboxSummary = (outbox: readonly OutboxEntry[]): Snapshot['outbox'] => ({

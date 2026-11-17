@@ -254,6 +254,7 @@ describe.each(['github', 'gitlab'] as const)('GitHost contract on %s', (name) =>
       author: 'aw-reviewer',
       body: 'rename b',
     });
+    expect(await reviewer.files(repo, pr.number, head)).toEqual([{ path: 'src/a.txt', content: 'a\nb\nc\n' }]);
     const poll = toPoll(await author.snapshot(repo, pr.number));
     expect(poll).toMatchObject({ source: 'poll', number: pr.number, headSha: head, branch });
     expect(poll.reviews).toEqual([{ reviewer: 'aw-reviewer', verdict: 'approve' }]);
@@ -348,6 +349,7 @@ describe('a poll', () => {
         repo: 'acme/app',
         number: 1,
         reviewId: t.toString(),
+        body: '',
         reviewer: 'r',
         verdict,
         commitId,

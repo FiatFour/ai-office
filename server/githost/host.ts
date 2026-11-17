@@ -37,6 +37,7 @@ export type HostEvent =
       readonly reviewer: string;
       readonly verdict: Verdict | null;
       readonly commitId: string;
+      readonly body: string;
     })
   | (Source & {
       readonly kind: 'review_comment';
@@ -102,6 +103,7 @@ export interface GitHost {
   ): Promise<string>;
   snapshot(repo: string, number: number): Promise<ChangeSnapshot>;
   comments(repo: string, number: number): Promise<CommentFact[]>;
+  files(repo: string, number: number, headSha: string): Promise<FileEdit[]>;
   postReview(repo: string, number: number, review: ReviewDraft): Promise<ReviewFact>;
   findComment(repo: string, number: number, marker: string): Promise<PostedComment | null>;
   postComment(repo: string, number: number, body: string): Promise<PostedComment>;

@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   type AlertReason,
   type Box,
@@ -70,6 +71,7 @@ export interface CagesOptions {
   readonly pollMs?: number;
   readonly roundLimit?: number;
   readonly maxFailures?: number;
+  readonly settleMs?: number;
 }
 
 export const ROUND_LIMIT = 3;
@@ -147,6 +149,10 @@ export const cagesMode =
       ingest(event);
       return event;
     };
+    const settle = async (number: number, head: string) => {
+      for (let tries = 1; (await poll(number)).headSha !== head && tries < 10; tries += 1)
+        await sleep(options.settleMs ?? 1000, undefined, { signal: abort.signal });
+    };
     const reviewed = (state: State, change: Change, reviewer: string): boolean =>
       Object.hasOwn(state.reviews[`${change.repo}#${change.number}|${change.head.v}`] ?? {}, reviewer.toLowerCase());
 
@@ -207,7 +213,12 @@ export const cagesMode =
       });
       if (result.role !== 'author') throw new Error('the author runtime returned a review');
       spend(task, result.usage);
-      await host.pushFiles(repo, { branch, base: options.base, files: result.files, message: result.message });
+      const head = await host.pushFiles(repo, {
+        branch,
+        base: options.base,
+        files: result.files,
+        message: result.message,
+      });
       const opened =
         (await host.findChange(repo, branch)) ??
         (await host.openChange(repo, {
@@ -216,7 +227,7 @@ export const cagesMode =
           title: `${ticket.id}: ${ticket.title}`,
           body: workOrder(ticket),
         }));
-      await poll(opened.number);
+      await settle(opened.number, head);
     };
 
     const fix = async (job: Extract<Job, { kind: 'fix' }>) => {
@@ -243,7 +254,7 @@ export const cagesMode =
         message: result.message,
       });
       if (head === job.change.head.v) throw new Error('the fix round changed no file');
-      await poll(job.change.number);
+      await settle(job.change.number, head);
     };
 
     const reviewFact = (posted: ReviewFact, change: Change, worker: string, intended: Verdict): Event | null => {
@@ -354,10 +365,7 @@ export const cagesMode =
         if (job === null) return;
         const key = jobKey(job);
         if ((failures.get(key)?.count ?? 0) >= maxFailures) return;
-        if (key === last) {
-          failures.set(key, { count: maxFailures, error: 'the job ran and the factory did not move' });
-          return hq.changed();
-        }
+        if (key === last) return;
         last = key;
         try {
           await execute(job);
@@ -435,11 +443,12 @@ export const cagesMode =
       for (const entry of hq.outbox())
         if (entry.command.kind === 'alert_human')
           items.push({ kind: 'alert', reason: entry.command.reason, subject: entry.command.subject });
-      for (const [key, failure] of failures)
-        if (failure.count >= maxFailures) {
-          const [task = '', job = ''] = key.split('|');
+      for (const [key, failure] of failures) {
+        const [task = '', job = ''] = key.split('|');
+        const now = needed(task);
+        if (failure.count >= maxFailures && now !== null && jobKey(now) === key)
           items.push({ kind: 'job_failed', task, job, error: failure.error });
-        }
+      }
       return items;
     };
 

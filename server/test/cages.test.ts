@@ -126,6 +126,7 @@ describe.skipIf(!hasSqlite)('one ticket through the cages mode', () => {
     expect(fake.filesAt('aw/alpha/t2').get('docs/note.md')).toContain('second draft');
     const brief = fake.issueComments.find((c) => c.body.includes('agent-works:merge-brief'));
     expect(brief?.body).toContain('Round 1: vega (scripted) gave changes');
+    expect(brief?.body).toContain('asked: docs/note.md:3 Say "second draft".');
     expect(brief?.body).toContain('- Screenshots: not collected, ');
     expect(brief?.body).toContain('Cross-runtime review not collected');
     expect(ready.mode?.reviewGap).toContain('Codex is deferred');
@@ -218,29 +219,81 @@ describe.skipIf(!hasSqlite)('one ticket through the cages mode', () => {
 });
 
 describe.skipIf(!hasSqlite)('a restart during the CODE station', () => {
-  it('resumes the task and opens no second PR when HQ died after the PR opened and before it saw the PR', async () => {
-    const { fake, hosts } = twoAccounts();
-    const real = hosts.host;
-    let die = true;
-    const dying: GitHost = {
-      ...real,
-      openChange: async (repo, spec) => {
-        const opened = await real.openChange(repo, spec);
-        if (die) throw new Error('HQ was killed here');
-        return opened;
+  const killedAfter = (real: GitHost, method: 'openChange' | 'postReview' | 'postComment') => {
+    const state = { dead: false };
+    const host = new Proxy(real, {
+      get(target, key) {
+        const value = target[key as keyof GitHost];
+        if (typeof value !== 'function') return value;
+        return async (...args: unknown[]) => {
+          if (state.dead) throw new Error('HQ is dead');
+          const out = await (value as (...a: unknown[]) => Promise<unknown>).apply(target, args);
+          if (key === method) {
+            state.dead = true;
+            throw new Error(`HQ was killed after ${method}`);
+          }
+          return out;
+        };
+      },
+    });
+    return { host, state };
+  };
+  const counted = () => {
+    const runs: string[] = [];
+    const inner = scripted({ scripts: SCRIPTS });
+    const runtime: AgentRuntime = {
+      id: 'scripted',
+      run: (job) => {
+        runs.push(job.role);
+        return inner.run(job);
       },
     };
+    return { runtime, runs };
+  };
+
+  it('resumes the task and opens no second PR when HQ died after the PR opened and before it saw the PR', async () => {
+    const { fake, hosts } = twoAccounts();
     const home = tempDir('cages-restart');
-    const first = await boot({ home, host: dying, reviewHost: hosts.reviewHost });
+    const killed = killedAfter(hosts.host, 'openChange');
+    const first = await boot({ home, host: killed.host, reviewHost: hosts.reviewHost });
     await post(first.hq, '/api/tickets', { id: 'alpha/t1' });
-    await until(first.hq, () => fake.prs.length === 1);
-    expect(station('alpha/t1')(first.hq.snapshot())).toBe('building');
+    await until(first.hq, () => killed.state.dead);
     await first.hq.close();
-    die = false;
-    const second = await boot({ home, host: dying, reviewHost: hosts.reviewHost });
+    expect(fake.prs).toHaveLength(1);
+    const again = counted();
+    const second = await boot({ home, ...hosts, runtime: again.runtime });
     await until(second.hq, (s) => station('alpha/t1')(s) === 'merge');
     expect(fake.prs).toHaveLength(1);
     expect(fake.calls.filter((c) => c.method === 'POST' && /\/pulls$/.test(c.path))).toHaveLength(1);
+    expect(again.runs).toEqual(['reviewer']);
+  });
+
+  it('posts no second review when HQ died after posting one', async () => {
+    const { fake, hosts } = twoAccounts();
+    const home = tempDir('cages-restart-review');
+    const killed = killedAfter(hosts.reviewHost, 'postReview');
+    const first = await boot({ home, host: hosts.host, reviewHost: killed.host });
+    await post(first.hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(first.hq, () => killed.state.dead);
+    await first.hq.close();
+    const again = counted();
+    const second = await boot({ home, ...hosts, runtime: again.runtime });
+    await until(second.hq, (s) => station('alpha/t1')(s) === 'merge');
+    expect(fake.reviews).toHaveLength(1);
+    expect(again.runs).toEqual([]);
+  });
+
+  it('posts no second merge brief when HQ died after posting it', async () => {
+    const { fake, hosts } = twoAccounts();
+    const home = tempDir('cages-restart-brief');
+    const killed = killedAfter(hosts.host, 'postComment');
+    const first = await boot({ home, host: killed.host, reviewHost: hosts.reviewHost });
+    await post(first.hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(first.hq, () => killed.state.dead);
+    await first.hq.close();
+    const second = await boot({ home, ...hosts });
+    await until(second.hq, (s) => action('ready_to_merge')(s) !== undefined);
+    expect(fake.issueComments.filter((c) => c.body.includes('agent-works:merge-brief'))).toHaveLength(1);
   });
 
   it('resumes the task when HQ stopped while the author was still working', async () => {

@@ -117,7 +117,10 @@ const comment = (repo: string, number: number, c: unknown): CommentFact => ({
   reviewId: field(c, 'pull_request_review_id') === null ? null : id(c, 'pull_request_review_id'),
   author: str(c, 'user.login'),
   path: str(c, 'path'),
-  line: optLine(c, 'line'),
+  line:
+    field(c, 'line') === null && Object.hasOwn(c as object, 'original_line')
+      ? optLine(c, 'original_line')
+      : optLine(c, 'line'),
   commitId: str(c, 'commit_id'),
   body: str(c, 'body'),
   at: time(c, 'updated_at'),

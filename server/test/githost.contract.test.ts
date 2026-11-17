@@ -342,7 +342,7 @@ describe('a poll', () => {
       url: 'u',
       at,
     } as const;
-    const review = (commitId: string, verdict: 'changes' | 'approve', t: number) =>
+    const review = (reviewer: string, commitId: string, verdict: 'changes' | 'approve', t: number) =>
       ({
         host: 'github',
         kind: 'review',
@@ -350,12 +350,20 @@ describe('a poll', () => {
         number: 1,
         reviewId: t.toString(),
         body: '',
-        reviewer: 'r',
+        reviewer,
         verdict,
         commitId,
         at: t,
       }) as const;
-    const poll = toPoll({ change, reviews: [review('old', 'changes', 1), review('new', 'approve', 2)], checks: [] });
-    expect(poll.reviews).toEqual([{ reviewer: 'r', verdict: 'approve' }]);
+    const poll = toPoll({
+      change,
+      reviews: [
+        review('r1', 'old', 'changes', 1),
+        review('r2', 'new', 'approve', 2),
+        review('r2', 'new', 'changes', 3),
+      ],
+      checks: [],
+    });
+    expect(poll.reviews).toEqual([{ reviewer: 'r2', verdict: 'changes' }]);
   });
 });

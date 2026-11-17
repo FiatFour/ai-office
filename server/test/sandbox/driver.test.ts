@@ -109,7 +109,8 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       expect(inspect?.Config.User).toBe(`${process.getuid?.()}:${process.getgid?.()}`);
       expect(Object.keys(inspect?.NetworkSettings.Networks ?? {})).toEqual([`aw-${hq}-internal`]);
       const net = JSON.parse(await engine.ok(['network', 'inspect', `aw-${hq}-internal`])) as Array<{
-        Internal: boolean;
+        Internal?: boolean;
+        internal?: boolean;
       }>;
       expect(net[0]?.Internal ?? net[0]?.internal).toBe(true);
     });

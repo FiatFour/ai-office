@@ -29,7 +29,7 @@ const base: BriefInput = {
   files: ['src/greet.txt'],
   checks: [],
   rounds: [],
-  author: { worker: 'nova', runtime: 'claude-code' },
+  author: { runtime: 'claude-code' },
   evidence: {},
   notes: {},
 };

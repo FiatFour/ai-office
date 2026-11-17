@@ -10,12 +10,12 @@ import {
   type GitHost,
   guard,
   type HostCheckState,
-  HostError,
   type HostEvent,
   type HttpRequest,
   id,
   oneOf,
   optLine,
+  orNull,
   type ReviewFact,
   str,
   type Transport,
@@ -192,15 +192,7 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
   const call = (method: HttpRequest['method'], path: string, body?: unknown) =>
     api(body === undefined ? { method, path } : { method, path, body });
   const project = (repo: string) => `/projects/${encodeURIComponent(repo)}`;
-  const exists = async (path: string): Promise<boolean> => {
-    try {
-      await call('GET', path);
-      return true;
-    } catch (error) {
-      if (error instanceof HostError && error.status === 404) return false;
-      throw error;
-    }
-  };
+  const exists = async (path: string) => (await orNull(call('GET', path))) !== null;
 
   const pipelines = async (repo: string, sha: string): Promise<CheckFact[]> => {
     const list = (await call('GET', `${project(repo)}/pipelines?sha=${sha}&per_page=20`)) as unknown[];
@@ -215,10 +207,15 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
     }));
   };
 
+  const paths = async (repo: string, number: number): Promise<string[]> => {
+    const mr = await call('GET', `${project(repo)}/merge_requests/${number}/changes`);
+    return (field(mr, 'changes') as unknown[])
+      .filter((c) => field(c, 'deleted_file') !== true)
+      .map((c) => str(c, 'new_path'));
+  };
+
   return {
     id: 'gitlab',
-    detect: (remote) => /(^|[@/])gitlab\.com[:/]/i.test(remote),
-    parseDelivery: parseGitlab,
 
     async findChange(repo, branch) {
       const list = (await call(
@@ -246,12 +243,8 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
       const actions = [];
       for (const file of spec.files) {
         const path = `${project(repo)}/repository/files/${encodeURIComponent(file.path)}/raw?ref=${encodeURIComponent(ref)}`;
-        let current: string | null = null;
-        try {
-          current = String(await call('GET', path));
-        } catch (error) {
-          if (!(error instanceof HostError && error.status === 404)) throw error;
-        }
+        const raw = await orNull(call('GET', path));
+        const current = raw === null ? null : String(raw);
         if (current === file.content) continue;
         actions.push({ action: current === null ? 'create' : 'update', file_path: file.path, content: file.content });
       }
@@ -289,11 +282,11 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
       return list.filter((n) => field(n, 'system') !== true).map((n) => note(repo, number, n));
     },
 
+    paths,
+
     async files(repo, number, headSha) {
-      const mr = await call('GET', `${project(repo)}/merge_requests/${number}/changes`);
       const files = [];
-      for (const change of (field(mr, 'changes') as unknown[]).filter((c) => field(c, 'deleted_file') !== true)) {
-        const path = str(change, 'new_path');
+      for (const path of await paths(repo, number)) {
         const raw = await call(
           'GET',
           `${project(repo)}/repository/files/${encodeURIComponent(path)}/raw?ref=${headSha}`,

@@ -40,7 +40,7 @@ export interface BriefInput {
   readonly files: readonly string[];
   readonly checks: readonly CheckFact[];
   readonly rounds: readonly ReviewRound[];
-  readonly author: { readonly worker: string; readonly runtime: RuntimeId };
+  readonly author: { readonly runtime: RuntimeId };
   readonly evidence: Partial<Record<Exclude<EvidenceKind, 'ci_runs'>, readonly string[]>>;
   readonly notes: { readonly beforeMerge?: readonly string[]; readonly howToCheck?: readonly string[] };
 }
@@ -70,38 +70,35 @@ const EVIDENCE_REASONS: Record<Exclude<EvidenceKind, 'ci_runs'>, string> = {
 export const mergeBrief = (input: BriefInput): MergeBrief => {
   const { ticket, change, checks, rounds } = input;
   const head = checks.filter((check) => check.headSha === change.headSha);
-  const ciRuns = orMissing(
-    head.map((check) => `${check.name}: ${check.state}`),
-    `the host reported no checks on ${change.headSha.slice(0, 12)}`,
-  );
+  const checkLines = head.map((check) => `${check.name}: ${check.state}`);
+  const ciRuns = orMissing(checkLines, `the host reported no checks on ${change.headSha.slice(0, 12)}`);
   const evidence: Record<EvidenceKind, Section> = {
     screenshots: orMissing(input.evidence.screenshots, EVIDENCE_REASONS.screenshots),
     ci_runs: ciRuns,
-    test_output:
+    test_output: orMissing(
+      input.evidence.test_output,
       ticket.kind === 'defect'
-        ? orMissing(input.evidence.test_output, EVIDENCE_REASONS.test_output)
-        : orMissing(input.evidence.test_output, `${EVIDENCE_REASONS.test_output}; the work order is a ${ticket.kind}`),
+        ? EVIDENCE_REASONS.test_output
+        : `${EVIDENCE_REASONS.test_output}; the work order is a ${ticket.kind}`,
+    ),
     logs: orMissing(input.evidence.logs, EVIDENCE_REASONS.logs),
   };
   const anyEvidence = Object.values(evidence).some((section) => section.state === 'collected');
-  const sameRuntime = rounds.filter((round) => round.runtime === input.author.runtime);
+  const sameRuntime = rounds.some((round) => round.runtime === input.author.runtime);
   const reviewLines = rounds.map(
     (round) =>
       `Round ${round.round}: ${round.reviewer} (${round.runtime}) gave ${round.verdict} on ${round.headSha.slice(0, 12)}${
         round.asked.length > 0 ? `, asked: ${round.asked.join('; ')}` : ''
       }`,
   );
-  if (sameRuntime.length > 0)
+  if (sameRuntime)
     reviewLines.push(
       `Cross-runtime review not collected: the reviewer ran on ${input.author.runtime}, the author's runtime, because Codex is deferred (G0).`,
     );
   const sections: Record<BriefField, Section> = {
     summary: collected([`${ticket.title}. ${ticket.body.split(/(?<=\.)\s/)[0] ?? ''}`.trim()]),
     what_changed: orMissing(input.files, 'the host listed no changed files'),
-    tests: orMissing(
-      head.map((check) => `${check.name}: ${check.state}`),
-      'no check ran on the head commit, so no test result is known',
-    ),
+    tests: orMissing(checkLines, 'no check ran on the head commit, so no test result is known'),
     review: orMissing(reviewLines, 'no peer review was recorded'),
     risk:
       ticket.risk === null

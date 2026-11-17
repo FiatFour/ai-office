@@ -19,26 +19,19 @@ export interface Usage {
   readonly cacheCreationTokens: number;
 }
 
-export type AgentJob =
-  | {
-      readonly role: 'author';
-      readonly task: TaskId;
-      readonly worker: string;
-      readonly ticket: Ticket;
-      readonly round: number;
-      readonly comments: readonly CommentFact[];
-      readonly signal: AbortSignal;
-    }
-  | {
-      readonly role: 'reviewer';
-      readonly task: TaskId;
-      readonly worker: string;
-      readonly ticket: Ticket;
-      readonly round: number;
-      readonly change: ChangeFact;
-      readonly files: readonly FileEdit[];
-      readonly signal: AbortSignal;
-    };
+interface JobBase {
+  readonly task: TaskId;
+  readonly worker: string;
+  readonly ticket: Ticket;
+  readonly round: number;
+  readonly signal: AbortSignal;
+}
+
+export type AgentJob = JobBase &
+  (
+    | { readonly role: 'author'; readonly comments: readonly CommentFact[] }
+    | { readonly role: 'reviewer'; readonly change: ChangeFact; readonly files: readonly FileEdit[] }
+  );
 
 export type AgentResult =
   | {

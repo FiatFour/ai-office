@@ -19,6 +19,7 @@ import {
   oneOf,
   optLine,
   optStr,
+  orNull,
   type ReviewFact,
   str,
   type Transport,
@@ -186,20 +187,16 @@ export const github = ({ send, log }: GithubOptions): GitHost => {
   const api = guard('github', GITHUB_WRITES, send, log);
   const call = (method: HttpRequest['method'], path: string, body?: unknown) =>
     api(body === undefined ? { method, path } : { method, path, body });
-  const missing = async (path: string): Promise<unknown | null> => {
-    try {
-      return await call('GET', path);
-    } catch (error) {
-      if (error instanceof HostError && error.status === 404) return null;
-      throw error;
-    }
-  };
+  const missing = (path: string) => orNull(call('GET', path));
   const owner = (repo: string) => repo.split('/')[0] ?? '';
+
+  const paths = async (repo: string, number: number): Promise<string[]> => {
+    const list = (await call('GET', `/repos/${repo}/pulls/${number}/files?per_page=100`)) as unknown[];
+    return list.filter((f) => str(f, 'status') !== 'removed').map((f) => str(f, 'filename'));
+  };
 
   return {
     id: 'github',
-    detect: (remote) => /(^|[@/])github\.com[:/]/i.test(remote),
-    parseDelivery: parseGithub,
 
     async findChange(repo, branch) {
       const list = (await call(
@@ -266,11 +263,11 @@ export const github = ({ send, log }: GithubOptions): GitHost => {
       return list.map((c) => comment(repo, number, c));
     },
 
+    paths,
+
     async files(repo, number, headSha) {
-      const list = (await call('GET', `/repos/${repo}/pulls/${number}/files?per_page=100`)) as unknown[];
       const files = [];
-      for (const entry of list.filter((f) => str(f, 'status') !== 'removed')) {
-        const path = str(entry, 'filename');
+      for (const path of await paths(repo, number)) {
         const got = await call('GET', `/repos/${repo}/contents/${segments(path)}?ref=${headSha}`);
         files.push({ path, content: Buffer.from(str(got, 'content'), 'base64').toString('utf8') });
       }

@@ -45,7 +45,10 @@ for (const task of ['alpha/t1', 'alpha/t2', 'alpha/t3']) {
 const text = [
   `perf probe, measured ${new Date().toISOString()} on ${process.platform} node ${process.version}, poll interval ${POLL_MS} ms`,
   'runtime: scripted fake agent (no model), host: in-memory fake GitHub; wall time covers HQ, outbox, jobs and the host adapter only',
-  ...runs.map((r) => `${r.task}: ${r.files} file(s), ${r.fixRounds} fix round(s), ${r.msToMergeReady} ms to merge-ready, ${r.apiCalls} host API calls, tokens ${JSON.stringify(r.tokens)} (null = the scripted runtime reports no usage; tokens are not measured without a real runtime)`),
+  ...runs.map(
+    (r) =>
+      `${r.task}: ${r.files} file(s), ${r.fixRounds} fix round(s), ${r.msToMergeReady} ms to merge-ready, ${r.apiCalls} host API calls, tokens ${JSON.stringify(r.tokens)} (null = the scripted runtime reports no usage; tokens are not measured without a real runtime)`,
+  ),
   'baseline: none, trunk has no factory',
 ].join('\n');
 console.log(text);

@@ -53,7 +53,7 @@ export const parseStream = (raw: string): { text: string; usage: Usage } => {
   };
 };
 
-export const promptFor = (job: AgentJob): string => {
+const promptFor = (job: AgentJob): string => {
   const order = `Work order ${job.ticket.id}: ${job.ticket.title}\n\n${job.ticket.body}`;
   if (job.role === 'author') {
     if (job.comments.length === 0)
@@ -65,7 +65,7 @@ export const promptFor = (job: AgentJob): string => {
   return `${order}\n\nReview change #${job.change.number} at ${job.change.headSha}. Files at the head:\n${files}\n\nEnd your answer with a \`\`\`json block: {"verdict": "approve" | "changes", "body": "...", "comments": [{"path": "...", "line": 1, "body": "..."}]}.`;
 };
 
-export const claudeArgv = (prompt: string, model: string, maxTurns: number): string[] => [
+const claudeArgv = (prompt: string, model: string, maxTurns: number): string[] => [
   'claude',
   '-p',
   prompt,

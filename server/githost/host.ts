@@ -1,7 +1,7 @@
-import { spawn } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { CheckState, HostChangeState, PollEvent, Verdict, WebhookEvent } from '@agent-works/core';
+import { runBinary } from '../sandbox/engine.ts';
 
 export type HostId = 'github' | 'gitlab';
 export type HostCheckState = CheckState | 'skipped';
@@ -93,8 +93,6 @@ export interface PostedComment {
 
 export interface GitHost {
   readonly id: HostId;
-  detect(remote: string): boolean;
-  parseDelivery(event: string, body: unknown): HostEvent | null;
   findChange(repo: string, branch: string): Promise<ChangeFact | null>;
   openChange(repo: string, spec: { branch: string; base: string; title: string; body: string }): Promise<ChangeFact>;
   pushFiles(
@@ -103,6 +101,7 @@ export interface GitHost {
   ): Promise<string>;
   snapshot(repo: string, number: number): Promise<ChangeSnapshot>;
   comments(repo: string, number: number): Promise<CommentFact[]>;
+  paths(repo: string, number: number): Promise<string[]>;
   files(repo: string, number: number, headSha: string): Promise<FileEdit[]>;
   postReview(repo: string, number: number, review: ReviewDraft): Promise<ReviewFact>;
   findComment(repo: string, number: number, marker: string): Promise<PostedComment | null>;
@@ -282,6 +281,15 @@ export class HostError extends Error {
 
 export class WriteRefused extends Error {}
 
+export const orNull = async <T>(pending: Promise<T>): Promise<T | null> => {
+  try {
+    return await pending;
+  } catch (error) {
+    if (error instanceof HostError && error.status === 404) return null;
+    throw error;
+  }
+};
+
 export const writeAllowed = (rules: readonly WriteRule[], request: HttpRequest, encodedPrefix?: RegExp): boolean => {
   const { method, path } = request;
   const { pathname, search } = new URL(path, 'https://host.invalid');
@@ -323,27 +331,25 @@ export const fileLog =
 
 export const cliTransport =
   (cli: 'gh' | 'glab', hostname?: string): Transport =>
-  (request) =>
-    new Promise((resolve, reject) => {
-      const args = ['api', '--include', '-X', request.method, request.path];
-      if (hostname !== undefined) args.push('--hostname', hostname);
-      if (request.body !== undefined) args.push('--input', '-');
-      const child = spawn(cli, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-      const out: Buffer[] = [];
-      child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
-      child.on('error', reject);
-      child.on('close', () => {
-        const text = Buffer.concat(out).toString('utf8');
-        const split = text.search(/\r?\n\r?\n/);
-        const head = split < 0 ? text : text.slice(0, split);
-        const rest = split < 0 ? '' : text.slice(split).trim();
-        const status = Number(/^HTTP\/[\d.]+ (\d{3})/.exec(head)?.[1] ?? 0);
-        if (status === 0) return reject(new Error(`${cli} api ${request.path} gave no HTTP status`));
-        let body: unknown = rest;
-        try {
-          body = rest === '' ? null : JSON.parse(rest);
-        } catch {}
-        resolve({ status, body });
-      });
-      child.stdin.end(request.body === undefined ? '' : JSON.stringify(request.body));
+  async (request) => {
+    const args = ['api', '--include', '-X', request.method, request.path];
+    if (hostname !== undefined) args.push('--hostname', hostname);
+    if (request.body !== undefined) args.push('--input', '-');
+    const ran = await runBinary(cli, args, {
+      input: request.body === undefined ? '' : JSON.stringify(request.body),
+      timeoutMs: 60_000,
     });
+    const split = ran.out.search(/\r?\n\r?\n/);
+    const head = split < 0 ? ran.out : ran.out.slice(0, split);
+    const rest = split < 0 ? '' : ran.out.slice(split).trim();
+    const status = Number(/^HTTP\/[\d.]+ (\d{3})/.exec(head)?.[1] ?? 0);
+    if (status === 0)
+      throw new Error(
+        `${cli} api ${request.path} gave no HTTP status${ran.timedOut ? ' (timed out)' : ''}: ${ran.err.trim().slice(0, 300)}`,
+      );
+    try {
+      return { status, body: rest === '' ? null : JSON.parse(rest) };
+    } catch {
+      return { status, body: rest };
+    }
+  };

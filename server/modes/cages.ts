@@ -14,8 +14,10 @@ import {
 import type { AgentRuntime, RuntimeId, Ticket, Usage } from '../agents/runtime.ts';
 import { briefMarker, mergeBrief, type ReviewRound, renderBrief } from '../brief/merge-brief.ts';
 import { InvalidEvent } from '../events.ts';
-import { type GitHost, type ReviewFact, toPoll } from '../githost/host.ts';
+import { type ChangeSnapshot, type CommentFact, type GitHost, type ReviewFact, toPoll } from '../githost/host.ts';
+import type { Executor } from '../hq.ts';
 import type { Denial } from '../sandbox/firewall.ts';
+import { canonicalJson } from '../store/atomic.ts';
 import type { LoggedEvent, OutboxEntry } from '../store/store.ts';
 
 export interface HqPort {
@@ -25,8 +27,6 @@ export interface HqPort {
   events(after: number): readonly LoggedEvent[];
   changed(): void;
 }
-
-export type Executor = (entry: OutboxEntry) => Promise<void>;
 
 export type ActionItem =
   | { readonly kind: 'ready_to_merge'; readonly task: TaskId; readonly url: string; readonly brief: string }
@@ -74,7 +74,7 @@ export interface CagesOptions {
   readonly settleMs?: number;
 }
 
-export const ROUND_LIMIT = 3;
+const ROUND_LIMIT = 3;
 
 type Job =
   | { readonly kind: 'author'; readonly box: Box; readonly round: 0 }
@@ -100,8 +100,7 @@ export const cagesMode =
     const roundLimit = options.roundLimit ?? ROUND_LIMIT;
     const maxFailures = options.maxFailures ?? 3;
     const abort = new AbortController();
-    const changesOn = new Map<string, Map<string, number>>();
-    const votes = new Map<string, Array<{ reviewer: string; verdict: Verdict; head: string; at: number }>>();
+    const votes = new Map<string, Array<{ reviewer: string; verdict: Verdict; head: string }>>();
     let seen = 0;
     const running = new Map<TaskId, Promise<void>>();
     const again = new Set<TaskId>();
@@ -113,50 +112,50 @@ export const cagesMode =
     const lastPoll = new Map<string, string>();
     let timer: NodeJS.Timeout | null = null;
 
-    const record = (ref: string, reviewer: string, verdict: Verdict, head: string, at: number) => {
+    const record = (ref: string, reviewer: string, verdict: Verdict, head: string) => {
       const list = votes.get(ref) ?? [];
-      list.push({ reviewer: reviewer.toLowerCase(), verdict, head, at });
+      list.push({ reviewer: toLogin(reviewer), verdict, head });
       votes.set(ref, list);
-      if (verdict !== 'changes') return;
-      const heads = changesOn.get(ref) ?? new Map<string, number>();
-      if (!heads.has(head)) heads.set(head, at);
-      changesOn.set(ref, heads);
     };
     const project = () => {
       for (const { seq, event } of hq.events(seen)) {
         seen = seq;
         if (event.source === 'webhook' && event.kind === 'review')
-          record(changeRef(event.repo, event.number), event.reviewer, event.verdict, event.headSha, event.at);
+          record(changeRef(event.repo, event.number), event.reviewer, event.verdict, event.headSha);
         if (event.source === 'poll')
           for (const r of event.reviews)
-            record(changeRef(event.repo, event.number), r.reviewer, r.verdict, event.headSha, event.at);
+            record(changeRef(event.repo, event.number), r.reviewer, r.verdict, event.headSha);
       }
     };
-    const roundsOf = (change: Change): number => {
-      project();
-      return changesOn.get(changeRef(change.repo, change.number))?.size ?? 0;
-    };
+    const roundsOf = (change: Change): number =>
+      new Set(
+        (votes.get(changeRef(change.repo, change.number)) ?? [])
+          .filter((v) => v.verdict === 'changes')
+          .map((v) => v.head),
+      ).size;
 
     const ingest = (event: Event | null) => {
       if (event !== null) hq.ingest(event);
     };
-    const poll = async (number: number) => {
-      const event = toPoll(await host.snapshot(repo, number));
+    const take = (snapshot: ChangeSnapshot) => {
+      const event = toPoll(snapshot);
       const key = `${event.repo}#${event.number}`;
-      const body = JSON.stringify(event);
+      const body = canonicalJson(event);
       if (lastPoll.get(key) === body) return event;
       lastPoll.set(key, body);
       ingest(event);
       return event;
     };
+    const poll = async (number: number) => take(await host.snapshot(repo, number));
     const settle = async (number: number, head: string) => {
       for (let tries = 1; (await poll(number)).headSha !== head && tries < 10; tries += 1)
         await sleep(options.settleMs ?? 1000, undefined, { signal: abort.signal });
     };
     const reviewed = (state: State, change: Change, reviewer: string): boolean =>
-      Object.hasOwn(state.reviews[`${change.repo}#${change.number}|${change.head.v}`] ?? {}, reviewer.toLowerCase());
+      Object.hasOwn(state.reviews[`${change.repo}#${change.number}|${change.head.v}`] ?? {}, toLogin(reviewer));
 
     const needed = (task: TaskId): Job | null => {
+      project();
       const state = hq.state();
       const box = state.boxes[task];
       if (box === undefined) return null;
@@ -195,30 +194,33 @@ export const cagesMode =
         'Opened by an Agent Works worker. HQ never merges; a person merges on the host.',
       ].join('\n');
 
+    const runAuthor = async (task: TaskId, worker: string, round: number, comments: readonly CommentFact[]) => {
+      const result = await runtimeOf(worker).run({
+        role: 'author',
+        task,
+        worker,
+        ticket: ticketOf(task),
+        round,
+        comments,
+        signal: abort.signal,
+      });
+      if (result.role !== 'author') throw new Error('the author runtime returned a review');
+      spend(task, result.usage);
+      return host.pushFiles(repo, {
+        branch: branchOf(task),
+        base: options.base,
+        files: result.files,
+        message: result.message,
+      });
+    };
+
     const author = async (job: Extract<Job, { kind: 'author' }>) => {
       const task = job.box.id;
       const branch = branchOf(task);
       const existing = await host.findChange(repo, branch);
       if (existing !== null) return void (await poll(existing.number));
       const ticket = ticketOf(task);
-      const worker = job.box.worker ?? options.author;
-      const result = await runtimeOf(worker).run({
-        role: 'author',
-        task,
-        worker,
-        ticket,
-        round: 0,
-        comments: [],
-        signal: abort.signal,
-      });
-      if (result.role !== 'author') throw new Error('the author runtime returned a review');
-      spend(task, result.usage);
-      const head = await host.pushFiles(repo, {
-        branch,
-        base: options.base,
-        files: result.files,
-        message: result.message,
-      });
+      const head = await runAuthor(task, job.box.worker ?? options.author, 0, []);
       const opened =
         (await host.findChange(repo, branch)) ??
         (await host.openChange(repo, {
@@ -235,24 +237,7 @@ export const cagesMode =
       const now = await poll(job.change.number);
       if (now.headSha !== job.change.head.v) return;
       const asked = (await host.comments(repo, job.change.number)).filter((c) => c.commitId === job.change.head.v);
-      const worker = options.author;
-      const result = await runtimeOf(worker).run({
-        role: 'author',
-        task,
-        worker,
-        ticket: ticketOf(task),
-        round: job.round,
-        comments: asked,
-        signal: abort.signal,
-      });
-      if (result.role !== 'author') throw new Error('the author runtime returned a review');
-      spend(task, result.usage);
-      const head = await host.pushFiles(repo, {
-        branch: branchOf(task),
-        base: options.base,
-        files: result.files,
-        message: result.message,
-      });
+      const head = await runAuthor(task, options.author, job.round, asked);
       if (head === job.change.head.v) throw new Error('the fix round changed no file');
       await settle(job.change.number, head);
     };
@@ -277,12 +262,13 @@ export const cagesMode =
       const task = job.box.id;
       const head = job.change.head.v;
       const snapshot = await host.snapshot(repo, job.change.number);
-      if (snapshot.change.headSha !== head) return void (await poll(job.change.number));
-      const mine = snapshot.reviews.find((r) => r.commitId === head && REVIEW_MARK.exec(r.body)?.[1] === job.reviewer);
-      if (mine !== undefined) {
-        const intended = (REVIEW_MARK.exec(mine.body)?.[2] ?? 'comment') as Verdict;
-        return ingest(reviewFact(mine, job.change, job.reviewer, intended));
-      }
+      if (snapshot.change.headSha !== head) return void take(snapshot);
+      const mine = snapshot.reviews
+        .filter((r) => r.commitId === head)
+        .map((r) => ({ r, mark: REVIEW_MARK.exec(r.body) }))
+        .find(({ mark }) => mark?.[1] === job.reviewer);
+      if (mine !== undefined)
+        return ingest(reviewFact(mine.r, job.change, job.reviewer, (mine.mark?.[2] ?? 'comment') as Verdict));
       const result = await runtimeOf(job.reviewer).run({
         role: 'reviewer',
         task,
@@ -328,15 +314,16 @@ export const cagesMode =
       const task = job.box.id;
       const head = job.change.head.v;
       const snapshot = await host.snapshot(repo, job.change.number);
-      if (snapshot.change.headSha !== head) return void (await poll(job.change.number));
+      if (snapshot.change.headSha !== head) return void take(snapshot);
+      const [files, rounds] = await Promise.all([host.paths(repo, job.change.number), roundsFor(job.change)]);
       const text = renderBrief(
         mergeBrief({
           ticket: ticketOf(task),
           change: snapshot.change,
-          files: (await host.files(repo, job.change.number, head)).map((f) => f.path),
+          files,
           checks: snapshot.checks,
-          rounds: await roundsFor(job.change),
-          author: { worker: options.author, runtime: runtimeOf(options.author).id },
+          rounds,
+          author: { runtime: runtimeOf(options.author).id },
           evidence: {},
           notes: {},
         }),
@@ -418,6 +405,7 @@ export const cagesMode =
     const done: Executor = async () => {};
 
     const actions = (): ActionItem[] => {
+      project();
       const state = hq.state();
       const items: ActionItem[] = [];
       for (const box of Object.values(state.boxes)) {
@@ -434,9 +422,13 @@ export const cagesMode =
         }
         if (box.state === 'qc' && box.changesRequested) {
           const change = state.changes[box.pr];
-          const rounds = change === undefined ? 0 : roundsOf(change);
-          if (change !== undefined && rounds > roundLimit)
-            items.push({ kind: 'round_limit', task: box.id, url: `${repo}#${change.number}`, fixRounds: rounds - 1 });
+          if (change !== undefined && roundsOf(change) > roundLimit)
+            items.push({
+              kind: 'round_limit',
+              task: box.id,
+              url: `${repo}#${change.number}`,
+              fixRounds: roundsOf(change) - 1,
+            });
         }
       }
       for (const denial of denials.values()) if (!allowed.has(denial.host)) items.push({ kind: 'website', ...denial });
@@ -453,6 +445,7 @@ export const cagesMode =
     };
 
     const view = (): ModeView => {
+      project();
       const state = hq.state();
       const rounds: Record<TaskId, number> = {};
       for (const box of Object.values(state.boxes)) {

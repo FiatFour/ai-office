@@ -120,7 +120,7 @@ const MUTANTS = [
   {
     name: 'review-posted-twice',
     claim: 'a review HQ already posted on the head is adopted, not posted again',
-    edits: [['server/modes/cages.ts', 'const mine = snapshot.reviews.find(', 'const mine = [].find(']],
+    edits: [['server/modes/cages.ts', '.filter((r) => r.commitId === head)', '.filter(() => false)']],
     tests: [CAGES],
   },
   {
@@ -203,7 +203,7 @@ const MUTANTS = [
   {
     name: 'brief-no-runtime-gap',
     claim: 'the brief names a same-runtime review as a gap',
-    edits: [['server/brief/merge-brief.ts', 'if (sameRuntime.length > 0)', 'if (false)']],
+    edits: [['server/brief/merge-brief.ts', 'if (sameRuntime)', 'if (false)']],
     tests: [BRIEF, CAGES],
   },
   {

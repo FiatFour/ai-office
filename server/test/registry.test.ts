@@ -114,7 +114,7 @@ describe('registry', () => {
     const registry = new Registry(folder(root, 'home'));
     const real = folder(root, 'real');
     const link = join(root, 'link');
-    symlinkSync(real, link);
+    symlinkSync(real, link, 'junction');
     const first = registry.addFactory(real).factory;
     expect(registry.addFactory(link)).toMatchObject({ created: false, factory: { id: first.id } });
     registry.addRepo(real, { path: real, remote: null });

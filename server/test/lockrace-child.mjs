@@ -1,9 +1,8 @@
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const base = String(process.argv[2]);
 const [startAt = 0, trials = 0, gap = 0] = process.argv.slice(3, 6).map(Number);
-const { Store } = await import(fileURLToPath(new URL('../store/store.ts', import.meta.url)));
+const { Store } = await import(new URL('../store/store.ts', import.meta.url).href);
 const held = [];
 for (let trial = 0; trial < trials; trial += 1) {
   const at = startAt + trial * gap;

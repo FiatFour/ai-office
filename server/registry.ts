@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { canonicalJson, writeAtomic } from './store/atomic.ts';
 
 export interface RepoEntry {
@@ -25,14 +26,46 @@ export class RegistryError extends Error {}
 const caseKey = (path: string): string =>
   process.platform === 'win32' || process.platform === 'darwin' ? path.toLowerCase() : path;
 
-const canonicalPath = (path: string): string => caseKey(realpathSync(resolve(path)));
+const canonicalPath = (path: string): string => caseKey(realpathSync.native(resolve(path)));
+
+const DEFAULT_PORTS: Readonly<Record<string, string>> = {
+  'ssh:': '22',
+  'git+ssh:': '22',
+  'ssh+git:': '22',
+  'git:': '9418',
+  'http:': '80',
+  'https:': '443',
+};
+
+const SCP_LIKE = /^(?:[^@/:\\]+@)?([^/:\\]{2,}):(?!\/\/)(.+)$/;
+
+const trimRepoPath = (path: string): string =>
+  path
+    .replace(/\/+$/, '')
+    .replace(/\.git$/i, '')
+    .replace(/^\/+/, '');
+
+const localRemoteId = (remote: string, clone: string): string => {
+  const path = resolve(clone, remote).replaceAll('\\', '/');
+  return `file:${trimRepoPath(path.replace(/^([a-z]):/i, (_, drive: string) => `/${drive.toLowerCase()}:`))}`;
+};
 
 export const repoIdFrom = (remote: string | null, path: string): string => {
   if (remote === null) return `local:${canonicalPath(path)}`;
-  const m = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?([^/:]+)[/:](.+?)(?:\.git)?\/?$/i.exec(remote.trim()) ?? [];
-  const [, host, rest] = m;
-  if (host === undefined || rest === undefined) throw new RegistryError(`cannot read the remote ${remote}`);
-  return `${host}/${rest}`.toLowerCase();
+  const text = remote.trim();
+  if (/^file:\/\//i.test(text)) return localRemoteId(fileURLToPath(text), path);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+    try {
+      const url = new URL(text);
+      const port = url.port === '' || DEFAULT_PORTS[url.protocol] === url.port ? '' : `:${url.port}`;
+      return `${url.hostname}${port}/${trimRepoPath(decodeURIComponent(url.pathname))}`.toLowerCase();
+    } catch {
+      return `local:${canonicalPath(path)}`;
+    }
+  }
+  const scp = SCP_LIKE.exec(text);
+  if (scp?.[1] !== undefined && scp[2] !== undefined) return `${scp[1]}/${trimRepoPath(scp[2])}`.toLowerCase();
+  return localRemoteId(text, path);
 };
 
 export class Registry {

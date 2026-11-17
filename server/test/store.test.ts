@@ -2,9 +2,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { initialState, type State } from '@agent-works/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseEvent } from '../events.ts';
-import { Ledger } from '../ledger.ts';
+import { Ledger, MAX_ATTEMPTS } from '../ledger.ts';
 import { pruneSuperseded } from '../store/prune.ts';
 import { type OutboxEntry, type Persisted, Store, StoreCorruptError, StoreLockedError } from '../store/store.ts';
 import { change, check, hasSqlite, human, tempDir } from './helpers.ts';
@@ -135,6 +135,56 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
       expect(() => Store.open(dir)).toThrow(StoreCorruptError);
     });
 
+    it('refuses a state row that was edited into other valid JSON', () => {
+      const dir = seeded('corrupt-state-edit');
+      rawSql(dir, `UPDATE state SET body = replace(body, '"nova"', '"evil"') WHERE id = 1`);
+      const failure = (() => {
+        try {
+          Store.open(dir);
+        } catch (error) {
+          return error;
+        }
+        return null;
+      })();
+      expect(failure).toBeInstanceOf(StoreCorruptError);
+      expect(String((failure as Error).message)).toContain('state row does not match its checksum');
+      expect(countEvents(dir)).toBe(4);
+    });
+
+    it('refuses one altered byte inside the state row', () => {
+      const dir = seeded('corrupt-state-byte');
+      const file = join(dir, 'hq.db');
+      const bytes = readFileSync(file);
+      const at = bytes.lastIndexOf('"superseded"');
+      expect(at).toBeGreaterThan(0);
+      bytes[at + 1] = 'X'.charCodeAt(0);
+      writeFileSync(file, bytes);
+      expect(() => Store.open(dir)).toThrow(/state row does not match its checksum/);
+      expect(countEvents(dir)).toBe(4);
+    });
+
+    it('refuses a state row that is cut short without leaking a parser error', () => {
+      const dir = seeded('corrupt-state-cut');
+      rawSql(dir, 'UPDATE state SET body = substr(body, 1, 40) WHERE id = 1');
+      expect(() => Store.open(dir)).toThrow(StoreCorruptError);
+    });
+
+    it('refuses a log that still has events but lost its state row, and does not reset it', () => {
+      const dir = seeded('corrupt-state-missing');
+      rawSql(dir, 'DELETE FROM state');
+      expect(() => Store.open(dir)).toThrow(/state row is missing/);
+      expect(countEvents(dir)).toBe(4);
+    });
+
+    it('refuses two events that traded sequence numbers, so the checksum covers the seq', () => {
+      const dir = seeded('corrupt-swap');
+      rawSql(
+        dir,
+        'UPDATE events SET seq = 99 WHERE seq = 2; UPDATE events SET seq = 2 WHERE seq = 3; UPDATE events SET seq = 3 WHERE seq = 99',
+      );
+      expect(() => Store.open(dir)).toThrow(/event [23] does not match its checksum/);
+    });
+
     it('releases the lock when it refuses, so the operator can repair and retry', () => {
       const dir = seeded('corrupt-lock');
       rawSql(dir, "UPDATE events SET sum = 'x' WHERE seq = 1");
@@ -149,15 +199,42 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
     store.close();
   });
 
-  it('lets one HQ own the directory', () => {
+  it('lets one HQ own the directory and hands it over on close', () => {
     const dir = tempDir('ledger-lock');
     const first = Store.open(dir);
-    expect(() => Store.open(dir)).not.toThrow();
+    const failure = (() => {
+      try {
+        Store.open(dir);
+      } catch (error) {
+        return error;
+      }
+      return null;
+    })();
+    expect(failure).toBeInstanceOf(StoreLockedError);
+    expect((failure as StoreLockedError).message).toBe(`another HQ (pid ${process.pid}) owns this state directory`);
+    expect(first.load()).toBeNull();
     first.close();
-    const other = Store.open(dir);
-    other.close();
+    Store.open(dir).close();
+  });
+
+  it('is not fooled by a lock file that names a live process that is not an HQ', () => {
+    const dir = tempDir('ledger-reuse');
+    Store.open(dir).close();
     writeFileSync(join(dir, 'hq.lock'), String(process.ppid));
-    expect(() => Store.open(dir)).toThrow(StoreLockedError);
+    const store = Store.open(dir);
+    expect(readFileSync(join(dir, 'hq.lock'), 'utf8')).toBe(String(process.pid));
+    store.close();
+  });
+
+  it('takes the write lock up front on every write', () => {
+    const { store, ledger } = open(tempDir('ledger-immediate'));
+    const sqlite = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: { prototype: { exec: unknown } } };
+    const exec = vi.spyOn(sqlite.DatabaseSync.prototype as { exec(sql: string): void }, 'exec');
+    ledger.ingest(ev(story[0]));
+    const statements = exec.mock.calls.map(([sql]) => sql);
+    exec.mockRestore();
+    expect(statements).toEqual(['BEGIN IMMEDIATE', 'COMMIT']);
+    store.close();
   });
 
   it('marks a command done and keeps the revision rising', () => {
@@ -170,6 +247,76 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
     expect(ledger.rev).toBe(rev + 1);
     expect(ledger.outbox.find((e) => e.id === entry?.id)?.status).toBe('done');
     store.close();
+  });
+
+  it('keeps an acknowledged command acknowledged after a restart', () => {
+    const dir = tempDir('ledger-ack');
+    const first = open(dir);
+    for (const event of story) first.ledger.ingest(ev(event));
+    const [entry] = first.ledger.pending();
+    first.ledger.mark(entry?.id ?? '', 'done');
+    first.store.close();
+    const second = open(dir);
+    expect(second.ledger.outbox.find((e) => e.id === entry?.id)?.status).toBe('done');
+    expect(second.ledger.pending().map((e) => e.id)).not.toContain(entry?.id);
+    second.store.close();
+  });
+
+  describe('a command that fails', () => {
+    const seededFailing = () => {
+      const { store, ledger } = open(tempDir('ledger-retry'));
+      for (const event of story) ledger.ingest(ev(event));
+      const [entry] = ledger.pending();
+      return { store, ledger, id: entry?.id ?? '' };
+    };
+
+    it(`is offered again until it has failed ${MAX_ATTEMPTS} times, then stays failed with the reason`, () => {
+      const { store, ledger, id } = seededFailing();
+      for (let attempt = 1; attempt < MAX_ATTEMPTS; attempt += 1) {
+        ledger.mark(id, 'failed', 'no image');
+        expect(ledger.runnable().map((e) => e.id)).toContain(id);
+      }
+      ledger.mark(id, 'failed', 'no image');
+      const spent = ledger.outbox.find((e) => e.id === id);
+      expect(spent).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS });
+      expect(spent?.error).toBe(`no image (gave up after ${MAX_ATTEMPTS} attempts)`);
+      expect(ledger.runnable().map((e) => e.id)).not.toContain(id);
+      store.close();
+    });
+
+    it('is pruned with the other closed commands once it has given up, never before', () => {
+      const { store, ledger, id } = seededFailing();
+      ledger.mark(id, 'failed', 'x');
+      const saved = store.load() as Persisted;
+      const retrying = saved.outbox.find((e) => e.id === id) as OutboxEntry;
+      const spent = Array.from({ length: 250 }, (_, i) => ({
+        ...retrying,
+        id: `spent.${i}`,
+        attempts: MAX_ATTEMPTS,
+      }));
+      store.commit({ ...saved, outbox: [...spent, retrying] });
+      const reloaded = new Ledger(store);
+      reloaded.mark(retrying.id, 'failed', 'x');
+      const ids = reloaded.outbox.map((e) => e.id);
+      expect(ids).toContain(retrying.id);
+      expect(ids).toContain('spent.249');
+      expect(ids).not.toContain('spent.0');
+      expect(reloaded.outbox.length).toBeLessThanOrEqual(201);
+      store.close();
+    });
+
+    it('keeps its attempt count across a restart', () => {
+      const dir = tempDir('ledger-retry-restart');
+      const first = open(dir);
+      for (const event of story) first.ledger.ingest(ev(event));
+      const id = first.ledger.pending()[0]?.id ?? '';
+      first.ledger.mark(id, 'failed', 'x');
+      first.store.close();
+      const second = open(dir);
+      expect(second.ledger.outbox.find((e) => e.id === id)?.attempts).toBe(1);
+      expect(second.ledger.runnable().map((e) => e.id)).toContain(id);
+      second.store.close();
+    });
   });
 
   it('trims closed commands to the newest 200 and keeps every open one', () => {

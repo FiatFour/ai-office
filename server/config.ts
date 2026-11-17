@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 
 export const pidAlive = (pid: number): boolean => {
   try {
@@ -59,22 +59,41 @@ const within = (parent: string, path: string): boolean => {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 };
 
+const nativeReal = (path: string): string => realpathSync.native(path);
+
 export const agentWritableRoots = (home: string): string[] =>
   ['cages', 'homes'].map((name) => {
     const dir = join(home, name);
     try {
-      return realpathSync(dir);
+      return nativeReal(dir);
     } catch {
       return dir;
     }
   });
 
+const identity = (path: string): string | null => {
+  try {
+    const { dev, ino } = statSync(path, { bigint: true });
+    return ino === 0n ? null : `${dev}:${ino}`;
+  } catch {
+    return null;
+  }
+};
+
 export const insideCage = (home: string, path: string): boolean => {
   let real: string;
   try {
-    real = realpathSync(path);
+    real = nativeReal(path);
   } catch {
     return false;
   }
-  return agentWritableRoots(home).some((root) => within(root, real));
+  const roots = agentWritableRoots(home);
+  if (roots.some((root) => within(root, real))) return true;
+  const rootIds = new Set(roots.map(identity).filter((id): id is string => id !== null));
+  if (rootIds.size === 0) return false;
+  for (let dir = real; ; dir = dirname(dir)) {
+    const id = identity(dir);
+    if (id !== null && rootIds.has(id)) return true;
+    if (dirname(dir) === dir) return false;
+  }
 };

@@ -1,10 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, main, parseArgs } from '../cli.ts';
+import { Store } from '../store/store.ts';
 import { folder, tempDir } from './helpers.ts';
 
 const BIN = fileURLToPath(new URL('../../bin/agent-works.ts', import.meta.url));
@@ -103,6 +104,22 @@ describe('commands refuse to start from inside a cage', () => {
   };
   const quiet = { out: () => {}, err: () => {} };
 
+  it('refuses to add a repo whose path is inside a cage, from a cwd that is not', async () => {
+    const root = tempDir('cli-cage-path');
+    const home = folder(root, 'home');
+    const inside = folder(home, 'cages/one-abc123/repo');
+    const outside = folder(root, 'clone');
+    const link = join(root, 'link');
+    symlinkSync(inside, link, 'junction');
+    for (const target of [inside, link]) {
+      const failure = await main(['add-repo', target, '--home', home], { AGENT_WORKS_CWD: outside }, quiet).catch(
+        (e: unknown) => e,
+      );
+      expect(failure).toBeInstanceOf(CliError);
+      expect(String((failure as Error).message)).toContain('inside a cage');
+    }
+  });
+
   it.each([['cage', 'start', '--task', 't', '--worker', 'w'], ['open'], ['add-repo', '.']])(
     '%s from a cage workdir',
     async (...argv) => {
@@ -168,6 +185,36 @@ live('the CLI as a process', () => {
     expect(second.err).toContain(`another HQ (pid ${pid})`);
     expect(second.err).not.toContain('Another program');
     expect(second.err).toContain('--port');
+  });
+
+  it('says another HQ owns the state, not a stack trace, when a live process holds the state directory', async () => {
+    const root = tempDir('cli-owned');
+    const home = folder(root, 'home');
+    homes.push(home);
+    const holder = Store.open(join(home, 'state'));
+    try {
+      const res = cli(folder(root, 'w'), home, ['--no-open', '--port', String(await freePort())]);
+      expect(res.code).toBe(1);
+      expect(res.err).toContain(`another HQ (pid ${process.pid}) owns this state directory`);
+      expect(res.err).not.toMatch(/\bat \w+.*\.ts:\d+/);
+    } finally {
+      holder.close();
+    }
+  });
+
+  it('shows only this start, not the lines an earlier run left in hq.log', async () => {
+    const root = tempDir('cli-log-tail');
+    const home = folder(root, 'home');
+    homes.push(home);
+    writeFileSync(join(home, 'hq.log'), 'OLD-RUN-LINE\n'.repeat(20));
+    const holder = Store.open(join(home, 'state'));
+    try {
+      const res = cli(folder(root, 'w'), home, ['--no-open', '--port', String(await freePort())]);
+      expect(res.err).toContain('owns this state directory');
+      expect(res.err).not.toContain('OLD-RUN-LINE');
+    } finally {
+      holder.close();
+    }
   });
 
   it('adds one repo to two factories with one entry in repos.json', async () => {

@@ -5,6 +5,9 @@ import type { OutboxEntry, OutboxStatus, Persisted, Store } from './store/store.
 export const DEFAULT_CONFIG: Config = { budget: 3, approvals: 1 };
 const SUPERSEDED_CAP = 10_000;
 const DONE_KEPT = 200;
+export const MAX_ATTEMPTS = 3;
+
+const retryable = (entry: OutboxEntry): boolean => entry.status === 'failed' && entry.attempts < MAX_ATTEMPTS;
 
 export interface Ingested {
   readonly rev: number;
@@ -15,8 +18,9 @@ const entriesFor = (seq: number, commands: readonly Command[]): OutboxEntry[] =>
   commands.map((command, index) => ({ id: `${seq}.${index}`, command, status: 'pending', attempts: 0, error: null }));
 
 const settle = (outbox: readonly OutboxEntry[]): OutboxEntry[] => {
-  const open = outbox.filter((entry) => entry.status === 'pending' || entry.status === 'failed');
-  const closed = outbox.filter((entry) => entry.status !== 'pending' && entry.status !== 'failed');
+  const isOpen = (entry: OutboxEntry): boolean => entry.status === 'pending' || retryable(entry);
+  const open = outbox.filter(isOpen);
+  const closed = outbox.filter((entry) => !isOpen(entry));
   return [...open, ...closed.slice(-DONE_KEPT)];
 };
 
@@ -64,16 +68,22 @@ export class Ledger {
   }
 
   mark(id: string, status: OutboxStatus, error: string | null = null): void {
-    const outbox = this.persisted.outbox.map((entry) =>
-      entry.id === id
-        ? { ...entry, status, error, attempts: status === 'failed' ? entry.attempts + 1 : entry.attempts }
-        : entry,
-    );
+    const outbox = this.persisted.outbox.map((entry) => {
+      if (entry.id !== id) return entry;
+      const attempts = status === 'failed' ? entry.attempts + 1 : entry.attempts;
+      const reason =
+        status === 'failed' && attempts >= MAX_ATTEMPTS ? `${error} (gave up after ${attempts} attempts)` : error;
+      return { ...entry, status, error: reason, attempts };
+    });
     this.save({ ...this.persisted, rev: this.persisted.rev + 1, outbox: settle(outbox) });
   }
 
   pending(): readonly OutboxEntry[] {
     return this.persisted.outbox.filter((entry) => entry.status === 'pending');
+  }
+
+  runnable(): readonly OutboxEntry[] {
+    return this.persisted.outbox.filter((entry) => entry.status === 'pending' || retryable(entry));
   }
 
   private save(next: Persisted): void {

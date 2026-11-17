@@ -3,7 +3,6 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import type { Command, Event, State } from '@agent-works/core';
-import { pidAlive } from '../config.ts';
 import { canonicalJson } from './atomic.ts';
 
 export type OutboxStatus = 'pending' | 'done' | 'failed' | 'skipped';
@@ -31,9 +30,9 @@ export interface LoggedEvent {
 }
 
 export class StoreLockedError extends Error {
-  readonly pid: number;
-  constructor(pid: number) {
-    super(`another HQ (pid ${pid}) owns this state directory`);
+  readonly pid: number | null;
+  constructor(pid: number | null) {
+    super(`another HQ${pid === null ? '' : ` (pid ${pid})`} owns this state directory`);
     this.pid = pid;
   }
 }
@@ -64,12 +63,17 @@ const openDatabase = (path: string): Database => {
 };
 
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL, sum TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, body TEXT NOT NULL, sum TEXT NOT NULL) STRICT;
 `;
 
 const sumOf = (seq: number, body: string): string =>
   createHash('sha256').update(`${seq}\n${body}`).digest('hex').slice(0, 32);
+
+const GENESIS = 'genesis';
+
+const stateSumOf = (eventSeq: number, lastEventSum: string, body: string): string =>
+  createHash('sha256').update(`${eventSeq}\n${lastEventSum}\n${body}`).digest('hex').slice(0, 32);
 
 const decode = (row: Record<string, unknown>): LoggedEvent => {
   const seq = Number(row.seq);
@@ -78,29 +82,32 @@ const decode = (row: Record<string, unknown>): LoggedEvent => {
   return { seq, event: JSON.parse(body) as Event };
 };
 
+const isBusy = (error: unknown): boolean => {
+  const { errcode, message } = error as { errcode?: number; message?: string };
+  return errcode === 5 || errcode === 6 || /database is locked|busy/i.test(message ?? '');
+};
+
+const CLAIM_WINDOW_MS = 100;
+
+const sleepSync = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
 export class Store {
   private readonly lockPath: string;
   private readonly db: Database;
+  private held = false;
 
   private constructor(dir: string) {
     this.lockPath = join(dir, 'hq.lock');
-    this.lock();
-    const db = this.attempt(() => openDatabase(join(dir, 'hq.db')));
-    this.db = db;
-    this.attempt(() => {
-      db.exec('PRAGMA journal_mode = WAL');
-      db.exec('PRAGMA synchronous = FULL');
-      db.exec(SCHEMA);
-      this.verify();
-    }, db);
-  }
-
-  private attempt<T>(work: () => T, db?: Database): T {
+    this.db = this.claim(join(dir, 'hq.db'));
     try {
-      return work();
+      this.db.exec('PRAGMA synchronous = FULL');
+      this.db.exec(SCHEMA);
+      this.verify();
     } catch (error) {
       try {
-        db?.close();
+        this.db.close();
       } catch {}
       this.release();
       throw error;
@@ -112,21 +119,41 @@ export class Store {
     return new Store(dir);
   }
 
-  private lock(): void {
+  private claim(file: string): Database {
+    const deadline = Date.now() + CLAIM_WINDOW_MS;
     for (;;) {
+      const db = openDatabase(file);
       try {
-        writeFileSync(this.lockPath, String(process.pid), { flag: 'wx' });
-        return;
+        db.exec('PRAGMA locking_mode = EXCLUSIVE');
+        db.exec('PRAGMA journal_mode = WAL');
+        db.exec('BEGIN IMMEDIATE');
+        db.exec('COMMIT');
+        this.held = true;
+        writeFileSync(this.lockPath, String(process.pid));
+        return db;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        const owner = Number(readFileSync(this.lockPath, 'utf8'));
-        if (Number.isInteger(owner) && owner !== process.pid && pidAlive(owner)) throw new StoreLockedError(owner);
-        unlinkSync(this.lockPath);
+        try {
+          db.close();
+        } catch {}
+        if (!isBusy(error)) throw error;
+        if (Date.now() >= deadline) throw new StoreLockedError(this.owner());
+        sleepSync(2 + Math.random() * 10);
       }
     }
   }
 
+  private owner(): number | null {
+    try {
+      const pid = Number(readFileSync(this.lockPath, 'utf8'));
+      return Number.isInteger(pid) && pid > 0 ? pid : null;
+    } catch {
+      return null;
+    }
+  }
+
   private release(): void {
+    if (!this.held) return;
+    this.held = false;
     try {
       if (readFileSync(this.lockPath, 'utf8') === String(process.pid)) unlinkSync(this.lockPath);
     } catch {}
@@ -140,10 +167,28 @@ export class Store {
         `the event log has a gap, it holds ${n} events between ${span?.low} and ${span?.high}`,
       );
     for (const row of this.db.prepare('SELECT seq, body, sum FROM events ORDER BY seq').all()) decode(row);
-    const saved = this.load();
-    if (saved !== null && saved.eventSeq !== n)
-      throw new StoreCorruptError(`the state was saved at event ${saved.eventSeq} but the log holds ${n}`);
+    const saved = this.readState();
+    if (saved !== null && saved.persisted.eventSeq !== n)
+      throw new StoreCorruptError(`the state was saved at event ${saved.persisted.eventSeq} but the log holds ${n}`);
     if (saved === null && n > 0) throw new StoreCorruptError(`the log holds ${n} events and the state row is missing`);
+    if (saved !== null && saved.sum !== this.stateSum(saved.persisted.eventSeq, saved.body))
+      throw new StoreCorruptError('the state row does not match its checksum, it was edited or damaged');
+  }
+
+  private stateSum(eventSeq: number, body: string): string {
+    const last = this.db.prepare('SELECT sum FROM events WHERE seq = ?').get(eventSeq);
+    return stateSumOf(eventSeq, last === undefined ? GENESIS : String(last.sum), body);
+  }
+
+  private readState(): { persisted: Persisted; body: string; sum: string } | null {
+    const row = this.db.prepare('SELECT body, sum FROM state WHERE id = 1').get();
+    if (row === undefined) return null;
+    const body = String(row.body);
+    try {
+      return { persisted: JSON.parse(body) as Persisted, body, sum: String(row.sum) };
+    } catch {
+      throw new StoreCorruptError('the state row is not valid JSON');
+    }
   }
 
   durability(): { journal: string; synchronous: number } {
@@ -162,8 +207,7 @@ export class Store {
   }
 
   load(): Persisted | null {
-    const row = this.db.prepare('SELECT body FROM state WHERE id = 1').get();
-    return row === undefined ? null : (JSON.parse(String(row.body)) as Persisted);
+    return this.readState()?.persisted ?? null;
   }
 
   events(afterSeq: number): LoggedEvent[] {
@@ -183,9 +227,12 @@ export class Store {
   }
 
   private put(persisted: Persisted): void {
+    const body = canonicalJson(persisted);
     this.db
-      .prepare('INSERT INTO state (id, body) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET body = excluded.body')
-      .run(canonicalJson(persisted));
+      .prepare(
+        'INSERT INTO state (id, body, sum) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE SET body = excluded.body, sum = excluded.sum',
+      )
+      .run(body, this.stateSum(persisted.eventSeq, body));
   }
 
   record(event: Event, next: (seq: number) => Persisted): Persisted {

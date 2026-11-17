@@ -211,6 +211,30 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       expect(result.out.trim()).toBe('lo');
     }, 120_000);
 
+    it('runs the throwaway container hardened, as the host user, with a read-only root', async () => {
+      const probe = [
+        'sh',
+        '-c',
+        'id -u; grep -E \'^(CapBnd|NoNewPrivs):\' /proc/self/status; awk \'$2=="/"{print "root", $4}\' /proc/mounts',
+      ];
+      const result = await driver.throwaway(probe, []);
+      const lines = result.out.trim().split('\n');
+      expect(lines[0]).toBe(String(process.getuid?.()));
+      expect(process.getuid?.()).not.toBe(0);
+      expect(lines).toContain('CapBnd:\t0000000000000000');
+      expect(lines).toContain('NoNewPrivs:\t1');
+      expect(lines.find((line) => line.startsWith('root '))?.split(/[ ,]/)).toContain('ro');
+    }, 120_000);
+
+    it('refuses an export when the contained git archive fails, instead of making an empty repo', async () => {
+      const source = folder(tempDir('driver-nohead'), 'source');
+      git(source, 'init', '-q', '-b', 'main');
+      const dest = join(tempDir('driver-nohead-dest'), 'repo');
+      await expect(exportRepo(source, dest, (args, mounts) => driver.throwaway(args, mounts))).rejects.toThrow(
+        /git archive/,
+      );
+    }, 120_000);
+
     it('removes every protected file from the export, not only the first', async () => {
       const source = fixtureRepo(tempDir('driver-many'), canary);
       mkdirSync(join(source, 'sub'));

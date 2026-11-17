@@ -147,10 +147,14 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     if (draining) return;
     draining = true;
     try {
+      const tried = new Set<string>();
       for (;;) {
-        const batch = ledger.pending();
+        const batch = ledger.runnable().filter((entry) => !tried.has(entry.id));
         if (batch.length === 0) break;
-        for (const entry of batch) await run(entry);
+        for (const entry of batch) {
+          tried.add(entry.id);
+          await run(entry);
+        }
       }
     } finally {
       draining = false;

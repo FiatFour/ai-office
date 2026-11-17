@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { readRuntime } from '../config.ts';
+import { parseEvent } from '../events.ts';
 import { type RunningHq, startHq } from '../hq.ts';
+import { Ledger, MAX_ATTEMPTS } from '../ledger.ts';
 import type { Snapshot } from '../snapshot.ts';
+import { Store } from '../store/store.ts';
 import { change, folder, hasSqlite, human, tempDir } from './helpers.ts';
 
 const running: RunningHq[] = [];
@@ -234,5 +237,88 @@ describe.skipIf(!hasSqlite)('HQ', () => {
     running.push(again);
     expect(again.snapshot().rev).toBeGreaterThanOrEqual(rev);
     expect(again.snapshot().state.boxes['acme/t1']?.state).toBe('belt');
+  });
+
+  it('pushes an ingested event to every open socket, not only the first', async () => {
+    const { hq } = await boot();
+    const sockets = [await watch(hq), await watch(hq), await watch(hq)];
+    for (const ws of sockets) await ws.next(0);
+    const posted = await call(hq, '/api/events', human.order('acme/t1'));
+    expect(posted.status).toBe(200);
+    const rev = posted.json.rev as number;
+    for (const ws of sockets)
+      await Promise.race([
+        ws.next(rev),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('no push')), 2000)),
+      ]);
+    for (const ws of sockets) {
+      expect(ws.revs.at(-1)).toBe(rev);
+      ws.socket.close();
+    }
+  });
+
+  it('upgrades only /api/ws', async () => {
+    const { hq } = await boot();
+    const verdict = (path: string) =>
+      new Promise<string>((resolve) => {
+        const socket = new WebSocket(`${hq.url.replace('http', 'ws')}${path}`);
+        socket.on('open', () => {
+          socket.close();
+          resolve('open');
+        });
+        socket.on('error', () => resolve('refused'));
+        socket.on('unexpected-response', () => resolve('refused'));
+      });
+    expect(await verdict('/api/ws')).toBe('open');
+    expect(await verdict('/')).toBe('refused');
+    expect(await verdict('/api/other')).toBe('refused');
+    expect(await verdict('/api/ws/extra')).toBe('refused');
+  });
+
+  it('runs the commands a crash left pending as soon as it boots, with no new event', async () => {
+    const home = tempDir('hq-boot-drain');
+    const store = Store.open(join(home, 'state'));
+    const ledger = new Ledger(store);
+    for (const event of [human.addWorker('nova'), human.order('acme/t1'), human.hire('acme/t1', 'nova')])
+      ledger.ingest(parseEvent(event));
+    const [left] = ledger.pending();
+    expect(left?.command.kind).toBe('start_cage');
+    store.close();
+    const seen: string[] = [];
+    const { hq } = await boot(home, {
+      executors: {
+        start_cage: async (entry) => {
+          seen.push(entry.id);
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(seen).toEqual([left?.id]);
+    expect(hq.snapshot().outbox.pending).toBe(0);
+  });
+
+  it('retries a failed command on later drains, then stops and keeps the reason', async () => {
+    const calls: string[] = [];
+    const { hq } = await boot(undefined, {
+      executors: {
+        start_cage: async (entry) => {
+          calls.push(entry.id);
+          throw new Error('no image');
+        },
+      },
+    });
+    await call(hq, '/api/events', human.addWorker('nova'));
+    await call(hq, '/api/events', human.order('acme/t1'));
+    await call(hq, '/api/events', human.hire('acme/t1', 'nova'));
+    for (let round = 0; round < MAX_ATTEMPTS + 2; round += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await call(hq, '/api/events', human.addWorker(`filler${round}`));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(calls).toHaveLength(MAX_ATTEMPTS);
+    const failed = hq.snapshot().outbox.failed;
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ attempts: MAX_ATTEMPTS });
+    expect(failed[0]?.error).toContain('gave up after');
   });
 });

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -20,6 +20,7 @@ import { realHostProbe } from './preflight/host.ts';
 import { Registry } from './registry.ts';
 import { SandboxDriver } from './sandbox/container.ts';
 import { Engine, pickEngine, runBinary } from './sandbox/engine.ts';
+import { StoreCorruptError, StoreLockedError } from './store/store.ts';
 
 const BIN = fileURLToPath(new URL('../bin/agent-works.ts', import.meta.url));
 
@@ -132,7 +133,9 @@ export const ensureHq = async (
     );
   }
   mkdirSync(home, { recursive: true });
-  const log = openSync(join(home, 'hq.log'), 'a');
+  const logPath = join(home, 'hq.log');
+  const log = openSync(logPath, 'a');
+  const logStart = statSync(logPath).size;
   const child = spawn(
     process.execPath,
     [...process.execArgv, BIN, 'serve', '--port', String(wantedPort), '--home', home],
@@ -152,8 +155,8 @@ export const ensureHq = async (
     if (child.exitCode !== null) break;
     await sleep(40);
   }
-  const tail = readFileSync(join(home, 'hq.log'), 'utf8').split('\n').slice(-8).join('\n');
-  throw new CliError(`HQ did not start. The end of ${join(home, 'hq.log')}:\n${tail}`);
+  const lines = readFileSync(logPath).subarray(logStart).toString('utf8').trim().split('\n');
+  throw new CliError(`HQ did not start. ${lines.slice(-8).join('\n')}\nThe full log is ${logPath}`);
 };
 
 const post = async <T = Record<string, never>>(
@@ -257,7 +260,10 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
     return 0;
   }
   if (command === 'serve') {
-    const hq = await startHq({ home, port, makeDriver: hqDriver(env, home) });
+    const hq = await startHq({ home, port, makeDriver: hqDriver(env, home) }).catch((error: unknown) => {
+      if (error instanceof StoreLockedError || error instanceof StoreCorruptError) throw new CliError(error.message, 3);
+      throw error;
+    });
     const quit = () => void hq.close();
     process.on('SIGTERM', quit);
     process.on('SIGINT', quit);

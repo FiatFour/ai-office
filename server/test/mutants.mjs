@@ -11,8 +11,10 @@ const ATOMIC = 'server/test/atomic.test.ts';
 const STORE = 'server/test/store.test.ts';
 const HQ = 'server/test/hq.test.ts';
 const CLI = 'server/test/cli.test.ts';
+const CONFIG = 'server/test/config.test.ts';
+const LOCKRACE = 'server/test/lockrace.test.ts';
 
-/** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[], survives?: boolean }>} */
+/** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[], survives?: boolean, env?: Record<string, string | undefined> }>} */
 const MUTANTS = [
   {
     name: 'prune-live-head',
@@ -222,7 +224,7 @@ const MUTANTS = [
   {
     name: 'registry-no-realpath',
     claim: 'a symlinked path is the same factory and the same clone',
-    edits: [['server/registry.ts', 'caseKey(realpathSync(resolve(path)))', 'caseKey(resolve(path))']],
+    edits: [['server/registry.ts', 'caseKey(realpathSync.native(resolve(path)))', 'caseKey(resolve(path))']],
     tests: [REGISTRY],
   },
   {
@@ -333,13 +335,262 @@ const MUTANTS = [
     edits: [['server/cli.ts', "if (state.state === 'hq') {", 'if (false as boolean) {']],
     tests: [CLI],
   },
+
+  {
+    name: 'exp-src-mount-writable',
+    claim: 'the source is mounted read-only in the export container',
+    edits: [['server/sandbox/export.ts', "...mount(source, '/src', true)", "...mount(source, '/src')"]],
+    tests: [EXPORT],
+  },
+  {
+    name: 'exp-archive-failure-ignored',
+    claim: 'a failed contained git archive fails the export',
+    edits: [['server/sandbox/export.ts', '; test ! -e /tmp/archive-failed', '']],
+    tests: [DRIVER],
+  },
+  {
+    name: 'exp-throwaway-not-hardened',
+    claim: 'the throwaway drops caps, is read-only and has no-new-privileges',
+    edits: [['server/sandbox/container.ts', "'none',\n        ...hardenedArgs(),", "'none',"]],
+    tests: [DRIVER],
+  },
+  {
+    name: 'exp-throwaway-runs-as-root',
+    claim: 'the throwaway runs as the host uid, not root',
+    edits: [['server/sandbox/container.ts', "'2g',\n        ...(await this.user()),", "'2g',"]],
+    tests: [DRIVER],
+  },
+  {
+    name: 'refuse-no-homes',
+    claim: 'a source under homes/ is refused',
+    edits: [['server/config.ts', "['cages', 'homes'].map", "['cages'].map"]],
+    tests: [CONFIG],
+  },
+  {
+    name: 'refuse-root-itself-allowed',
+    claim: 'the cages dir itself is refused',
+    edits: [
+      [
+        'server/config.ts',
+        "return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));",
+        "return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);",
+      ],
+    ],
+    tests: [CONFIG],
+  },
+  {
+    name: 'refuse-no-realpath',
+    claim: 'a link into a cage is refused',
+    edits: [['server/config.ts', '    real = nativeReal(path);', '    real = path;']],
+    tests: [CONFIG],
+  },
+  {
+    name: 'refuse-case-sensitive',
+    claim: 'another spelling of a cage path is refused on a case-insensitive disk',
+    edits: [['server/config.ts', 'if (rootIds.size === 0) return false;', 'return false;']],
+    tests: [CONFIG],
+    env: { TMPDIR: process.env.AW_CASE_TMPDIR },
+  },
+  {
+    name: 'cli-addrepo-path-unchecked',
+    claim: 'add-repo refuses a path inside a cage',
+    edits: [
+      [
+        'server/cli.ts',
+        'const path = notCage(realpathSync(resolve(cwd, target)));',
+        'const path = realpathSync(resolve(cwd, target));',
+      ],
+    ],
+    tests: [CLI],
+  },
+  {
+    name: 'reg-addrepo-no-realpath',
+    claim: 'a repo added through a link is the same repo, named by its real path',
+    edits: [
+      ['server/registry.ts', 'const real = realpathSync(resolve(spec.path));', 'const real = resolve(spec.path);'],
+    ],
+    tests: [REGISTRY],
+  },
+  {
+    name: 'reg-id-default-port-kept',
+    claim: 'a default port does not change the repo id',
+    edits: [['server/registry.ts', "'https:': '443',", "'https:': '0',"]],
+    tests: [REGISTRY],
+  },
+  {
+    name: 'reg-id-local-origin-fails',
+    claim: 'a local-path origin does not make the add fail',
+    edits: [
+      [
+        'server/registry.ts',
+        'return localRemoteId(text, path);',
+        'throw new RegistryError(`cannot read the remote ${remote}`);',
+      ],
+    ],
+    tests: [REGISTRY],
+  },
+  {
+    name: 'home-hash-1-hex',
+    claim: 'home names are injective in practice (hash 24 hex)',
+    edits: [['server/sandbox/container.ts', ".digest('hex').slice(0, 24)", ".digest('hex').slice(0, 1)"]],
+    tests: [EXPORT],
+  },
+  {
+    name: 'store-no-missing-state-check',
+    claim: 'a log without a state row is refused, never reset',
+    edits: [['server/store/store.ts', 'if (saved === null && n > 0) throw', 'if (false) throw']],
+    tests: [STORE],
+  },
+  {
+    name: 'store-begin-deferred',
+    claim: 'writes take the write lock up front (BEGIN IMMEDIATE)',
+    edits: [['server/store/store.ts', "this.db.exec('BEGIN IMMEDIATE');", "this.db.exec('BEGIN');"]],
+    tests: [STORE],
+  },
+  {
+    name: 'store-sum-ignores-seq',
+    claim: 'the checksum covers the seq, so renumbering is caught',
+    edits: [['server/store/store.ts', 'update(`${seq}\\n${body}`)', 'update(body)']],
+    tests: [STORE],
+  },
+  {
+    name: 'store-state-sum-unchecked',
+    claim: 'an edited state row is refused',
+    edits: [
+      ['server/store/store.ts', 'if (saved !== null && saved.sum !==', 'if (false && saved !== null && saved.sum !=='],
+    ],
+    tests: [STORE],
+  },
+  {
+    name: 'store-state-sum-ignores-log',
+    claim: 'the state checksum is bound to the last event of the log',
+    edits: [['server/store/store.ts', 'update(`${eventSeq}\\n${lastEventSum}\\n${body}`)', 'update(body)']],
+    tests: [STORE],
+  },
+  {
+    name: 'lock-no-exclusive',
+    claim: 'the state directory is locked through SQLite, so two processes cannot both open it',
+    edits: [['server/store/store.ts', "'PRAGMA locking_mode = EXCLUSIVE'", "'PRAGMA locking_mode = NORMAL'"]],
+    tests: [LOCKRACE, STORE],
+  },
+  {
+    name: 'lock-pidfile-sequence',
+    claim: 'the old read-pid, unlink, create lock lets two processes open over one stale lock',
+    edits: [
+      [
+        'server/store/store.ts',
+        "db.exec('PRAGMA locking_mode = EXCLUSIVE');",
+        `db.exec('PRAGMA locking_mode = NORMAL');
+        for (;;) {
+          try {
+            writeFileSync(this.lockPath, String(process.pid), { flag: 'wx' });
+            break;
+          } catch {
+            const owner = Number(readFileSync(this.lockPath, 'utf8'));
+            let alive = false;
+            try {
+              process.kill(owner, 0);
+              alive = owner !== process.pid;
+            } catch {}
+            if (alive) throw new StoreLockedError(owner);
+            unlinkSync(this.lockPath);
+          }
+        }`,
+      ],
+    ],
+    tests: [LOCKRACE],
+  },
+  {
+    name: 'ledger-mark-not-durable',
+    claim: 'an outbox ack is persisted',
+    edits: [['server/ledger.ts', '    this.store.commit(next);\n', '']],
+    tests: [STORE],
+  },
+  {
+    name: 'outbox-failed-never-retried',
+    claim: 'a failed command is offered again until it has used its attempts',
+    edits: [
+      [
+        'server/ledger.ts',
+        "entry.status === 'pending' || retryable(entry));\n  }",
+        "entry.status === 'pending');\n  }",
+      ],
+    ],
+    tests: [STORE, HQ],
+  },
+  {
+    name: 'outbox-retry-unbounded',
+    claim: 'a failed command stops being retried after its attempts and is then pruned',
+    edits: [
+      ['server/ledger.ts', "entry.status === 'failed' && entry.attempts < MAX_ATTEMPTS", "entry.status === 'failed'"],
+    ],
+    tests: [STORE, HQ],
+  },
+  {
+    name: 'hq-no-drain-on-boot',
+    claim: 'pending commands left by a crash run after restart',
+    edits: [['server/hq.ts', '  void drain();\n  return { url', '  return { url']],
+    tests: [HQ],
+  },
+  {
+    name: 'ws-push-first-socket-only',
+    claim: 'every open socket gets each push',
+    edits: [
+      [
+        'server/hq.ts',
+        'for (const socket of sockets) if (socket.readyState === WebSocket.OPEN) socket.send(message);',
+        'for (const socket of sockets) { if (socket.readyState === WebSocket.OPEN) socket.send(message); break; }',
+      ],
+    ],
+    tests: [HQ],
+  },
+  {
+    name: 'ws-no-push-on-event',
+    claim: 'an ingested event is pushed',
+    edits: [
+      [
+        'server/hq.ts',
+        'const { rev, commands } = ledger.ingest(parseEvent(await readBody(req)));\n      push();',
+        'const { rev, commands } = ledger.ingest(parseEvent(await readBody(req)));',
+      ],
+    ],
+    tests: [HQ],
+  },
+  {
+    name: 'ws-upgrade-any-path',
+    claim: 'only /api/ws upgrades',
+    edits: [['server/hq.ts', "pathname !== '/api/ws'", "pathname === '/never'"]],
+    tests: [HQ],
+  },
+  {
+    name: 'cli-start-failure-shows-old-log',
+    claim: 'a failed start shows this run, not the lines an earlier run left',
+    edits: [['server/cli.ts', '.subarray(logStart)', '']],
+    tests: [CLI],
+  },
+  {
+    name: 'cli-lock-reason-hidden',
+    claim: 'a start that finds another HQ prints the reason, not a stack trace',
+    edits: [
+      [
+        'server/cli.ts',
+        'if (error instanceof StoreLockedError || error instanceof StoreCorruptError)',
+        'if (false as boolean)',
+      ],
+    ],
+    tests: [CLI],
+  },
 ];
 
 const only = process.argv.slice(2);
-/** @param {string[]} tests */
-const vitest = (tests) =>
+/**
+ * @param {string[]} tests
+ * @param {Record<string, string | undefined>} [env]
+ */
+const vitest = (tests, env = {}) =>
   spawnSync('pnpm', ['vitest', 'run', ...tests], {
     cwd: ROOT,
+    env: { ...process.env, ...Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined)) },
     encoding: 'utf8',
     shell: process.platform === 'win32',
     timeout: 900_000,
@@ -373,7 +624,11 @@ for (const mutant of MUTANTS) {
       if (!current.includes(find)) throw new Error(`${mutant.name}: pattern not found in ${file}`);
       writeFileSync(path, current.replace(find, replace));
     }
-    const result = vitest(mutant.tests);
+    if (mutant.env !== undefined && Object.values(mutant.env).some((value) => value === undefined)) {
+      log(`SKIP ${mutant.name}: needs AW_CASE_TMPDIR on a case-insensitive disk`);
+      continue;
+    }
+    const result = vitest(mutant.tests, mutant.env);
     const caught = result.status !== 0;
     const expected = mutant.survives ? !caught : caught;
     if (!expected) bad += 1;

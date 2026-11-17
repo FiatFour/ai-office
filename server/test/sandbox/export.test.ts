@@ -40,11 +40,31 @@ describe('export', () => {
   });
 });
 
+describe('export mounts', () => {
+  it('mounts the source read-only and the destination writable', async () => {
+    const root = tempDir('export-mounts');
+    const calls: string[][] = [];
+    await exportRepo(root, join(root, 'd'), async (_args, mounts) => {
+      calls.push(mounts);
+      return { code: 0, out: '', err: '' };
+    });
+    const [archive] = calls;
+    expect(archive?.join(' ')).toMatch(/dst=\/src,readonly/);
+    expect(archive?.join(' ')).toMatch(/dst=\/work(?!,readonly)/);
+  });
+});
+
 describe('worker home names', () => {
   it('give different workers different homes, including ones that slug alike', () => {
     const names = ['Nova', 'nova', 'nova!', 'nova-', '!!!', '???', 'a b', 'a-b', 'é', 'è'].map(homeName);
     expect(new Set(names).size).toBe(names.length);
     for (const name of names) expect(name).toMatch(/^[a-z0-9-]+$/);
+  });
+
+  it('uses a hash long enough that distinct workers do not share a home', () => {
+    expect(homeName('nova')).toMatch(/^nova-[0-9a-f]{24}$/);
+    const names = Array.from({ length: 3000 }, (_, i) => homeName(`worker ${i}`));
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it('names a home deterministically and refuses an empty worker', () => {

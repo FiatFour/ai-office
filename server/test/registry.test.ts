@@ -1,5 +1,6 @@
 import { symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { Registry, repoIdFrom } from '../registry.ts';
 import { folder, tempDir } from './helpers.ts';
@@ -139,5 +140,76 @@ describe('registry', () => {
     expect(registry.view().repos).toHaveLength(1);
     expect(registry.view().repos[0]?.path).toBe(one);
     expect(new Registry(join(root, 'home')).view().repos[0]?.path).toBe(one);
+  });
+
+  it('names a clone by the real path when it was added through a link, and finds it again by either path', () => {
+    const root = tempDir('registry-link-path');
+    const registry = new Registry(folder(root, 'home'));
+    const real = folder(root, 'real');
+    const link = join(root, 'link');
+    symlinkSync(real, link, 'junction');
+    const factory = folder(root, 'factory');
+    registry.addFactory(factory);
+    const first = registry.addRepo(factory, { path: link, remote: null });
+    expect(first.repo.path).toBe(real);
+    const second = registry.addRepo(factory, { path: real, remote: 'https://github.com/acme/app.git' });
+    expect(registry.view().repos.map((r) => r.id)).toEqual(['github.com/acme/app']);
+    expect(second.repo.path).toBe(real);
+    const third = registry.addRepo(factory, { path: link, remote: null });
+    expect(third.repo.id).toBe('github.com/acme/app');
+    expect(registry.view().repos).toHaveLength(1);
+  });
+
+  describe('repo ids from the remote', () => {
+    const id = (remote: string) => repoIdFrom(remote, '/clone');
+    const same = [
+      'git@github.com:acme/repo.git',
+      'git@GitHub.com:Acme/Repo',
+      'https://github.com/acme/repo',
+      'https://github.com/acme/repo.git/',
+      'https://github.com:443/acme/repo',
+      'https://user:token@github.com/acme/repo.git',
+      'http://github.com:80/acme/repo',
+      'ssh://git@github.com/acme/repo.git',
+      'ssh://git@github.com:22/acme/repo.git',
+      'git://github.com:9418/acme/repo',
+    ];
+
+    it.each(same)('gives %s the id github.com/acme/repo', (remote) => {
+      expect(id(remote)).toBe('github.com/acme/repo');
+    });
+
+    it('keeps a port that is not the default for the scheme', () => {
+      expect(id('ssh://git@git.example.com:2222/acme/repo.git')).toBe('git.example.com:2222/acme/repo');
+      expect(id('https://git.example.com:8443/acme/repo')).toBe('git.example.com:8443/acme/repo');
+      expect(id('ssh://git@git.example.com:443/acme/repo.git')).toBe('git.example.com:443/acme/repo');
+    });
+
+    it('accepts a local path or file URL and gives the same stable id for both spellings', () => {
+      const path = tempDir('registry-local-origin');
+      const bare = join(path, 'origin.git');
+      const expected = id(bare);
+      expect(expected.startsWith('file:')).toBe(true);
+      expect(id(pathToFileURL(bare).href)).toBe(expected);
+      expect(id(`${bare}/`)).toBe(expected);
+      expect(id(bare.replace(/\.git$/, ''))).toBe(expected);
+      expect(repoIdFrom('../origin.git', join(path, 'clone'))).toBe(expected);
+    });
+
+    it('adds a clone whose origin is a local path', () => {
+      const root = tempDir('registry-local-add');
+      const registry = new Registry(folder(root, 'home'));
+      const factory = folder(root, 'factory');
+      registry.addFactory(factory);
+      const added = registry.addRepo(factory, { path: folder(root, 'clone'), remote: join(root, 'origin.git') });
+      expect(added.changed).toBe(true);
+      expect(added.repo.id.startsWith('file:')).toBe(true);
+    });
+
+    it('falls back to the clone path for a remote it cannot read', () => {
+      const root = tempDir('registry-odd-remote');
+      const clone = folder(root, 'clone');
+      expect(repoIdFrom('https://', clone)).toBe(repoIdFrom(null, clone));
+    });
   });
 });

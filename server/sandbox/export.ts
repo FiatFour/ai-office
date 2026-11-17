@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,38 +6,9 @@ import { HARDENED_ARGS } from './git-scan.mjs';
 import { findProtected } from './protected-paths.mjs';
 
 const SANDBOX_DIR = dirname(fileURLToPath(import.meta.url));
-const MAX_ARCHIVE = 1024 * 1024 * 1024;
-
 export class ExportError extends Error {}
 
-const exec = (
-  bin: string,
-  args: string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-): Promise<{ out: string; err: string }> =>
-  new Promise((resolve, reject) => {
-    execFile(
-      bin,
-      args,
-      { cwd, env, maxBuffer: MAX_ARCHIVE, encoding: 'buffer', timeout: 300_000 },
-      (error, out, err) => {
-        if (error !== null)
-          reject(new ExportError(`${bin} ${args[0]} failed: ${err.toString().trim() || error.message}`));
-        else resolve({ out: out.toString(), err: err.toString() });
-      },
-    );
-  });
-
-const HOST_GIT_ENV = (): NodeJS.ProcessEnv => ({
-  PATH: process.env.PATH ?? '',
-  ...(process.env.SystemRoot === undefined ? {} : { SystemRoot: process.env.SystemRoot }),
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-  GIT_TERMINAL_PROMPT: '0',
-  GIT_OPTIONAL_LOCKS: '0',
-  GIT_NO_REPLACE_OBJECTS: '1',
-});
+const CONTAINER_GIT = `GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 git ${HARDENED_ARGS.join(' ')}`;
 
 export const userArgs = (engine: Engine, rootless: boolean): string[] => {
   const uid = process.getuid?.();
@@ -54,11 +24,6 @@ const mount = (src: string, dst: string, readonly = false): string[] => [
   `type=bind,src=${src},dst=${dst}${readonly ? ',readonly' : ''}`,
 ];
 
-/**
- * Host git runs only against `source`, the operator's clone, which no cage can write.
- * It reads objects with `git archive` and never checks anything out in a directory a cage can reach.
- * The new repo's `.git` is created inside a throwaway container with no network.
- */
 export const exportRepo = async (
   source: string,
   dest: string,
@@ -68,11 +33,15 @@ export const exportRepo = async (
     throw new ExportError(`${source} is not a directory`);
   mkdirSync(dest, { recursive: true });
   if (readdirSync(dest).length > 0) throw new ExportError(`${dest} is not empty, a cage export is always fresh`);
-  const archive = `${dest}.tar`;
-  const git = (args: string[]) => exec('git', [...HARDENED_ARGS, '-C', source, ...args], source, HOST_GIT_ENV());
-  await git(['archive', '--format=tar', '-o', archive, 'HEAD']);
-  await exec('tar', ['-xf', archive, '-C', dest], dest, { PATH: process.env.PATH ?? '' });
-  rmSync(archive, { force: true });
+  const archived = await throwaway(
+    [
+      'sh',
+      '-c',
+      `(${CONTAINER_GIT} -C /src archive --format=tar HEAD || touch /tmp/archive-failed) | tar -xf - -C /work; test ! -e /tmp/archive-failed`,
+    ],
+    [...mount(source, '/src', true), ...mount(dest, '/work')],
+  );
+  if (archived.code !== 0) throw new ExportError(`git archive in the container failed: ${archived.err.trim()}`);
   const removed = findProtected(dest, { home: '/nonexistent', cwd: dest });
   for (const path of removed) rmSync(path, { recursive: true, force: true });
   const init = await throwaway(

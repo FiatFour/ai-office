@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_PORT, hqIdFor, imageFor, pidAlive, type RuntimeFile, readRuntime, resolveHome } from './config.ts';
+import { DEFAULT_PORT, hqIdFor, imageFor, insideCage, pidAlive, type RuntimeFile, readRuntime, resolveHome } from './config.ts';
 import { startHq } from './hq.ts';
 import { type DoctorContext, exitCodeOf, formatChecks, type PortState, runDoctor } from './preflight/checks.ts';
 import { realHostProbe } from './preflight/host.ts';
@@ -230,6 +230,12 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
   const port = explicitPort ? Number(flags.port) : Number(env.AGENT_WORKS_PORT ?? DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new CliError(`${String(flags.port)} is not a port`, 2);
   const cwd = env.AGENT_WORKS_CWD ?? process.cwd();
+  const notCage = (path: string): string => {
+    if (insideCage(home, path))
+      throw new CliError(`${path} is inside a cage, which an agent can write. Run this from your own clone.`, 2);
+    return path;
+  };
+  if (['open', 'add-repo', 'cage'].includes(command)) notCage(cwd);
 
   if (command === 'help' || flags.help === true) {
     io.out(HELP);
@@ -295,9 +301,11 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
   if (command === 'add-repo') {
     const [target] = positional;
     if (target === undefined) throw new CliError('usage: agent-works add-repo <path> [--factory <folder>]', 2);
-    const path = realpathSync(resolve(cwd, target));
+    const path = notCage(realpathSync(resolve(cwd, target)));
     const factoryRoot =
-      typeof flags.factory === 'string' ? realpathSync(resolve(cwd, flags.factory)) : (await factoryFor(cwd)).root;
+      typeof flags.factory === 'string'
+        ? notCage(realpathSync(resolve(cwd, flags.factory)))
+        : (await factoryFor(cwd)).root;
     const remote =
       typeof flags.remote === 'string' ? flags.remote : await gitOut(path, ['remote', 'get-url', 'origin']);
     const { runtime } = await ensureHq(home, port, explicitPort);
@@ -319,7 +327,9 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
       const worker = typeof flags.worker === 'string' ? flags.worker : '';
       if (!task || !worker)
         throw new CliError('usage: agent-works cage start --task <t> --worker <w> [--source <repo>]', 2);
-      const source = typeof flags.source === 'string' ? resolve(cwd, flags.source) : (await factoryFor(cwd)).root;
+      const source = notCage(
+        typeof flags.source === 'string' ? resolve(cwd, flags.source) : (await factoryFor(cwd)).root,
+      );
       const cage = await post<{ id: string; container: string; workdir: string }>(running, '/api/cages', {
         task,
         worker,

@@ -1,10 +1,10 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { main, parseArgs } from '../cli.ts';
+import { CliError, main, parseArgs } from '../cli.ts';
 import { folder, tempDir } from './helpers.ts';
 
 const BIN = fileURLToPath(new URL('../../bin/agent-works.ts', import.meta.url));
@@ -90,6 +90,28 @@ describe('doctor in process', () => {
     const parsed = JSON.parse(lines.join('\n')) as Array<{ id: string; status: string }>;
     expect(parsed.map((c) => c.id)).toContain('engine');
   }, 60_000);
+});
+
+describe('commands refuse to start from inside a cage', () => {
+  const inCage = () => {
+    const home = tempDir('cli-cage-home');
+    const cwd = join(home, 'cages', 'one-abc123', 'repo');
+    mkdirSync(cwd, { recursive: true });
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd });
+    return { home, cwd };
+  };
+  const quiet = { out: () => {}, err: () => {} };
+
+  it.each([
+    ['cage', 'start', '--task', 't', '--worker', 'w'],
+    ['open'],
+    ['add-repo', '.'],
+  ])('%s from a cage workdir', async (...argv) => {
+    const { home, cwd } = inCage();
+    const failure = await main([...argv, '--home', home], { AGENT_WORKS_CWD: cwd }, quiet).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(CliError);
+    expect(String((failure as Error).message)).toContain('inside a cage');
+  });
 });
 
 live('the CLI as a process', () => {

@@ -1,33 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CageError, SandboxDriver } from '../../sandbox/container.ts';
-import { Engine, type EngineName } from '../../sandbox/engine.ts';
+import { exportRepo } from '../../sandbox/export.ts';
 import type { Denial } from '../../sandbox/firewall.ts';
 import { folder, tempDir } from '../helpers.ts';
-
-const CONTEXT = fileURLToPath(new URL('.', import.meta.url));
-const IMAGE = process.env.AGENT_WORKS_TEST_IMAGE ?? 'aw-test-cage:1';
-const optedOut = process.env.AGENT_WORKS_NO_LIVE === '1';
-
-const usable = async (name: EngineName): Promise<Engine | null> => {
-  if (optedOut || process.platform !== 'linux') return null;
-  const engine = new Engine(name);
-  if ((await engine.version()) === null) return null;
-  const os = await engine.run(['info', '--format', name === 'docker' ? '{{.OSType}}' : '{{.Host.OS}}'], {
-    timeoutMs: 20_000,
-  });
-  if (os.code !== 0 || os.out.trim() !== 'linux') return null;
-  const info = await engine.info();
-  if (!info.ok || (name === 'podman' && !info.rootless)) return null;
-  return engine;
-};
-
-const engines = (await Promise.all((['docker', 'podman'] as const).map(usable))).filter((e): e is Engine => e !== null);
+import { CONTEXT, engines, IMAGE } from './engines.ts';
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
@@ -188,6 +170,61 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       expect(await driver.leftovers()).toEqual({ containers: [], networks: [] });
       expect(driver.list()).toEqual([]);
     }, 180_000);
+
+    const plantFilter = (repo: string, marker: string): void => {
+      writeFileSync(join(repo, '.gitattributes'), '* filter=x\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-qm', 'attributes');
+      git(repo, 'config', 'filter.x.smudge', `sh -c 'touch ${marker}; cat'`);
+    };
+
+    it('never runs the source repo filters on the host, whatever its config says', async () => {
+      const marker = join(tempDir('marker-direct'), 'RAN-ON-HOST');
+      const source = fixtureRepo(tempDir('driver-filter'), canary);
+      plantFilter(source, marker);
+      const started = await driver.startCage({ task: 'acme/t5', worker: 'nova', source }).catch(() => null);
+      if (started !== null) await driver.releaseCage(started.id);
+      await driver.removeAll();
+      expect(existsSync(marker)).toBe(false);
+    }, 180_000);
+
+    it('refuses a cage workdir, or a link to one, as a source and runs nothing from it', async () => {
+      const marker = join(tempDir('marker-cage'), 'RAN-ON-HOST');
+      const first = await driver.startCage({
+        task: 'acme/t6',
+        worker: 'nova',
+        source: fixtureRepo(tempDir('driver-src6'), canary),
+      });
+      plantFilter(first.workdir, marker);
+      const link = join(tempDir('driver-link'), 'link');
+      symlinkSync(first.workdir, link);
+      for (const source of [first.workdir, link, join(first.workdir, 'sub/..')]) {
+        const failure = await driver.startCage({ task: 'acme/t7', worker: 'nova', source }).catch((e: unknown) => e);
+        expect(failure).toBeInstanceOf(CageError);
+        expect(String((failure as Error).message)).toContain('inside a cage');
+      }
+      expect(existsSync(marker)).toBe(false);
+      await driver.removeAll();
+    }, 180_000);
+
+    it('runs the throwaway container with no network interface but loopback', async () => {
+      const result = await driver['throwaway'](['sh', '-c', 'ls /sys/class/net'], []);
+      expect(result.out.trim()).toBe('lo');
+    }, 120_000);
+
+    it('removes every protected file from the export, not only the first', async () => {
+      const source = fixtureRepo(tempDir('driver-many'), canary);
+      mkdirSync(join(source, 'sub'));
+      writeFileSync(join(source, 'sub', '.env'), `SECOND=${canary}\n`);
+      writeFileSync(join(source, 'id_rsa'), `-----BEGIN OPENSSH PRIVATE KEY-----\n${canary}\n`);
+      git(source, 'add', '-A', '-f');
+      git(source, 'commit', '-qm', 'more secrets');
+      const dest = join(tempDir('driver-many-dest'), 'repo');
+      const { removed } = await exportRepo(source, dest, (args, mounts) => driver['throwaway'](args, mounts));
+      expect(removed.length).toBeGreaterThanOrEqual(3);
+      for (const path of ['.env', 'sub/.env', 'id_rsa']) expect(existsSync(join(dest, path))).toBe(false);
+      expect(existsSync(join(dest, 'hello.js'))).toBe(true);
+    }, 120_000);
 
     it('names the build command when the image is missing and leaves nothing behind', async () => {
       const missing = new SandboxDriver({ engine, home, hq, image: 'aw-no-such-image:0', project });

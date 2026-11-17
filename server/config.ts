@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 
 export const pidAlive = (pid: number): boolean => {
   try {
@@ -52,4 +52,29 @@ export const writeRuntime = (home: string, runtime: RuntimeFile): void => {
 
 export const clearRuntime = (home: string, pid: number): void => {
   if (readRuntime(home)?.pid === pid) rmSync(runtimePath(home), { force: true });
+};
+
+const within = (parent: string, path: string): boolean => {
+  const rel = relative(parent, path);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+};
+
+export const agentWritableRoots = (home: string): string[] =>
+  ['cages', 'homes'].map((name) => {
+    const dir = join(home, name);
+    try {
+      return realpathSync(dir);
+    } catch {
+      return dir;
+    }
+  });
+
+export const insideCage = (home: string, path: string): boolean => {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    return false;
+  }
+  return agentWritableRoots(home).some((root) => within(root, real));
 };

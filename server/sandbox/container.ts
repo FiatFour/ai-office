@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { insideCage } from '../config.ts';
 import type { Engine } from './engine.ts';
 import { exportPath, exportRepo, scanInContainer, userArgs } from './export.ts';
 import {
@@ -129,6 +130,10 @@ export class SandboxDriver {
   }
 
   async startCage(spec: { task: string; worker: string; source: string }): Promise<CageView> {
+    if (insideCage(this.home, spec.source))
+      throw new CageError(
+        `${spec.source} is inside a cage or a worker home, which an agent can write. Export from the operator's own clone instead.`,
+      );
     await this.requireImage();
     const id = `${slug(spec.task)}-${randomBytes(3).toString('hex')}`;
     const cageDir = join(this.home, 'cages', id);

@@ -99,6 +99,15 @@ async function worker() {
       const outFile = join(dir, 'out', `${mutant.name}-${seed}.json`);
       await runSuite(file, oracle, seed, outFile);
       const failed = failures(outFile);
+      const control = mutant.edits.length === 0;
+      if (control) {
+        cells.push(
+          failed.length === 0
+            ? `seed ${seed}: CONTROL PASSED`
+            : `seed ${seed}: CONTROL FAILED, MISSED the clean source`,
+        );
+        continue;
+      }
       cells.push(
         failed.length === 0
           ? `seed ${seed}: MISSED`

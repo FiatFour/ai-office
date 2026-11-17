@@ -21,12 +21,7 @@ export const BLOCK = /<!-- differences:start -->\n([\s\S]*?)\n?<!-- differences:
 
 export const STATUSES = ['fixed', 'changed', 'not-built', 'conflict'];
 
-/**
- * One difference per line: `D01 | status | canvas text | built text | what differs`.
- * `fixed`: the built floor now shows the canvas text. `changed`: both show something, different.
- * `not-built`: the canvas shows it, the built floor does not. `conflict`: spec and canvas disagree.
- * @param {string} text
- */
+/** @param {string} text */
 export const parseDifferences = (text) =>
   text
     .split('\n')
@@ -71,8 +66,6 @@ const anchors = (/** @type {import('playwright').Page} */ page, /** @type {strin
   }, probes);
 
 /**
- * Renders the canvas floor artboard next to the built floor, checks every listed difference against both
- * pages, and builds one image with a numbered badge per difference and a legend.
  * @param {import('playwright').Browser} browser
  * @param {import('playwright').Page} builtPage
  * @param {string} builtShot

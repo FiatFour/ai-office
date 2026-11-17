@@ -285,7 +285,6 @@ try {
 }
 
 const live = await startHq({ port: 7472 });
-let builtShot = '';
 try {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
@@ -418,8 +417,6 @@ try {
     `${axe.violations.length} violations on ${axe.states.length} states, ${axe.incomplete.length} incomplete nodes recorded in axe.txt (undecided, not passed), FIREWALL art label ${firewall?.ratio}:1`,
   );
 
-  const sprites = async (/** @type {import('playwright').Page} */ target) =>
-    target.$$eval('[data-worker]', (nodes) => nodes.length);
   const motion = await ctx.newPage();
   const calm = await (
     await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' })
@@ -464,7 +461,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.crew li').length === 7);
   await sleep(500);
   const crew = await page.$$eval('.crew li', (nodes) => nodes.length);
-  const drawn = await sprites(page);
+  const drawn = await page.$$eval('[data-worker]', (nodes) => nodes.length);
   lane(
     3.5,
     'six cages, seven workers',
@@ -474,7 +471,7 @@ try {
 
   await page.setViewportSize({ width: 1440, height: 980 });
   await sleep(300);
-  builtShot = join(OUT, 'floor-live.png');
+  const builtShot = join(OUT, 'floor-live.png');
   await page.screenshot({ path: builtShot });
   const verdict = await canvasCompare(browser, page, builtShot, demoText);
   lane(9, 'canvas compare', verdict.ok, verdict.note);

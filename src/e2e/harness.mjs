@@ -129,9 +129,6 @@ export const contrastRatio = (/** @type {number[]} */ a, /** @type {number[]} */
 };
 
 /**
- * axe cannot decide the contrast of text drawn on SVG art. For every scene label this finds the last
- * rect drawn before it (document order is paint order) that contains the label, takes its fill (a
- * pattern counts as the fill of its first rect), and computes the WCAG ratio. An estimate, not a proof.
  * @param {import('playwright').Page} page
  */
 export const sceneLabelContrast = async (page) => {

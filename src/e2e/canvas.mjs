@@ -61,9 +61,6 @@ const EXPAND = `
 `;
 
 /**
- * Renders the Design canvas floor artboard from its own source: the template runtime lives on
- * claude.ai, so the sc-for, sc-if and {{ }} markup is expanded here with the component's own
- * renderVals(). Fonts come from the local @fontsource files, nothing is fetched.
  * @param {import('playwright').Page} page
  * @param {string} workdir
  */

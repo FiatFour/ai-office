@@ -37,7 +37,6 @@ const summarize = (frames, windows) => {
 };
 
 /**
- * Records rAF intervals and a Chrome trace while `drive` runs, then sums main-thread render work per 16.7 ms window.
  * @param {import('playwright').Browser} browser @param {import('playwright').Page} page @param {string} name @param {() => Promise<void>} drive
  */
 const measure = async (browser, page, name, drive) => {

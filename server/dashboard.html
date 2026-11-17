@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Works HQ</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 52rem; color: #1b1b1f; }
+  h1 { font-size: 1.4rem; margin-bottom: 0; }
+  #rev { font: 600 3rem/1 ui-monospace, monospace; }
+  #conn { color: #666; }
+  .ok { color: #0a7d32; }
+  table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }
+  td, th { border-bottom: 1px solid #ddd; padding: 0.3rem 0.5rem; text-align: left; }
+  code { background: #f1f1f4; padding: 0 0.25rem; }
+</style>
+</head>
+<body>
+<h1>Agent Works HQ</h1>
+<p><span id="conn">connecting</span></p>
+<p>Revision <span id="rev" data-testid="rev">0</span></p>
+<h2>Factories</h2>
+<table><thead><tr><th>Name</th><th>Root</th><th>Repos</th></tr></thead><tbody id="factories"></tbody></table>
+<h2>Repos</h2>
+<table><thead><tr><th>Id</th><th>Path</th></tr></thead><tbody id="repos"></tbody></table>
+<script>
+const text = (value) => document.createTextNode(String(value));
+const row = (cells) => {
+  const tr = document.createElement('tr');
+  for (const cell of cells) {
+    const td = document.createElement('td');
+    td.appendChild(text(cell));
+    tr.appendChild(td);
+  }
+  return tr;
+};
+const fill = (id, rows) => document.getElementById(id).replaceChildren(...rows);
+const render = (snapshot) => {
+  document.getElementById('rev').textContent = snapshot.rev;
+  fill('factories', snapshot.registry.factories.map((f) => row([f.name, f.root, f.repos.join(', ')])));
+  fill('repos', snapshot.registry.repos.map((r) => row([r.id, r.path])));
+};
+const connect = () => {
+  const socket = new WebSocket(`ws://${location.host}/api/ws`);
+  socket.onopen = () => {
+    const conn = document.getElementById('conn');
+    conn.textContent = 'live';
+    conn.className = 'ok';
+  };
+  socket.onmessage = (event) => render(JSON.parse(event.data));
+  socket.onclose = () => {
+    document.getElementById('conn').textContent = 'reconnecting';
+    setTimeout(connect, 1000);
+  };
+};
+connect();
+</script>
+</body>
+</html>

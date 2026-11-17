@@ -37,7 +37,7 @@ export interface RunningHq {
 
 const MAX_BODY = 1024 * 1024;
 const MAX_DENIALS = 50;
-const DASHBOARD = join(fileURLToPath(new URL('.', import.meta.url)), 'dashboard.html');
+const DASHBOARD = readFileSync(join(fileURLToPath(new URL('.', import.meta.url)), 'dashboard.html'));
 
 class HttpError extends Error {
   readonly status: number;
@@ -142,8 +142,19 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     push();
   };
 
+  let draining = false;
   const drain = async (): Promise<void> => {
-    for (const entry of ledger.pending()) await run(entry);
+    if (draining) return;
+    draining = true;
+    try {
+      for (;;) {
+        const batch = ledger.pending();
+        if (batch.length === 0) break;
+        for (const entry of batch) await run(entry);
+      }
+    } finally {
+      draining = false;
+    }
   };
 
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -155,7 +166,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     };
     if (method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(readFileSync(DASHBOARD));
+      res.end(DASHBOARD);
       return;
     }
     if (method === 'GET' && url.pathname === '/api/health') {

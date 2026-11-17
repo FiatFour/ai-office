@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, mkdirSync } from 'node:fs';
+import { accessSync, constants, mkdirSync } from 'node:fs';
 import { ENGINE_NAMES, type Engine, type EngineInfo, type EngineName } from '../sandbox/engine.ts';
 import { describeHost, FIXES, type HostProbe, type OsKind } from './host.ts';
 
@@ -193,5 +193,3 @@ export const formatChecks = (checks: readonly Check[]): string =>
       ].join('\n'),
     )
     .join('\n');
-
-export const hasPath = (path: string): boolean => existsSync(path);

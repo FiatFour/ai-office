@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Command, Event, State } from '@agent-works/core';
+import { pidAlive } from '../config.ts';
 import { appendDurable, canonicalJson, writeAtomic } from './atomic.ts';
 
 export type OutboxStatus = 'pending' | 'done' | 'failed' | 'skipped';
@@ -38,15 +39,6 @@ export class StoreLockedError extends Error {
 
 const checksum = (text: string): string => createHash('sha1').update(text).digest('hex').slice(0, 8);
 
-const alive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-};
-
 export const parseLogLine = (line: string): LoggedEvent | null => {
   const tab = line.indexOf('\t');
   if (tab !== 8) return null;
@@ -60,14 +52,12 @@ export const parseLogLine = (line: string): LoggedEvent | null => {
 };
 
 export class Store {
-  readonly dir: string;
   private readonly statePath: string;
   private readonly logPath: string;
   private readonly lockPath: string;
   private seq = 0;
 
   private constructor(dir: string) {
-    this.dir = dir;
     this.statePath = join(dir, 'state.json');
     this.logPath = join(dir, 'events.jsonl');
     this.lockPath = join(dir, 'hq.lock');
@@ -89,7 +79,7 @@ export class Store {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         const owner = Number(readFileSync(this.lockPath, 'utf8'));
-        if (Number.isInteger(owner) && owner !== process.pid && alive(owner)) throw new StoreLockedError(owner);
+        if (Number.isInteger(owner) && owner !== process.pid && pidAlive(owner)) throw new StoreLockedError(owner);
         unlinkSync(this.lockPath);
       }
     }
@@ -98,18 +88,17 @@ export class Store {
   private repairTail(): void {
     if (!existsSync(this.logPath)) return;
     const text = readFileSync(this.logPath, 'utf8');
+    const total = Buffer.byteLength(text);
     let good = 0;
-    let offset = 0;
     for (const line of text.split('\n')) {
-      const end = offset + Buffer.byteLength(line) + 1;
+      const end = good + Buffer.byteLength(line) + 1;
       if (line === '') break;
       const parsed = parseLogLine(line);
-      if (parsed === null || end > Buffer.byteLength(text)) break;
+      if (parsed === null || end > total) break;
       good = end;
       this.seq = parsed.seq;
-      offset = end;
     }
-    if (good < Buffer.byteLength(text)) truncateSync(this.logPath, good);
+    if (good < total) truncateSync(this.logPath, good);
   }
 
   close(): void {

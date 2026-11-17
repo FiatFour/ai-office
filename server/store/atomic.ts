@@ -14,8 +14,8 @@ export const canonicalJson = (value: unknown): string =>
       : inner,
   );
 
-export const writeDurable = (path: string, data: string): void => {
-  const fd = openSync(path, 'w');
+const writeFlagged = (path: string, data: string, flag: 'w' | 'a'): void => {
+  const fd = openSync(path, flag);
   try {
     writeSync(fd, data);
     fsyncSync(fd);
@@ -24,19 +24,11 @@ export const writeDurable = (path: string, data: string): void => {
   }
 };
 
-export const appendDurable = (path: string, data: string): void => {
-  const fd = openSync(path, 'a');
-  try {
-    writeSync(fd, data);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-};
+export const appendDurable = (path: string, data: string): void => writeFlagged(path, data, 'a');
 
 export const writeAtomic = (path: string, data: string): void => {
   const temp = `${path}.${process.pid}.tmp`;
-  writeDurable(temp, data);
+  writeFlagged(temp, data, 'w');
   for (let attempt = 0; ; attempt += 1) {
     try {
       renameSync(temp, path);

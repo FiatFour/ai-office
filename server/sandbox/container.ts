@@ -7,11 +7,11 @@ import {
   DEFAULT_ALLOWLIST,
   type Denial,
   type Firewall,
-  HQ_LABEL,
+  filterArgs,
   hardenedArgs,
   labelArgs,
+  lines,
   lowerFirewall,
-  PROJECT_LABEL,
   PROXY_PORT,
   raiseFirewall,
 } from './firewall.ts';
@@ -207,20 +207,20 @@ export class SandboxDriver {
   }
 
   async removeAll(): Promise<{ containers: number; networks: number }> {
-    const filter = ['--filter', `label=${PROJECT_LABEL}=${this.project}`, '--filter', `label=${HQ_LABEL}=${this.hq}`];
-    const before = (await this.engine.ok(['ps', '-aq', ...filter])).split('\n').filter(Boolean).length;
+    const filter = filterArgs(this.project, this.hq);
+    const before = lines(await this.engine.ok(['ps', '-aq', ...filter])).length;
     const firewall = this.firewall === null ? null : await this.firewall.catch(() => null);
     firewall?.stop();
     await lowerFirewall(this.engine, this.project, this.hq);
-    const networks = (await this.engine.ok(['network', 'ls', '-q', ...filter])).split('\n').filter(Boolean).length;
+    const networks = lines(await this.engine.ok(['network', 'ls', '-q', ...filter])).length;
     this.cages.clear();
     this.firewall = null;
     return { containers: before, networks };
   }
 
   async leftovers(): Promise<{ containers: string[]; networks: string[] }> {
-    const filter = ['--filter', `label=${PROJECT_LABEL}=${this.project}`, '--filter', `label=${HQ_LABEL}=${this.hq}`];
-    const names = async (args: string[]) => (await this.engine.ok(args)).split('\n').filter(Boolean);
+    const filter = filterArgs(this.project, this.hq);
+    const names = async (args: string[]) => lines(await this.engine.ok(args));
     return {
       containers: await names(['ps', '-a', ...filter, '--format', '{{.Names}}']),
       networks: await names(['network', 'ls', ...filter, '--format', '{{.Name}}']),

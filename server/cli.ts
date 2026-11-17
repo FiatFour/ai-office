@@ -1,18 +1,12 @@
 import { spawn } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_PORT, imageFor, type RuntimeFile, readRuntime, resolveHome } from './config.ts';
+import { DEFAULT_PORT, hqIdFor, imageFor, pidAlive, type RuntimeFile, readRuntime, resolveHome } from './config.ts';
 import { startHq } from './hq.ts';
-import {
-  type DoctorContext,
-  exitCodeOf,
-  formatChecks,
-  hasPath,
-  type PortState,
-  runDoctor,
-} from './preflight/checks.ts';
+import { type DoctorContext, exitCodeOf, formatChecks, type PortState, runDoctor } from './preflight/checks.ts';
 import { realHostProbe } from './preflight/host.ts';
 import { Registry } from './registry.ts';
 import { SandboxDriver } from './sandbox/container.ts';
@@ -87,15 +81,6 @@ export const portState = async (port: number): Promise<PortState> => {
   return hq === null ? { state: 'busy' } : { state: 'hq', pid: hq.pid };
 };
 
-const pidAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-};
-
 export class CliError extends Error {
   readonly code: number;
   constructor(message: string, code = 1) {
@@ -103,8 +88,6 @@ export class CliError extends Error {
     this.code = code;
   }
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export const runningHq = async (home: string): Promise<RuntimeFile | null> => {
   const runtime = readRuntime(home);
@@ -220,7 +203,7 @@ export const makeDoctorContext = (env: NodeJS.ProcessEnv, home: string, port: nu
       return res.code === 0 ? res.out.trim() : null;
     },
     portState,
-    exists: hasPath,
+    exists: existsSync,
     preferred: env.AGENT_WORKS_ENGINE,
   };
 };
@@ -285,7 +268,7 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
   if (command === 'stop') {
     const running = await runningHq(home);
     if (running === null) {
-      const driver = await hqDriver(env, home)(await import('./config.ts').then((c) => c.hqIdFor(home)), undefined);
+      const driver = await hqDriver(env, home)(hqIdFor(home), undefined);
       const left = await driver?.removeAll();
       io.out(
         `HQ is not running.${left === undefined || left.containers + left.networks === 0 ? '' : ` Removed ${left.containers} leftover containers and ${left.networks} networks.`}`,

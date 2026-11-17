@@ -44,6 +44,15 @@ export interface FirewallSpec {
   readonly onDenial: (denial: Denial) => void;
 }
 
+export const filterArgs = (project: string, hq: string): string[] => [
+  '--filter',
+  `label=${PROJECT_LABEL}=${project}`,
+  '--filter',
+  `label=${HQ_LABEL}=${hq}`,
+];
+
+export const lines = (text: string): string[] => text.split('\n').filter(Boolean);
+
 export const labelArgs = (project: string, hq: string, role: string): string[] => [
   '--label',
   `${PROJECT_LABEL}=${project}`,
@@ -84,7 +93,7 @@ export const parseDenialLine = (line: string): Denial | null => {
   }
 };
 
-export const networkNames = (hq: string) => ({
+const networkNames = (hq: string) => ({
   internal: `aw-${hq}-internal`,
   egress: `aw-${hq}-egress`,
   proxy: `aw-${hq}-proxy`,
@@ -138,9 +147,9 @@ export const raiseFirewall = async (spec: FirewallSpec): Promise<Firewall> => {
 };
 
 export const lowerFirewall = async (engine: Engine, project: string, hq: string): Promise<void> => {
-  const filter = ['--filter', `label=${PROJECT_LABEL}=${project}`, '--filter', `label=${HQ_LABEL}=${hq}`];
-  const containers = (await engine.ok(['ps', '-aq', ...filter])).split('\n').filter(Boolean);
+  const filter = filterArgs(project, hq);
+  const containers = lines(await engine.ok(['ps', '-aq', ...filter]));
   if (containers.length > 0) await engine.run(['rm', '-f', ...containers]);
-  const networks = (await engine.ok(['network', 'ls', '-q', ...filter])).split('\n').filter(Boolean);
+  const networks = lines(await engine.ok(['network', 'ls', '-q', ...filter]));
   if (networks.length > 0) await engine.run(['network', 'rm', ...networks]);
 };

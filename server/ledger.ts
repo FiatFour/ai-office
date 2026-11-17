@@ -26,7 +26,8 @@ export class Ledger {
 
   constructor(store: Store, config: Config = DEFAULT_CONFIG) {
     this.store = store;
-    const saved = store.load() ?? {
+    const loaded = store.load();
+    const saved = loaded ?? {
       v: 1 as const,
       eventSeq: 0,
       rev: 0,
@@ -35,8 +36,9 @@ export class Ledger {
       superseded: [],
     };
     this.persisted = saved;
-    for (const logged of store.events(saved.eventSeq)) this.apply(logged.seq, logged.event);
-    this.store.commit(this.persisted);
+    const replay = store.events(saved.eventSeq);
+    for (const logged of replay) this.apply(logged.seq, logged.event);
+    if (replay.length > 0 || loaded === null) this.store.commit(this.persisted);
   }
 
   get state(): State {
@@ -47,9 +49,6 @@ export class Ledger {
   }
   get outbox(): readonly OutboxEntry[] {
     return this.persisted.outbox;
-  }
-  get eventSeq(): number {
-    return this.persisted.eventSeq;
   }
 
   ingest(event: Event): Ingested {
@@ -84,7 +83,8 @@ export class Ledger {
     const reduced = reduce(before.state, event);
     const fresh = entriesFor(seq, reduced.commands);
     const moved = supersededBy(before.state, reduced.state);
-    const superseded = [...new Set([...before.superseded, ...moved])].slice(-SUPERSEDED_CAP);
+    const superseded =
+      moved.length === 0 ? before.superseded : [...new Set([...before.superseded, ...moved])].slice(-SUPERSEDED_CAP);
     const state = moved.length > 0 ? pruneSuperseded(reduced.state, new Set(superseded)) : reduced.state;
     this.persisted = {
       ...before,

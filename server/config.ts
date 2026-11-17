@@ -3,6 +3,15 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+export const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
 export const DEFAULT_PORT = 7420;
 export const VERSION = '0.1.0';
 export const DEFAULT_IMAGE = 'aw-cage:dev';

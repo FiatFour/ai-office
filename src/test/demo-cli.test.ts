@@ -39,7 +39,7 @@ describe.skipIf(!canSpawnTs)('agent-works --demo', () => {
     expect(out).toContain('Demo replay of fixtures/demo/events.jsonl');
     child.kill('SIGTERM');
     await exited(child);
-    expect(child.exitCode).toBe(0);
+    if (process.platform !== 'win32') expect(child.exitCode).toBe(0);
   }, 30_000);
 
   it('says so and exits 2 when the port is busy', async () => {

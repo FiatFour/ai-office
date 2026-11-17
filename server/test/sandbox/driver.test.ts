@@ -111,7 +111,7 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       const net = JSON.parse(await engine.ok(['network', 'inspect', `aw-${hq}-internal`])) as Array<{
         Internal: boolean;
       }>;
-      expect(net[0]?.Internal).toBe(true);
+      expect(net[0]?.Internal ?? net[0]?.internal).toBe(true);
     });
 
     it('gives the cage no route out except the proxy', async () => {

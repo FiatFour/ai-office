@@ -82,8 +82,7 @@ export class Ledger {
   private apply(seq: number, event: Event): OutboxEntry[] {
     const before = this.persisted;
     const reduced = reduce(before.state, event);
-    const known = new Set(before.outbox.map((entry) => entry.id));
-    const fresh = entriesFor(seq, reduced.commands).filter((entry) => !known.has(entry.id));
+    const fresh = entriesFor(seq, reduced.commands);
     const moved = supersededBy(before.state, reduced.state);
     const superseded = [...new Set([...before.superseded, ...moved])].slice(-SUPERSEDED_CAP);
     const state = moved.length > 0 ? pruneSuperseded(reduced.state, new Set(superseded)) : reduced.state;

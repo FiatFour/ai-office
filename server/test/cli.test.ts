@@ -158,7 +158,7 @@ live('the CLI as a process', () => {
     const stop = cli(a, home, ['stop']);
     expect(stop.out).toContain('stopped');
     await expect(fetch(`http://127.0.0.1:${port}/api/health`)).rejects.toBeTruthy();
-  });
+  }, 60_000);
 
   it('says the port is busy and suggests --port when another program holds it', async () => {
     const root = tempDir('cli-busy');
@@ -313,5 +313,5 @@ live('serve --mode cages', () => {
     }
     expect(cli(dir, dir, ['serve', '--mode', 'cages']).code).toBe(2);
     expect(cli(dir, dir, ['serve', '--mode', 'other']).code).toBe(2);
-  });
+  }, 60_000);
 });

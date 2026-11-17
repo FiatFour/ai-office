@@ -181,29 +181,29 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       const marker = join(tempDir('marker-direct'), 'RAN-ON-HOST');
       const source = fixtureRepo(tempDir('driver-filter'), canary);
       plantFilter(source, marker);
-      const started = await driver.startCage({ task: 'acme/t5', worker: 'nova', source }).catch(() => null);
-      if (started !== null) await driver.releaseCage(started.id);
-      await driver.removeAll();
+      const dest = join(tempDir('driver-filter-dest'), 'repo');
+      await exportRepo(source, dest, (args, mounts) => driver.throwaway(args, mounts)).catch(() => null);
       expect(existsSync(marker)).toBe(false);
+      expect(existsSync(join(dest, 'hello.js'))).toBe(true);
     }, 180_000);
 
     it('refuses a cage workdir, or a link to one, as a source and runs nothing from it', async () => {
       const marker = join(tempDir('marker-cage'), 'RAN-ON-HOST');
-      const first = await driver.startCage({
-        task: 'acme/t6',
-        worker: 'nova',
-        source: fixtureRepo(tempDir('driver-src6'), canary),
-      });
-      plantFilter(first.workdir, marker);
+      const workdir = join(home, 'cages', 'one-abc123', 'repo');
+      mkdirSync(workdir, { recursive: true });
+      git(workdir, 'init', '-q', '-b', 'main');
+      writeFileSync(join(workdir, 'a.txt'), 'a');
+      git(workdir, 'add', '-A');
+      git(workdir, 'commit', '-qm', 'agent work');
+      plantFilter(workdir, marker);
       const link = join(tempDir('driver-link'), 'link');
-      symlinkSync(first.workdir, link);
-      for (const source of [first.workdir, link, join(first.workdir, 'sub/..')]) {
+      symlinkSync(workdir, link, 'junction');
+      for (const source of [workdir, link, join(workdir, 'sub/..')]) {
         const failure = await driver.startCage({ task: 'acme/t7', worker: 'nova', source }).catch((e: unknown) => e);
         expect(failure).toBeInstanceOf(CageError);
         expect(String((failure as Error).message)).toContain('inside a cage');
       }
       expect(existsSync(marker)).toBe(false);
-      await driver.removeAll();
     }, 180_000);
 
     it('runs the throwaway container with no network interface but loopback', async () => {

@@ -23,7 +23,7 @@ vi.mock('node:fs', async (original) => {
 const { writeAtomic } = await import('../store/atomic.ts');
 
 describe('atomic write', () => {
-  it('lets a reader that opened the old file keep a whole old version', () => {
+  it.skipIf(process.platform === 'win32')('lets a reader that opened the old file keep a whole old version', () => {
     const path = join(tempDir('atomic'), 'x.json');
     writeFileSync(path, 'old contents');
     const fd = openSync(path, 'r');

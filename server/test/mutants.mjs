@@ -528,6 +528,25 @@ const MUTANTS = [
     tests: [STORE, HQ],
   },
   {
+    name: 'store-no-state-seq-check',
+    claim: 'a state row behind or ahead of the log is refused',
+    edits: [['server/store/store.ts', 'if (saved !== null && saved.persisted.eventSeq !== n)', 'if (false)']],
+    tests: [STORE],
+    survives: true, // the state checksum is bound to the last event, so a row ahead of or behind the log is refused there too; this check only gives the clearer message
+  },
+  {
+    name: 'lock-stale-file-blocks',
+    claim: 'a lock file left by a dead or reused pid blocks no one',
+    edits: [
+      [
+        'server/store/store.ts',
+        'this.held = true;\n        writeFileSync',
+        'if (this.owner() !== null && this.owner() !== process.pid) throw new StoreLockedError(this.owner());\n        this.held = true;\n        writeFileSync',
+      ],
+    ],
+    tests: [STORE],
+  },
+  {
     name: 'hq-no-drain-on-boot',
     claim: 'pending commands left by a crash run after restart',
     edits: [['server/hq.ts', '  void drain();\n  return { url', '  return { url']],

@@ -122,6 +122,13 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
       expect(countEvents(dir)).toBe(3);
     });
 
+    it('refuses a gap even when the state row was edited to agree with the row count', () => {
+      const dir = seeded('corrupt-gap-agreed');
+      rawSql(dir, 'DELETE FROM events WHERE seq = 2');
+      rawSql(dir, `UPDATE state SET body = replace(body, '"eventSeq":4', '"eventSeq":3')`);
+      expect(() => Store.open(dir)).toThrow(/gap/);
+    });
+
     it('refuses a state row that is ahead of or behind the log', () => {
       const dir = seeded('corrupt-behind');
       rawSql(dir, 'DELETE FROM events WHERE seq = 4');

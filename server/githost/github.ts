@@ -2,12 +2,15 @@ import { createHash } from 'node:crypto';
 import type { CheckState, HostChangeState, Verdict } from '@agent-works/core';
 import {
   type ApiCall,
+  allPages,
   bool,
+  branchProblem,
   type ChangeFact,
   type CheckFact,
   type CommentFact,
   count,
   field,
+  filePathProblem,
   firstTime,
   type GitHost,
   guard,
@@ -16,6 +19,7 @@ import {
   type HostEvent,
   type HttpRequest,
   id,
+  once,
   oneOf,
   optLine,
   optStr,
@@ -27,6 +31,7 @@ import {
   type WriteRule,
   ZERO_SHA,
 } from './host.ts';
+import { SEGMENT } from './sanitize.ts';
 
 const CONCLUSION: Record<string, HostCheckState> = {
   success: 'success',
@@ -69,12 +74,49 @@ const REVIEW: Record<string, Verdict | null> = {
 const EVENT: Record<Verdict, string> = { approve: 'APPROVE', changes: 'REQUEST_CHANGES', comment: 'COMMENT' };
 
 const REPO = '[\\w.-]+/[\\w.-]+';
+const route = (tail: string) => new RegExp(`^/repos/${REPO}/${tail}$`);
+const MODES: ReadonlySet<unknown> = new Set(['100644']);
+const EVENTS: ReadonlySet<unknown> = new Set(['APPROVE', 'REQUEST_CHANGES', 'COMMENT']);
+
+const treeProblem = (body: Record<string, unknown>): string | null => {
+  if (!Array.isArray(body.tree) || body.tree.length === 0) return 'the tree lists no file';
+  for (const entry of body.tree as Array<Record<string, unknown>>) {
+    if (entry?.type !== 'blob' || !MODES.has(entry.mode) || typeof entry.content !== 'string')
+      return 'a tree entry is not a plain text file';
+    const problem = filePathProblem(entry.path);
+    if (problem !== null) return problem;
+  }
+  return null;
+};
+
 export const GITHUB_WRITES: readonly WriteRule[] = [
-  ['POST', new RegExp(`^/repos/${REPO}/git/refs$`)],
-  ['PUT', new RegExp(`^/repos/${REPO}/contents(?:/[\\w-][\\w.-]*)+$`)],
-  ['POST', new RegExp(`^/repos/${REPO}/pulls$`)],
-  ['POST', new RegExp(`^/repos/${REPO}/pulls/\\d+/reviews$`)],
-  ['POST', new RegExp(`^/repos/${REPO}/issues/\\d+/comments$`)],
+  { method: 'POST', path: route('git/trees'), body: treeProblem },
+  {
+    method: 'POST',
+    path: route('git/commits'),
+    body: (b) => (Array.isArray(b.parents) && b.parents.length === 1 ? null : 'a commit needs exactly one parent'),
+  },
+  {
+    method: 'POST',
+    path: route('git/refs'),
+    body: (b) => branchProblem(typeof b.ref === 'string' ? b.ref.replace(/^refs\/heads\//, '') : null),
+  },
+  {
+    method: 'PATCH',
+    path: route(`git/refs/heads/aw/${SEGMENT}/${SEGMENT}`),
+    body: (b) => (b.force === undefined || b.force === false ? null : 'a ref update may not force'),
+  },
+  {
+    method: 'POST',
+    path: route('pulls'),
+    body: (b) => branchProblem(b.head) ?? (b.draft === false ? null : 'a PR opens ready, not draft'),
+  },
+  {
+    method: 'POST',
+    path: route('pulls/\\d+/reviews'),
+    body: (b) => (EVENTS.has(b.event) ? null : `the review event ${JSON.stringify(b.event)} is unknown`),
+  },
+  { method: 'POST', path: route('issues/\\d+/comments') },
 ];
 
 const repoOf = (b: unknown): string => str(b, 'repository.full_name');
@@ -187,22 +229,25 @@ export const github = ({ send, log }: GithubOptions): GitHost => {
   const api = guard('github', GITHUB_WRITES, send, log);
   const call = (method: HttpRequest['method'], path: string, body?: unknown) =>
     api(body === undefined ? { method, path } : { method, path, body });
-  const missing = (path: string) => orNull(call('GET', path));
+  const get = (path: string) => call('GET', path);
+  const missing = (path: string) => orNull(get(path));
   const owner = (repo: string) => repo.split('/')[0] ?? '';
+  const login = once(async () => str(await get('/user'), 'login').toLowerCase());
 
   const paths = async (repo: string, number: number): Promise<string[]> => {
-    const list = (await call('GET', `/repos/${repo}/pulls/${number}/files?per_page=100`)) as unknown[];
+    const list = await allPages(get, `/repos/${repo}/pulls/${number}/files`);
     return list.filter((f) => str(f, 'status') !== 'removed').map((f) => str(f, 'filename'));
   };
 
   return {
     id: 'github',
+    login,
 
     async findChange(repo, branch) {
-      const list = (await call(
-        'GET',
-        `/repos/${repo}/pulls?state=open&head=${owner(repo)}:${encodeURIComponent(branch)}&per_page=10`,
-      )) as unknown[];
+      const list = await allPages(
+        get,
+        `/repos/${repo}/pulls?state=open&head=${owner(repo)}:${encodeURIComponent(branch)}`,
+      );
       const open = list.map((pr) => changeFromList(repo, pr)).filter((pr) => pr.branch === branch);
       return open.sort((a, b) => a.number - b.number)[0] ?? null;
     },
@@ -220,47 +265,45 @@ export const github = ({ send, log }: GithubOptions): GitHost => {
 
     async pushFiles(repo, spec) {
       const ref = await missing(`/repos/${repo}/git/ref/heads/${segments(spec.branch)}`);
-      let head = ref === null ? '' : str(ref, 'object.sha');
-      if (ref === null) {
-        const base = await call('GET', `/repos/${repo}/git/ref/heads/${segments(spec.base)}`);
-        head = str(base, 'object.sha');
-        await call('POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${spec.branch}`, sha: head });
-      }
-      for (const file of spec.files) {
-        const path = `/repos/${repo}/contents/${segments(file.path)}`;
-        const existing = await missing(`${path}?ref=${encodeURIComponent(spec.branch)}`);
-        const sha = existing === null ? null : str(existing, 'sha');
-        if (sha === blobSha(file.content)) continue;
-        const put = await call('PUT', path, {
-          message: spec.message,
-          content: Buffer.from(file.content, 'utf8').toString('base64'),
-          branch: spec.branch,
-          ...(sha === null ? {} : { sha }),
-        });
-        head = str(put, 'commit.sha');
-      }
+      const parent = str(ref ?? (await get(`/repos/${repo}/git/ref/heads/${segments(spec.base)}`)), 'object.sha');
+      const baseTree = str(await get(`/repos/${repo}/git/commits/${parent}`), 'tree.sha');
+      const listing = await get(`/repos/${repo}/git/trees/${baseTree}?recursive=1`);
+      if (bool(listing, 'truncated')) throw new Error(`the tree of ${parent} is too large to list in one call`);
+      const blobs = new Map((field(listing, 'tree') as unknown[]).map((e) => [str(e, 'path'), str(e, 'sha')]));
+      const changed = spec.files.filter((file) => blobs.get(file.path) !== blobSha(file.content));
+      if (changed.length === 0) return parent;
+      const tree = await call('POST', `/repos/${repo}/git/trees`, {
+        base_tree: baseTree,
+        tree: changed.map((file) => ({ path: file.path, mode: '100644', type: 'blob', content: file.content })),
+      });
+      const commit = await call('POST', `/repos/${repo}/git/commits`, {
+        message: spec.message,
+        tree: str(tree, 'sha'),
+        parents: [parent],
+      });
+      const head = str(commit, 'sha');
+      if (ref === null) await call('POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${spec.branch}`, sha: head });
+      else await call('PATCH', `/repos/${repo}/git/refs/heads/${segments(spec.branch)}`, { sha: head, force: false });
       return head;
     },
 
     async snapshot(repo, number) {
-      const pr = await call('GET', `/repos/${repo}/pulls/${number}`);
+      const pr = await get(`/repos/${repo}/pulls/${number}`);
       const now = change(repo, pr);
-      const reviews = (await call('GET', `/repos/${repo}/pulls/${number}/reviews?per_page=100`)) as unknown[];
-      const combined = await call('GET', `/repos/${repo}/commits/${now.headSha}/status`);
-      const runs = await call('GET', `/repos/${repo}/commits/${now.headSha}/check-runs?per_page=100`);
+      const [reviews, statuses, runs] = await Promise.all([
+        allPages(get, `/repos/${repo}/pulls/${number}/reviews`),
+        allPages(get, `/repos/${repo}/commits/${now.headSha}/status`, (b) => field(b, 'statuses') as unknown[]),
+        allPages(get, `/repos/${repo}/commits/${now.headSha}/check-runs`, (b) => field(b, 'check_runs') as unknown[]),
+      ]);
       return {
         change: now,
         reviews: reviews.filter((r) => optStr(r, 'submitted_at') !== null).map((r) => review(repo, number, r)),
-        checks: [
-          ...(field(combined, 'statuses') as unknown[]).map((s) => status(repo, s, now.headSha)),
-          ...(field(runs, 'check_runs') as unknown[]).map((run) => checkRun(repo, run)),
-        ],
+        checks: [...statuses.map((s) => status(repo, s, now.headSha)), ...runs.map((run) => checkRun(repo, run))],
       };
     },
 
     async comments(repo, number) {
-      const list = (await call('GET', `/repos/${repo}/pulls/${number}/comments?per_page=100`)) as unknown[];
-      return list.map((c) => comment(repo, number, c));
+      return (await allPages(get, `/repos/${repo}/pulls/${number}/comments`)).map((c) => comment(repo, number, c));
     },
 
     paths,
@@ -268,7 +311,7 @@ export const github = ({ send, log }: GithubOptions): GitHost => {
     async files(repo, number, headSha) {
       const files = [];
       for (const path of await paths(repo, number)) {
-        const got = await call('GET', `/repos/${repo}/contents/${segments(path)}?ref=${headSha}`);
+        const got = await get(`/repos/${repo}/contents/${segments(path)}?ref=${headSha}`);
         files.push({ path, content: Buffer.from(str(got, 'content'), 'base64').toString('utf8') });
       }
       return files;
@@ -302,8 +345,11 @@ export const github = ({ send, log }: GithubOptions): GitHost => {
     },
 
     async findComment(repo, number, marker) {
-      const list = (await call('GET', `/repos/${repo}/issues/${number}/comments?per_page=100`)) as unknown[];
-      const found = list.find((c) => str(c, 'body').includes(marker));
+      const self = await login();
+      const list = await allPages(get, `/repos/${repo}/issues/${number}/comments`);
+      const found = list.find(
+        (c) => str(c, 'user.login').toLowerCase() === self && str(c, 'body').split('\n').includes(marker),
+      );
       return found === undefined ? null : { id: id(found, 'id'), url: str(found, 'html_url') };
     },
 

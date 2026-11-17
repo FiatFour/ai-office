@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { CheckState, HostChangeState, PollEvent, Verdict, WebhookEvent } from '@agent-works/core';
 import { runBinary } from '../sandbox/engine.ts';
+import { BRANCH, bodyProblem } from './sanitize.ts';
 
 export type HostId = 'github' | 'gitlab';
 export type HostCheckState = CheckState | 'skipped';
@@ -93,6 +94,7 @@ export interface PostedComment {
 
 export interface GitHost {
   readonly id: HostId;
+  login(): Promise<string>;
   findChange(repo: string, branch: string): Promise<ChangeFact | null>;
   openChange(repo: string, spec: { branch: string; base: string; title: string; body: string }): Promise<ChangeFact>;
   pushFiles(
@@ -267,7 +269,11 @@ export interface ApiCall {
   readonly ms: number;
 }
 
-export type WriteRule = readonly [method: HttpRequest['method'], pattern: RegExp];
+export interface WriteRule {
+  readonly method: HttpRequest['method'];
+  readonly path: RegExp;
+  readonly body?: (body: Record<string, unknown>) => string | null;
+}
 
 export class HostError extends Error {
   readonly status: number;
@@ -290,13 +296,57 @@ export const orNull = async <T>(pending: Promise<T>): Promise<T | null> => {
   }
 };
 
-export const writeAllowed = (rules: readonly WriteRule[], request: HttpRequest, encodedPrefix?: RegExp): boolean => {
+const TEXT_KEYS = ['body', 'title', 'description', 'message', 'commit_message'] as const;
+const ONE_LINE: ReadonlySet<string> = new Set(['title', 'message', 'commit_message']);
+const PROJECT_PATH = /^[A-Za-z0-9_][\w-]*(?:\.[\w-]+)*(?:\/[A-Za-z0-9_][\w-]*(?:\.[\w-]+)*)+$/;
+
+const textProblem = (o: Record<string, unknown>): string | null => {
+  const texts: Array<[string, unknown]> = TEXT_KEYS.filter((key) => o[key] !== undefined).map((key) => [key, o[key]]);
+  if (o.comments !== undefined) {
+    if (!Array.isArray(o.comments)) return 'comments is not a list';
+    texts.push(...o.comments.map((c, i): [string, unknown] => [`comments.${i}.body`, (c as { body?: unknown })?.body]));
+  }
+  for (const [key, value] of texts) {
+    if (typeof value !== 'string') return `${key} is not text`;
+    if (ONE_LINE.has(key) && /[\r\n]/.test(value)) return `${key} spans more than one line`;
+    const problem = bodyProblem(value);
+    if (problem !== null) return `${key} ${problem}`;
+  }
+  return null;
+};
+
+export const filePathProblem = (path: unknown): string | null =>
+  typeof path === 'string' &&
+  path.split('/').every((segment) => segment !== '' && !segment.startsWith('.') && !/[\\\p{Cc}]/u.test(segment))
+    ? null
+    : `the file path ${JSON.stringify(path)} is empty, hidden or holds a backslash`;
+
+export const branchProblem = (branch: unknown): string | null =>
+  typeof branch === 'string' && BRANCH.test(branch)
+    ? null
+    : `the branch ${JSON.stringify(branch)} is not aw/<factory>/<task>`;
+
+export const writeProblem = (rules: readonly WriteRule[], request: HttpRequest, projectIds = false): string | null => {
   const { method, path } = request;
   const { pathname, search } = new URL(path, 'https://host.invalid');
-  if (method === 'GET') return pathname + search === path;
-  if (pathname !== path || /%2e|%5c/i.test(path)) return false;
-  if (/%2f/i.test(path.replace(encodedPrefix ?? /^$/, ''))) return false;
-  return rules.some(([m, pattern]) => m === method && pattern.test(pathname));
+  if (method === 'GET') return pathname + search === path ? null : 'the path is not in normal form';
+  if (pathname !== path) return 'a write path may not hold a query, a fragment or a dot segment';
+  if (projectIds) {
+    const encoded = /^\/projects\/([^/]+)\//.exec(path)?.[1];
+    if (encoded === undefined) return 'the write names no project';
+    let project = '';
+    try {
+      project = decodeURIComponent(encoded);
+    } catch {
+      return 'the project id does not decode';
+    }
+    if (!PROJECT_PATH.test(project)) return `the project id ${JSON.stringify(project)} is not a namespace path`;
+  }
+  const rule = rules.find((r) => r.method === method && r.path.test(pathname));
+  if (rule === undefined) return 'it is outside the allowlist';
+  const body = request.body ?? {};
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return 'the body is not an object';
+  return textProblem(body as Record<string, unknown>) ?? rule.body?.(body as Record<string, unknown>) ?? null;
 };
 
 export const guard = (
@@ -304,11 +354,11 @@ export const guard = (
   rules: readonly WriteRule[],
   send: Transport,
   log: (call: ApiCall) => void,
-  encodedPrefix?: RegExp,
+  projectIds = false,
 ): ((request: HttpRequest) => Promise<unknown>) => {
   return async (request) => {
-    if (!writeAllowed(rules, request, encodedPrefix))
-      throw new WriteRefused(`refusing a call outside the ${host} allowlist: ${request.method} ${request.path}`);
+    const problem = writeProblem(rules, request, projectIds);
+    if (problem !== null) throw new WriteRefused(`refusing ${request.method} ${request.path} on ${host}: ${problem}`);
     const started = performance.now();
     const response = await send(request);
     log({
@@ -321,6 +371,34 @@ export const guard = (
     });
     if (response.status >= 400) throw new HostError(request, response.status, response.body);
     return response.body;
+  };
+};
+
+const PAGE_SIZE = 100;
+const MAX_PAGES = 50;
+
+export const allPages = async (
+  get: (path: string) => Promise<unknown>,
+  path: string,
+  items: (body: unknown) => unknown[] = (body) => body as unknown[],
+): Promise<unknown[]> => {
+  const all: unknown[] = [];
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const list = items(await get(`${path}${path.includes('?') ? '&' : '?'}per_page=${PAGE_SIZE}&page=${page}`));
+    all.push(...list);
+    if (list.length < PAGE_SIZE) return all;
+  }
+  throw new Error(`${path} lists more than ${MAX_PAGES * PAGE_SIZE} items`);
+};
+
+export const once = <T>(make: () => Promise<T>): (() => Promise<T>) => {
+  let made: Promise<T> | null = null;
+  return () => {
+    made ??= make().catch((error: unknown) => {
+      made = null;
+      throw error;
+    });
+    return made;
   };
 };
 

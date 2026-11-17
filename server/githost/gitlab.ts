@@ -1,11 +1,14 @@
 import type { HostChangeState } from '@agent-works/core';
 import {
   type ApiCall,
+  allPages,
+  branchProblem,
   type ChangeFact,
   type CheckFact,
   type CommentFact,
   count,
   field,
+  filePathProblem,
   firstTime,
   type GitHost,
   guard,
@@ -13,6 +16,7 @@ import {
   type HostEvent,
   type HttpRequest,
   id,
+  once,
   oneOf,
   optLine,
   orNull,
@@ -46,13 +50,28 @@ const PIPELINE: Record<string, HostCheckState> = {
 };
 
 const PROJECT = '/projects/[\\w.-]+(?:%2F[\\w.-]+)+';
-const ENCODED_PROJECT = /^\/projects\/[\w.-]+(?:%2F[\w.-]+)+/i;
+const route = (tail: string) => new RegExp(`^${PROJECT}/${tail}$`);
+const ACTIONS: ReadonlySet<unknown> = new Set(['create', 'update']);
+
+const commitProblem = (body: Record<string, unknown>): string | null => {
+  const problem = branchProblem(body.branch);
+  if (problem !== null) return problem;
+  if (!Array.isArray(body.actions) || body.actions.length === 0) return 'the commit lists no file';
+  for (const action of body.actions as Array<Record<string, unknown>>) {
+    if (!ACTIONS.has(action?.action) || typeof action.content !== 'string')
+      return 'a commit action is not a plain create or update';
+    const bad = filePathProblem(action.file_path);
+    if (bad !== null) return bad;
+  }
+  return null;
+};
+
 export const GITLAB_WRITES: readonly WriteRule[] = [
-  ['POST', new RegExp(`^${PROJECT}/repository/commits$`, 'i')],
-  ['POST', new RegExp(`^${PROJECT}/merge_requests$`, 'i')],
-  ['POST', new RegExp(`^${PROJECT}/merge_requests/\\d+/discussions$`, 'i')],
-  ['POST', new RegExp(`^${PROJECT}/merge_requests/\\d+/notes$`, 'i')],
-  ['POST', new RegExp(`^${PROJECT}/merge_requests/\\d+/approve$`, 'i')],
+  { method: 'POST', path: route('repository/commits'), body: commitProblem },
+  { method: 'POST', path: route('merge_requests'), body: (b) => branchProblem(b.source_branch) },
+  { method: 'POST', path: route('merge_requests/\\d+/discussions') },
+  { method: 'POST', path: route('merge_requests/\\d+/notes') },
+  { method: 'POST', path: route('merge_requests/\\d+/approve') },
 ];
 
 const repoOf = (b: unknown): string => str(b, 'project.path_with_namespace');
@@ -188,14 +207,16 @@ export interface GitlabOptions {
 }
 
 export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
-  const api = guard('gitlab', GITLAB_WRITES, send, log, ENCODED_PROJECT);
+  const api = guard('gitlab', GITLAB_WRITES, send, log, true);
   const call = (method: HttpRequest['method'], path: string, body?: unknown) =>
     api(body === undefined ? { method, path } : { method, path, body });
+  const get = (path: string) => call('GET', path);
+  const login = once(async () => str(await get('/user'), 'username').toLowerCase());
   const project = (repo: string) => `/projects/${encodeURIComponent(repo)}`;
   const exists = async (path: string) => (await orNull(call('GET', path))) !== null;
 
   const pipelines = async (repo: string, sha: string): Promise<CheckFact[]> => {
-    const list = (await call('GET', `${project(repo)}/pipelines?sha=${sha}&per_page=20`)) as unknown[];
+    const list = await allPages(get, `${project(repo)}/pipelines?sha=${sha}`);
     return list.map((p) => ({
       host: 'gitlab',
       kind: 'check',
@@ -216,12 +237,13 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
 
   return {
     id: 'gitlab',
+    login,
 
     async findChange(repo, branch) {
-      const list = (await call(
-        'GET',
-        `${project(repo)}/merge_requests?state=opened&source_branch=${encodeURIComponent(branch)}&per_page=10`,
-      )) as unknown[];
+      const list = await allPages(
+        get,
+        `${project(repo)}/merge_requests?state=opened&source_branch=${encodeURIComponent(branch)}`,
+      );
       const open = list.map((mr) => mrFromApi(repo, mr)).filter((mr) => mr.branch === branch);
       return open.sort((a, b) => a.number - b.number)[0] ?? null;
     },
@@ -278,7 +300,7 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
     },
 
     async comments(repo, number) {
-      const list = (await call('GET', `${project(repo)}/merge_requests/${number}/notes?per_page=100`)) as unknown[];
+      const list = await allPages(get, `${project(repo)}/merge_requests/${number}/notes`);
       return list.filter((n) => field(n, 'system') !== true).map((n) => note(repo, number, n));
     },
 
@@ -330,8 +352,11 @@ export const gitlab = ({ send, log }: GitlabOptions): GitHost => {
     },
 
     async findComment(repo, number, marker) {
-      const list = (await call('GET', `${project(repo)}/merge_requests/${number}/notes?per_page=100`)) as unknown[];
-      const found = list.find((n) => str(n, 'body').includes(marker));
+      const self = await login();
+      const list = await allPages(get, `${project(repo)}/merge_requests/${number}/notes`);
+      const found = list.find(
+        (n) => str(n, 'author.username').toLowerCase() === self && str(n, 'body').split('\n').includes(marker),
+      );
       return found === undefined ? null : { id: id(found, 'id'), url: noteUrl(repo, number, id(found, 'id')) };
     },
 

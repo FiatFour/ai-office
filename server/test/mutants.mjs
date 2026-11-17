@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: the strings are source text being mutated
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -35,11 +36,7 @@ const MUTANTS = [
     name: 'hq-any-origin',
     claim: 'a foreign Origin header is refused',
     edits: [
-      [
-        'server/hq.ts', // biome-ignore lint/suspicious/noTemplateCurlyInString: the source text being mutated
-        'return origin === undefined || origin === `http://${req.headers.host}`;',
-        'return true;',
-      ],
+      ['server/hq.ts', 'return origin === undefined || origin === `http://${req.headers.host}`;', 'return true;'],
     ],
     tests: ['server/test/hq.test.ts'],
   },
@@ -64,13 +61,7 @@ const MUTANTS = [
   {
     name: 'registry-repo-per-factory',
     claim: 'one repo shared by two factories keeps one entry',
-    edits: [
-      [
-        'server/registry.ts',
-        ': repoIdFrom(remote, real);',
-        ': repoIdFrom(remote, real) + factory.id;',
-      ],
-    ],
+    edits: [['server/registry.ts', ': repoIdFrom(remote, real);', ': repoIdFrom(remote, real) + factory.id;']],
     tests: ['server/test/registry.test.ts'],
   },
   {

@@ -98,6 +98,7 @@ describe('commands refuse to start from inside a cage', () => {
     const cwd = join(home, 'cages', 'one-abc123', 'repo');
     mkdirSync(cwd, { recursive: true });
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd });
+    homes.push(home);
     return { home, cwd };
   };
   const quiet = { out: () => {}, err: () => {} };

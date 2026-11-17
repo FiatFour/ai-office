@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CommandKind } from '@agent-works/core';
 import { WebSocket, WebSocketServer } from 'ws';
+import { type Asset, readAsset } from './assets.ts';
 import { clearRuntime, hqIdFor, VERSION, writeRuntime } from './config.ts';
 import { InvalidEvent, parseEvent } from './events.ts';
 import { Ledger } from './ledger.ts';
@@ -26,6 +27,7 @@ export interface HqOptions {
   readonly makeDriver?: (hq: string, onDenial: (denial: RawDenial) => void) => Promise<SandboxDriver | null>;
   readonly executors?: Partial<Record<CommandKind, Executor>>;
   readonly mode?: ModeFactory;
+  readonly assets?: string;
 }
 
 export interface RunningHq {
@@ -175,6 +177,15 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
       res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify(body));
     };
+    const asset: Asset | null =
+      method === 'GET' && options.assets !== undefined && !url.pathname.startsWith('/api/')
+        ? readAsset(options.assets, url.pathname)
+        : null;
+    if (asset !== null) {
+      res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'no-store' });
+      res.end(asset.body);
+      return;
+    }
     if (method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       res.end(DASHBOARD);
@@ -188,6 +199,10 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     if (method === 'GET' && url.pathname === '/api/events') {
       const after = Number(url.searchParams.get('after') ?? 0);
       return send(200, { events: store.events(Number.isFinite(after) ? after : 0) });
+    }
+    if (method === 'GET') {
+      const read = mode?.route(method, url.pathname, () => readBody(req));
+      if (read !== undefined) return send(200, await read);
     }
     if (method !== 'POST' && method !== 'DELETE') throw new HttpError(404, 'not found');
 

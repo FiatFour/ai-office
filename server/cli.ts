@@ -1,6 +1,17 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +29,7 @@ import { fileLog } from './githost/host.ts';
 import { startHq } from './hq.ts';
 import type { ModeFactory } from './modes/cages.ts';
 import { ConfigError, cagesFromConfig } from './modes/cages-config.ts';
+import { demoMode, loadDemo } from './modes/demo.ts';
 import { type DoctorContext, exitCodeOf, formatChecks, type PortState, runDoctor } from './preflight/checks.ts';
 import { realHostProbe } from './preflight/host.ts';
 import { Registry } from './registry.ts';
@@ -26,6 +38,12 @@ import { Engine, pickEngine, runBinary } from './sandbox/engine.ts';
 import { StoreCorruptError, StoreLockedError } from './store/store.ts';
 
 const BIN = fileURLToPath(new URL('../bin/agent-works.ts', import.meta.url));
+const ASSETS = fileURLToPath(new URL('../src/dist', import.meta.url));
+const DEMO_EVENTS = fileURLToPath(new URL('../fixtures/demo/events.jsonl', import.meta.url));
+const DEMO_LABEL = 'fixtures/demo/events.jsonl';
+const DEMO_INTERVAL_MS = 2000;
+
+const builtAssets = (): string | undefined => (existsSync(join(ASSETS, 'index.html')) ? ASSETS : undefined);
 
 export interface Io {
   readonly out: (text: string) => void;
@@ -61,9 +79,10 @@ export const parseArgs = (argv: readonly string[]): Parsed => {
   return { command, positional: rest, flags };
 };
 
-const HELP = `agent-works [open|ls|stop|doctor|add-repo|cage|serve]
+const HELP = `agent-works [open|ls|stop|doctor|add-repo|cage|serve] [--demo]
 
   open [--no-open] [--port N]   start or reuse HQ and register this folder as a factory (default)
+  --demo [--no-open] [--port N] replay the recorded run on the floor, no agents, no state kept
   ls                            list factories and the repos each one holds
   stop                          stop HQ and remove every cage and network it made
   doctor [--json]               check this machine, one PASS, WARN, FAIL or SKIP per line
@@ -268,6 +287,37 @@ const serveMode = (
   }
 };
 
+const runDemo = async (port: number, env: NodeJS.ProcessEnv, noOpen: boolean, io: Io): Promise<number> => {
+  const assets = builtAssets();
+  if (assets === undefined) io.err('The floor is not built. Run: pnpm --filter @agent-works/floor build');
+  const interval = Number(env.AGENT_WORKS_DEMO_INTERVAL_MS ?? DEMO_INTERVAL_MS);
+  const home = mkdtempSync(join(tmpdir(), 'aw-demo-'));
+  try {
+    const hq = await startHq({
+      home,
+      port,
+      mode: demoMode(loadDemo(DEMO_EVENTS, DEMO_LABEL), interval),
+      ...(assets === undefined ? {} : { assets }),
+    }).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE')
+        throw new CliError(
+          `Port ${port} is busy. Start the demo on a free port with: agent-works --demo --port <number>`,
+          2,
+        );
+      throw error;
+    });
+    io.out(`Demo replay of ${DEMO_LABEL} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);
+    if (!noOpen) openBrowser(hq.url);
+    const quit = () => void hq.close();
+    process.on('SIGTERM', quit);
+    process.on('SIGINT', quit);
+    await hq.stopped;
+    return 0;
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+};
+
 export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: Io = stdio): Promise<number> => {
   const { command, positional, flags } = parseArgs(argv);
   const home = resolve(typeof flags.home === 'string' ? flags.home : resolveHome(env));
@@ -286,6 +336,7 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
     io.out(HELP);
     return 0;
   }
+  if (flags.demo === true && command === 'open') return runDemo(port, env, flags['no-open'] === true, io);
   if (command === 'serve') {
     let made: (driver: SandboxDriver | null) => void = () => {};
     const driver = new Promise<SandboxDriver | null>((resolve) => {
@@ -300,13 +351,17 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
       return active;
     };
     const mode = serveMode(flags, home, () => driver);
-    const hq = await startHq({ home, port, makeDriver, ...(mode === undefined ? {} : { mode }) }).catch(
-      (error: unknown) => {
-        if (error instanceof StoreLockedError || error instanceof StoreCorruptError)
-          throw new CliError(error.message, 3);
-        throw error;
-      },
-    );
+    const assets = builtAssets();
+    const hq = await startHq({
+      home,
+      port,
+      makeDriver,
+      ...(mode === undefined ? {} : { mode }),
+      ...(assets === undefined ? {} : { assets }),
+    }).catch((error: unknown) => {
+      if (error instanceof StoreLockedError || error instanceof StoreCorruptError) throw new CliError(error.message, 3);
+      throw error;
+    });
     let quitting = false;
     const quit = () => {
       if (quitting) process.exit(130);

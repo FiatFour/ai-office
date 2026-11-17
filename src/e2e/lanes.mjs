@@ -167,6 +167,7 @@ try {
   const after = await page.evaluate(() => document.body.textContent);
   const marker = await page.evaluate(() => globalThis.__marker);
   const toastTh = await toastText();
+  const navTh = await page.$eval('header nav', (node) => node.getAttribute('aria-label'));
   const langTh = await htmlLang();
   const svgText = await page.$$eval('svg text', (nodes) => nodes.map((node) => node.textContent ?? '').join(' '));
   const thai = /[฀-๿]/;
@@ -201,8 +202,9 @@ try {
       families.includes('Sarabun') &&
       families.every((family) => ['Sarabun', 'Silkscreen'].includes(family)) &&
       keptTh.lang === 'th' &&
-      keptTh.text,
-    `HUD changed with no reload (marker kept), html lang ${langTh}, toast re-rendered in Thai ("${toastTh}"), scene text has no Thai and keeps SHIPPED, Thai in .pixel drawn with ${families.join(' + ')}, Thai kept after a reload (lang ${keptTh.lang})`,
+      keptTh.text &&
+      navTh === 'เมนู HQ',
+    `HUD changed with no reload (marker kept), html lang ${langTh}, toast re-rendered in Thai ("${toastTh}"), scene text has no Thai and keeps SHIPPED, Thai in .pixel drawn with ${families.join(' + ')}, Thai kept after a reload (lang ${keptTh.lang}), nav label "${navTh}"`,
   );
   await page.keyboard.press('d');
   await page.click('[data-testid=lang-en]');

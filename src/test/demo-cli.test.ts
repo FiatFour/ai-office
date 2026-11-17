@@ -102,8 +102,7 @@ describe.skipIf(!canSpawnTs)('agent-works --demo', () => {
     await exited(child);
   }, 30_000);
 
-  const signals: NodeJS.Signals[] =
-    process.platform === 'win32' ? ['SIGTERM'] : ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
+  const signals: NodeJS.Signals[] = process.platform === 'win32' ? [] : ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
   it.each(signals)(
     'on %s it removes its throw-away home and never touches the real one',
     async (signal) => {

@@ -79,7 +79,7 @@ const anchors = (/** @type {import('playwright').Page} */ page, /** @type {strin
  */
 export const canvasCompare = async (browser, builtPage, builtShot, extraText = '') => {
   const problems = [];
-  const diffs = parseDifferences(readFileSync(DIFFERENCES, 'utf8'));
+  const diffs = parseDifferences(readFileSync(DIFFERENCES, 'utf8').replace(/\r\n/g, '\n'));
   const ids = diffs.map((d) => d.id);
   if (diffs.length < 20) problems.push(`only ${diffs.length} differences listed`);
   if (new Set(ids).size !== ids.length) problems.push('duplicate ids');
@@ -105,7 +105,7 @@ export const canvasCompare = async (browser, builtPage, builtShot, extraText = '
       problems.push(`${d.id}: "${d.built}" is not on the built floor`);
   }
 
-  const read = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '');
+  const read = (file) => (existsSync(file) ? readFileSync(file, 'utf8').replace(/\r\n/g, '\n') : '');
   const [body, adr] = [read(PR_BODY), read(ADR)];
   for (const [name, doc] of [
     ['the PR body source', body],

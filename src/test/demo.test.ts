@@ -100,9 +100,15 @@ describe('built assets', () => {
     'the plain dashboard allows its one inline script and style by hash, nothing else',
     async () => {
       const hq = await boot();
-      const policy = (await fetch(`${hq.url}/`)).headers.get('content-security-policy') ?? '';
-      expect(policy).toMatch(/script-src 'self' 'sha256-[\w+/=]+';/);
-      expect(policy).toMatch(/style-src 'self' 'sha256-[\w+/=]+';/);
+      const res = await fetch(`${hq.url}/`);
+      const html = await res.text();
+      const policy = res.headers.get('content-security-policy') ?? '';
+      const hashOf = (tag: string) =>
+        `'sha256-${createHash('sha256')
+          .update(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(html)?.[1] ?? '')
+          .digest('base64')}'`;
+      expect(policy).toContain(`script-src 'self' ${hashOf('script')};`);
+      expect(policy).toContain(`style-src 'self' ${hashOf('style')};`);
       expect(policy).not.toContain('unsafe-inline');
     },
   );

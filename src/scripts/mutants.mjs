@@ -409,6 +409,7 @@ const MUTANTS = [
   {
     name: 'nav-aria-not-translated',
     claim: 'the HQ nav label comes from the locale files',
+    tier: 'e2e',
     edits: [['src/floor/App.tsx', "<nav aria-label={t('floor.hud.menu')}>", '<nav aria-label="HQ">']],
   },
   {

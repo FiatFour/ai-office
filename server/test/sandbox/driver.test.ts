@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -224,6 +224,43 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       expect(lines).toContain('CapBnd:\t0000000000000000');
       expect(lines).toContain('NoNewPrivs:\t1');
       expect(lines.find((line) => line.startsWith('root '))?.split(/[ ,]/)).toContain('ro');
+    }, 120_000);
+
+    it('refuses an export when git archive fails half way, leaving a tar that looks whole', async () => {
+      const source = fixtureRepo(tempDir('driver-halfway'), canary);
+      writeFileSync(join(source, 'zz.txt'), 'last\n');
+      git(source, 'add', '-A');
+      git(source, 'commit', '-qm', 'second file');
+      const blob = execFileSync('git', ['rev-parse', 'HEAD:zz.txt'], { cwd: source, encoding: 'utf8' }).trim();
+      rmSync(join(source, '.git', 'objects', blob.slice(0, 2), blob.slice(2)), { force: true });
+      const dest = join(tempDir('driver-halfway-dest'), 'repo');
+      await expect(exportRepo(source, dest, (args, mounts) => driver.throwaway(args, mounts))).rejects.toThrow(
+        /git archive/,
+      );
+    }, 120_000);
+
+    it('starts the throwaway with the hardened flags, the host user and no network', async () => {
+      const seen: string[][] = [];
+      const spy = new Proxy(engine, {
+        get: (target, name) => {
+          if (name === 'run')
+            return (args: string[], options?: Parameters<typeof engine.run>[1]) => {
+              seen.push(args);
+              return engine.run(args, options);
+            };
+          const value = Reflect.get(target, name) as unknown;
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      const watched = new SandboxDriver({ engine: spy, home, hq, image: IMAGE, project });
+      await watched.throwaway(['true'], []);
+      const args = seen.find((a) => a[0] === 'run') ?? [];
+      const pair = (flag: string, value: string) => args.findIndex((a, i) => a === flag && args[i + 1] === value);
+      expect(pair('--cap-drop', 'ALL')).toBeGreaterThan(0);
+      expect(pair('--security-opt', 'no-new-privileges')).toBeGreaterThan(0);
+      expect(pair('--network', 'none')).toBeGreaterThan(0);
+      expect(args).toContain('--read-only');
+      expect(pair('--user', `${process.getuid?.()}:${process.getgid?.()}`)).toBeGreaterThan(0);
     }, 120_000);
 
     it('refuses an export when the contained git archive fails, instead of making an empty repo', async () => {

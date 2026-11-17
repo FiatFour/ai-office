@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -174,6 +175,18 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
       rawSql(dir, 'DELETE FROM state');
       expect(() => Store.open(dir)).toThrow(/state row is missing/);
       expect(countEvents(dir)).toBe(4);
+    });
+
+    it('refuses a last event that was replaced by another valid one, so the state row is bound to the log', () => {
+      const dir = seeded('corrupt-bound');
+      const db = new (createRequire(import.meta.url)('node:sqlite').DatabaseSync)(join(dir, 'hq.db'));
+      const row = db.prepare('SELECT body FROM events WHERE seq = 4').get() as { body: string };
+      const body = row.body.replace('nova', 'novb');
+      const sum = createHash('sha256').update(`4\n${body}`).digest('hex').slice(0, 32);
+      db.prepare('UPDATE events SET body = ?, sum = ? WHERE seq = 4').run(body, sum);
+      db.close();
+      expect(body).not.toBe(row.body);
+      expect(() => Store.open(dir)).toThrow(/state row does not match its checksum/);
     });
 
     it('refuses two events that traded sequence numbers, so the checksum covers the seq', () => {

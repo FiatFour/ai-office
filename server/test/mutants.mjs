@@ -377,6 +377,7 @@ const MUTANTS = [
       ],
     ],
     tests: [CONFIG],
+    survives: true, // the identity check refuses the same folder, so this name check is a second layer
   },
   {
     name: 'refuse-no-realpath',
@@ -414,7 +415,7 @@ const MUTANTS = [
   {
     name: 'reg-id-default-port-kept',
     claim: 'a default port does not change the repo id',
-    edits: [['server/registry.ts', "'https:': '443',", "'https:': '0',"]],
+    edits: [['server/registry.ts', "'ssh:': '22',", "'ssh:': '0',"]],
     tests: [REGISTRY],
   },
   {

@@ -33,8 +33,6 @@ const DEFAULT_PORTS: Readonly<Record<string, string>> = {
   'git+ssh:': '22',
   'ssh+git:': '22',
   'git:': '9418',
-  'http:': '80',
-  'https:': '443',
 };
 
 const SCP_LIKE = /^(?:[^@/:\\]+@)?([^/:\\]{2,}):(?!\/\/)(.+)$/;

@@ -368,7 +368,7 @@ const MUTANTS = [
   },
   {
     name: 'refuse-root-itself-allowed',
-    claim: 'the cages dir itself is refused',
+    claim: 'the cages dir itself is refused (the identity check also refuses it, so the name check is a second layer)',
     edits: [
       [
         'server/config.ts',
@@ -377,7 +377,7 @@ const MUTANTS = [
       ],
     ],
     tests: [CONFIG],
-    survives: true, // the identity check refuses the same folder, so this name check is a second layer
+    survives: true,
   },
   {
     name: 'refuse-no-realpath',
@@ -529,10 +529,11 @@ const MUTANTS = [
   },
   {
     name: 'store-no-state-seq-check',
-    claim: 'a state row behind or ahead of the log is refused',
+    claim:
+      'a state row behind or ahead of the log is refused (the state checksum also refuses it, this check gives the clearer message)',
     edits: [['server/store/store.ts', 'if (saved !== null && saved.persisted.eventSeq !== n)', 'if (false)']],
     tests: [STORE],
-    survives: true, // the state checksum is bound to the last event, so a row ahead of or behind the log is refused there too; this check only gives the clearer message
+    survives: true,
   },
   {
     name: 'lock-stale-file-blocks',

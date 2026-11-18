@@ -5,11 +5,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { tempDir } from '../../server/test/helpers.ts';
 import { type Arm, scriptedArm } from '../arms.ts';
-import { grade } from '../grade.ts';
+import { grade, NO_CHANGE } from '../grade.ts';
 import { parseTask } from '../model.ts';
 import { runTask, verifyTask } from '../run.ts';
-import { localRunner } from '../runner.ts';
-import { gitProblems, prepareTask, sealedProblems } from '../workspace.ts';
+import { localRunner, type Runner } from '../runner.ts';
+import { fixChange, gitProblems, mirrorPath, prepareTask, sealedProblems } from '../workspace.ts';
 import { BUGGY, FIXED, HIDDEN_NEW, makeFixture } from './fixture.ts';
 
 const POSIX_ONLY = process.platform === 'win32';
@@ -38,11 +38,54 @@ describe.skipIf(POSIX_ONLY)('task setup', () => {
     expect(readFileSync(join(prepared.hidden, 'test/slug-hidden.test.js'), 'utf8')).toBe(HIDDEN_NEW);
   });
 
+  it('strips the upstream links from the package metadata of the cage source and the installed copy', async () => {
+    const { prepared } = await setup();
+    for (const dir of [prepared.source, prepared.installed]) {
+      const meta = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+      expect(meta).toEqual({ name: 'slug', version: '1.0.0', type: 'module' });
+    }
+  });
+
+  it('refuses an install that leaves a newer copy of the project itself in node_modules', async () => {
+    const fx = makeFixture({
+      installCommand: ['sh', '-c', 'mkdir -p node_modules/.pnpm/slug@9.0.0 && mkdir -p node_modules/.pnpm/slug@0.5.0'],
+    });
+    await expect(
+      prepareTask(fx.task, {
+        cache: tempDir('bench-cache'),
+        repoUrl: (r) => join(fx.reposRoot, `${r}.git`),
+        runner: localRunner,
+      }),
+    ).rejects.toThrow(/is not sealed: node_modules\/\.pnpm\/slug@9\.0\.0 is 9\.0\.0, newer than the base 1\.0\.0/);
+  });
+
+  it('reports a tag ref and nothing else when the cage source is one commit with a tag', async () => {
+    const dir = tempDir('seal-tag');
+    execFileSync('sh', [
+      '-c',
+      `cd ${dir} && git init -q -b main && git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m one && git tag v1`,
+    ]);
+    expect(await gitProblems(dir, 'a'.repeat(40))).toEqual(['the cage source keeps remote or tag refs']);
+  });
+
+  it('turns the upstream fix into a change that leaves out hidden tests and protected paths', async () => {
+    const { fx, cache } = await setup();
+    const change = await fixChange(fx.task, mirrorPath(cache, fx.task.repo));
+    expect(change.files.map((f) => f.path)).toEqual(['src/slug.js']);
+    expect(change.deleted).toEqual([]);
+  });
+
   it('shows the hidden tests fail at the reverted base and pass on the fix', async () => {
     const { fx, scratch, prepared } = await setup();
     const sanity = await verifyTask(fx.task, prepared, localRunner, scratch);
     expect(sanity.failsAtBase).toBe(true);
-    const fixed = await grade(fx.task, prepared, [{ path: 'src/slug.js', content: FIXED }], localRunner, scratch);
+    const fixed = await grade(
+      fx.task,
+      prepared,
+      { files: [{ path: 'src/slug.js', content: FIXED }], deleted: [] },
+      localRunner,
+      scratch,
+    );
     expect(fixed.outcome).toBe('pass');
   });
 
@@ -57,10 +100,20 @@ describe.skipIf(POSIX_ONLY)('task setup', () => {
   });
 
   it('refuses hidden tests that already pass at the base', async () => {
+    const { fx, scratch, prepared } = await setup();
+    const passing: Runner = {
+      async run(spec) {
+        const files = fx.task.hiddenPaths.map((file) => ({ file: join(spec.cwd, file), passed: 1, failed: 0 }));
+        fs.writeFileSync(join(spec.cwd, '.aw-bench/result.json'), JSON.stringify({ files }));
+        return { code: 0, out: '', err: '', timedOut: false };
+      },
+    };
+    await expect(verifyTask(fx.task, prepared, passing, scratch)).rejects.toThrow(/gave pass/);
+  });
+
+  it('refuses hidden tests that never run at the base', async () => {
     const { fx, scratch, prepared } = await setup({ testCommand: ['node', '--test', 'test/visible.test.js'] });
-    await expect(verifyTask(fx.task, prepared, localRunner, scratch)).rejects.toThrow(
-      /do not fail at the reverted base|gave pass/,
-    );
+    await expect(verifyTask(fx.task, prepared, localRunner, scratch)).rejects.toThrow(/not as a test failure/);
   });
 
   it('refuses a base failure that is not a test failure, such as a crash before any test runs', async () => {
@@ -102,7 +155,8 @@ describe.skipIf(POSIX_ONLY)('refusals', () => {
     issue: 1,
     title: 't',
     testCommand: ['true'],
-    expect: '.',
+    specs: ['t.js'],
+    reporter: 'vitest',
     image: 'i',
   };
 
@@ -184,26 +238,34 @@ describe.skipIf(POSIX_ONLY)('rows', () => {
     expect((await runTask(fx.task, 1, prepared, { arm, runner: localRunner, scratch })).outcome).toBe('fail');
   });
 
-  it('cannot be passed by a test command that exits 0 without running a test', async () => {
+  it('cannot be passed by a test command that exits 0 without a structured report', async () => {
     const { fx, scratch, prepared } = await verified();
-    const empty = { ...fx.task, testCommand: ['true'] };
-    const g = await grade(empty, prepared, [], localRunner, scratch);
-    expect(g).toMatchObject({ outcome: 'fail' });
-    expect(g.note).toMatch(/lacks/);
+    for (const testCommand of [['true'], ['node', '-e', 'console.log("Tests 1 passed (1)\\n# pass 1")']]) {
+      const g = await grade({ ...fx.task, testCommand }, prepared, NO_CHANGE, localRunner, scratch);
+      expect(g).toMatchObject({ outcome: 'fail', specs: null });
+      expect(g.note).toMatch(/no structured test report/);
+    }
   });
 
-  it('refuses a PR file that leaves the workspace', async () => {
+  it('fails a PR file that leaves the workspace without writing it', async () => {
     const { fx, scratch, prepared } = await verified();
-    await expect(
-      grade(fx.task, prepared, [{ path: '../escape.txt', content: 'x' }], localRunner, scratch),
-    ).rejects.toThrow(/leaves the workspace/);
+    const g = await grade(
+      fx.task,
+      prepared,
+      { files: [{ path: '../escape.txt', content: 'x' }], deleted: [] },
+      localRunner,
+      scratch,
+    );
+    expect(g).toMatchObject({ outcome: 'fail' });
+    expect(g.note).toMatch(/leaves the workspace/);
+    expect(existsSync(join(scratch, '..', 'escape.txt'))).toBe(false);
   });
 
   it('records timeout, not pass, for a run past the limit, even when the arm ignores the abort signal', async () => {
     const { fx: base, scratch, prepared } = await verified();
     const fx = { ...base, task: { ...base.task, timeoutMs: 150 } };
     const hang = scriptedArm('factory', { 'slug-1': { files: [], hang: true } });
-    const stubborn: Arm = { name: 'baseline', run: () => new Promise(() => {}) };
+    const stubborn: Arm = { name: 'baseline', scripted: false, run: () => new Promise(() => {}) };
     for (const arm of [hang, stubborn]) {
       const row = await runTask(fx.task, 1, prepared, { arm, runner: localRunner, scratch });
       expect(row.outcome).toBe('timeout');
@@ -220,7 +282,7 @@ describe.skipIf(POSIX_ONLY)('rows', () => {
 
   it('records a timeout when the hidden tests themselves run too long', async () => {
     const { fx, scratch, prepared } = await verified();
-    const slow = { ...fx.task, testCommand: ['sleep', '5'], timeoutMs: 200 };
-    expect((await grade(slow, prepared, [], localRunner, scratch)).outcome).toBe('timeout');
+    const slow = { ...fx.task, testCommand: ['node', '-e', 'setTimeout(() => {}, 5000)'], timeoutMs: 200 };
+    expect((await grade(slow, prepared, NO_CHANGE, localRunner, scratch)).outcome).toBe('timeout');
   });
 });

@@ -1,6 +1,8 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the strings are source text being mutated
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -9,6 +11,7 @@ const REPORT = 'bench/test/report.test.ts';
 const CAGE = 'bench/test/cage-mount.test.ts';
 const ARMS = 'bench/test/arms.test.ts';
 const CLI = 'bench/test/cli.test.ts';
+const CLOSURE = 'bench/test/closure.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -43,6 +46,18 @@ const MUTANTS = [
     tests: [SETUP],
   },
   {
+    name: 'tag-refs-allowed',
+    claim: 'a tag ref in the cage source is reported, since it can name the fix commit',
+    edits: [
+      [
+        'bench/workspace.ts',
+        "ref.startsWith('refs/remotes/') || ref.startsWith('refs/tags/')",
+        "ref.startsWith('refs/remotes/')",
+      ],
+    ],
+    tests: [SETUP],
+  },
+  {
     name: 'overlay-skips-hidden-tests',
     claim: 'grading puts the hidden tests back over the PR files, so a PR cannot replace them',
     edits: [
@@ -51,35 +66,21 @@ const MUTANTS = [
     tests: [SETUP],
   },
   {
-    name: 'exit-code-ignored',
-    claim: 'a failing hidden test run is recorded as fail, never pass (false-pass detection)',
-    edits: [['bench/grade.ts', 'if (ran.code !== 0) return', 'if (false) return']],
-    tests: [SETUP],
-  },
-  {
-    name: 'no-test-evidence-needed',
-    claim: 'an exit 0 with no test summary is a fail (false-pass detection)',
-    edits: [['bench/grade.ts', 'if (!new RegExp(task.expect).test(output))', 'if (false)']],
-    tests: [SETUP],
-  },
-  {
     name: 'base-pass-accepted',
     claim: 'hidden tests that pass at the reverted base make the task refused',
-    edits: [['bench/grade.ts', "return base.outcome === 'fail'", "return true || base.outcome === 'fail'"]],
+    edits: [['bench/grade.ts', "if (base.outcome !== 'fail')", 'if (false)']],
     tests: [SETUP],
   },
   {
     name: 'base-crash-accepted',
     claim: 'a crash at the base that is not a test failure does not count as the hidden tests failing',
-    edits: [
-      ['bench/grade.ts', "if (base.outcome === 'fail' && !new RegExp(task.baseFail).test(base.output))", 'if (false)'],
-    ],
+    edits: [['bench/grade.ts', 'hiddenFailed === true', 'true']],
     tests: [SETUP],
   },
   {
     name: 'unverified-task-runs',
     claim: 'a task whose hidden tests were never checked at the base does not run',
-    edits: [['bench/run.ts', "if (!existsSync(join(prepared.dir, 'verified.json')))", 'if (false)']],
+    edits: [['bench/run.ts', "if (!existsSync(verifiedFile))", 'if (false)']],
     tests: [SETUP],
   },
   {
@@ -151,6 +152,14 @@ const MUTANTS = [
     tests: [REPORT],
   },
   {
+    name: 'factory-grades-wrong-head',
+    claim: 'the factory arm grades the files of the PR head it reports',
+    edits: [
+      ['bench/arms-live.ts', 'handle.host.files(handle.repo, change.number, change.headSha)', 'Promise.resolve([])'],
+    ],
+    tests: [ARMS],
+  },
+  {
     name: 'login-gate-off',
     claim: 'the real Claude baseline does not start until the operator confirms the login',
     edits: [['bench/run.ts', "if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1')", 'if (false)']],
@@ -169,12 +178,304 @@ const MUTANTS = [
     tests: [CLI],
   },
   {
-    name: 'factory-grades-wrong-head',
-    claim: 'the factory arm grades the files of the PR head it reports',
+    name: 'bin-skips-login-gate',
+    claim: '--bin does not skip the login gate',
     edits: [
-      ['bench/arms-live.ts', 'handle.host.files(handle.repo, change.number, change.headSha)', 'Promise.resolve([])'],
+      [
+        'bench/run.ts',
+        "if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1')",
+        "if (values.bin === undefined && process.env.AW_BENCH_LOGIN_CONFIRMED !== '1')",
+      ],
+    ],
+    tests: [CLI],
+  },
+  {
+    name: 'bin-skips-task-gate',
+    claim: '--bin does not skip the task confirmation gate',
+    edits: [['bench/run.ts', 'if (!task.confirmed) throw', 'if (values.bin === undefined && !task.confirmed) throw']],
+    tests: [CLI],
+  },
+  {
+    name: 'cage-default-allowlist',
+    claim: 'a bench cage gets the bench allowlist, not the default one with github and the npm registry',
+    edits: [['bench/cage.ts', 'allowlist: BENCH_ALLOWLIST', 'allowlist: undefined']],
+    tests: [CAGE],
+  },
+  {
+    name: 'allowlist-widened',
+    claim: 'the bench allowlist holds the model API and nothing else',
+    edits: [['bench/cage.ts', "['api.anthropic.com']", "['api.anthropic.com', 'github.com']"]],
+    tests: [CAGE],
+  },
+  {
+    name: 'cage-without-deps',
+    claim: 'a bench cage holds the pre-installed dependencies, so tests run without the registry',
+    edits: [['bench/cage.ts', 'cpSync(modules,', 'void (modules,']],
+    tests: [CAGE],
+  },
+  {
+    name: 'cage-tracks-deps',
+    claim: 'the pre-installed dependencies stay out of the cage repo index',
+    edits: [
+      [
+        'bench/cage.ts',
+        "appendFileSync(join(view.workdir, '.git', 'info', 'exclude'), 'node_modules/\\n');",
+        'void 0;',
+      ],
+    ],
+    tests: [CAGE],
+  },
+  {
+    name: 'run-uses-bare-driver',
+    claim: 'the live baseline builds its cage from BenchCage',
+    edits: [['bench/run.ts', 'new BenchCage(', 'new SandboxDriver(']],
+    tests: [CLI],
+  },
+  {
+    name: 'own-copy-allowed',
+    claim: 'an installed copy of the project newer than the base is refused',
+    edits: [['bench/workspace.ts', '.filter(([, version]) => newerThan(version, base))', '.filter(() => false)']],
+    tests: [CLOSURE, SETUP],
+  },
+  {
+    name: 'own-copy-comparison-reversed',
+    claim: 'a newer copy is judged by its version, not an older one',
+    edits: [['bench/workspace.ts', 'return (a[i] ?? 0) > (b[i] ?? 0);', 'return (a[i] ?? 0) < (b[i] ?? 0);']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'install-check-skipped',
+    claim: 'prepare refuses an install that leaves a newer copy of the project',
+    edits: [['bench/workspace.ts', 'if (stale.length > 0) throw', 'if (false) throw']],
+    tests: [SETUP],
+  },
+  {
+    name: 'package-links-kept',
+    claim: 'the upstream repository, homepage and bugs links are stripped from package.json',
+    edits: [['bench/workspace.ts', 'for (const key of UPSTREAM_FIELDS) delete meta[key];', 'void UPSTREAM_FIELDS;']],
+    tests: [CLOSURE, SETUP],
+  },
+  {
+    name: 'package-links-not-applied',
+    claim: 'prepare strips the package links before the cage source is committed',
+    edits: [['bench/workspace.ts', 'neutralisePackage(source);', 'void source;']],
+    tests: [SETUP],
+  },
+  {
+    name: 'ticket-keeps-url',
+    claim: 'the ticket carries no link to the upstream issue',
+    edits: [['bench/arms-live.ts', 'url: null,', 'url: `https://github.com/${task.repo}/issues/${task.issue}`,']],
+    tests: [ARMS],
+  },
+  {
+    name: 'ticket-keeps-links',
+    claim: 'links to the host and the registry are cut from the ticket body',
+    edits: [['bench/arms-live.ts', "task.body.replace(LINK, '[link removed]')", 'task.body']],
+    tests: [ARMS],
+  },
+  {
+    name: 'ticket-id-names-task',
+    claim: 'the ticket id does not carry the task id, which holds the issue number',
+    edits: [
+      [
+        'bench/arms-live.ts',
+        "id: `bench/t-${createHash('sha256').update(task.id).digest('hex').slice(0, 8)}`,",
+        'id: `bench/${task.id}`,',
+      ],
     ],
     tests: [ARMS],
+  },
+  {
+    name: 'protected-paths-off',
+    claim: 'a PR path into node_modules, the runner config or package files is refused',
+    edits: [['bench/protected.ts', 'return PROTECTED.some((pattern) => pattern.test(rel))', 'return false']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'node-modules-not-protected',
+    claim: 'a PR cannot write under node_modules',
+    edits: [['bench/protected.ts', '/(^|\\/)node_modules(\\/|$)/i,', '/(^|\\/)zz-node-modules(\\/|$)/i,']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'node-modules-case-sensitive',
+    claim: 'node_modules is protected whatever the case',
+    edits: [['bench/protected.ts', '/(^|\\/)node_modules(\\/|$)/i,', '/(^|\\/)node_modules(\\/|$)/,']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'package-json-not-protected',
+    claim: 'a PR cannot rewrite package.json',
+    edits: [['bench/protected.ts', '/(^|\\/)package\\.json$/i,', '/(^|\\/)zz-package\\.json$/i,']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'runner-config-not-protected',
+    claim: 'a PR cannot add or change the runner config',
+    edits: [
+      [
+        'bench/protected.ts',
+        '/(^|\\/)(vitest|vite|jest|mocha|ava|babel)\\.(config|workspace)[^/]*$/i,',
+        '/(^|\\/)zz-config$/i,',
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'report-file-not-protected',
+    claim: 'a PR cannot write the grader report directory',
+    edits: [['bench/protected.ts', '/(^|\\/)\\.aw-bench(\\/|$)/i,', '/(^|\\/)zz-aw-bench(\\/|$)/i,']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'backslash-path-slips-through',
+    claim: 'a PR path with backslashes is normalised before it is judged',
+    edits: [['bench/protected.ts', "path.replace(/\\\\/g, '/')", 'path']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'graded-spec-editable',
+    claim: 'a PR cannot edit or delete a spec file the grader runs',
+    edits: [['bench/grade.ts', 'if (graded.has(normal(path))) return', 'if (false) return']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'symlink-write-allowed',
+    claim: 'a PR path through a symbolic link in the tree is refused',
+    edits: [['bench/grade.ts', 'if (throughLink(work, edit.path))', 'if (false)']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'symlink-delete-allowed',
+    claim: 'a PR deletion through a symbolic link in the tree is refused',
+    edits: [['bench/grade.ts', 'if (throughLink(work, dirname(rel)))', 'if (false)']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'deletions-not-applied',
+    claim: 'a PR deletion or the old side of a rename is applied before grading',
+    edits: [
+      [
+        'bench/grade.ts',
+        'for (const rel of change.deleted) {\n    let target',
+        'for (const rel of [] as string[]) {\n    let target',
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'hidden-spec-optional',
+    claim: 'every spec file must appear in the structured report with a nonzero pass count',
+    edits: [['bench/grade.ts', '(specFor(specs, rel)?.passed ?? 0) === 0', 'false']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'failures-ignored',
+    claim: 'one failed test in the report fails the grade',
+    edits: [['bench/grade.ts', 'if (failed > 0 || ran.code !== 0)', 'if (ran.code !== 0)']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'exit-code-ignored',
+    claim: 'a nonzero exit is recorded as fail even when the report reads green',
+    edits: [['bench/grade.ts', 'if (failed > 0 || ran.code !== 0)', 'if (failed > 0)']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'unstructured-output-passes',
+    claim: 'a run with no structured report is a fail whatever it printed',
+    edits: [
+      [
+        'bench/grade.ts',
+        'const specs = parseSpecs(task.reporter, readResult(work));',
+        'const specs = parseSpecs(task.reporter, readResult(work)) ?? [];',
+      ],
+    ],
+    tests: [SETUP, CLOSURE],
+  },
+  {
+    name: 'load-failure-not-a-failure',
+    claim: 'a spec file that failed to load counts as one failure',
+    edits: [['bench/grade.ts', "failed === 0 && t.status === 'failed' ? 1 : failed", 'failed']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'skipped-counts-as-passed',
+    claim: 'a skipped test is not a pass',
+    edits: [
+      [
+        'bench/grade.ts',
+        "statuses.filter((s) => s === 'passed').length",
+        "statuses.filter((s) => s !== 'failed').length",
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'deleted-files-lost-in-baseline',
+    claim: 'the baseline arm reads the files the session deleted',
+    edits: [['bench/arms-live.ts', 'deleted: await deletedSince(shell, before.out.trim()),', 'deleted: [],']],
+    tests: [ARMS],
+  },
+  {
+    name: 'deleted-files-lost-in-factory',
+    claim: 'the factory arm reads the paths the PR removed or renamed away',
+    edits: [['bench/arms-live.ts', 'deleted: await handle.removed(change),', 'deleted: [],']],
+    tests: [ARMS],
+  },
+  {
+    name: 'rename-source-dropped',
+    claim: 'the old name of a renamed file counts as deleted',
+    edits: [['bench/arms-live.ts', "file.status === 'renamed'", "file.status === 'zz'"]],
+    tests: [ARMS],
+  },
+  {
+    name: 'fix-script-keeps-protected-paths',
+    claim: 'the upstream fix replayed as a change leaves out the package and runner files the grader refuses',
+    edits: [['bench/workspace.ts', ' && protectedReason(rel) === null);', ');']],
+    tests: [SETUP],
+  },
+  {
+    name: 'tokens-drop-cache-read',
+    claim: 'the token total carries the cache-read column',
+    edits: [['bench/arms-live.ts', 'cacheRead: seen.reduce((n, u) => n + u.cacheReadTokens, 0),', 'cacheRead: 0,']],
+    tests: [ARMS],
+  },
+  {
+    name: 'scripted-rows-count',
+    claim: 'scripted rows never reach a verdict',
+    edits: [['bench/report.ts', 'rows.filter((r) => !r.scripted)', 'rows.filter(() => true)']],
+    tests: [REPORT],
+  },
+  {
+    name: 'merge-rate-counts-set-a',
+    claim: 'the merge rate reads Set B rows only',
+    edits: [['bench/report.ts', "const setB = factory.filter((r) => r.set === 'B');", 'const setB = factory;']],
+    tests: [REPORT],
+  },
+  {
+    name: 'minutes-per-row',
+    claim: 'human minutes are divided by the PRs opened, not by every row',
+    edits: [
+      [
+        'bench/report.ts',
+        "const opened = factory.filter((r) => r.set === 'B' || r.outcome === 'pass' || r.outcome === 'fail');",
+        'const opened = factory;',
+      ],
+    ],
+    tests: [REPORT],
+  },
+  {
+    name: 'overhead-drops-prepare',
+    claim: 'the overhead counts grading and prepare time',
+    edits: [['bench/report.ts', 'prepare: Math.max(...mine.map((r) => r.prepareMs)) / 1000,', 'prepare: 0,']],
+    tests: [REPORT],
+  },
+  {
+    name: 'old-rows-accepted',
+    claim: 'rows from an older harness are refused',
+    edits: [['bench/report.ts', "typeof parsed.scripted !== 'boolean' ||", 'false ||']],
+    tests: [REPORT],
   },
 ];
 
@@ -209,5 +510,7 @@ for (const mutant of MUTANTS) {
     for (const [path, text] of originals) writeFileSync(path, text);
   }
 }
-writeFileSync(process.env.MUTANT_OUT ?? '/tmp/swarm-P2-1/owner/mutants.txt', `${lines.join('\n')}\n`);
+const out = process.env.MUTANT_OUT ?? join(mkdtempSync(join(tmpdir(), 'bench-mutants-')), 'mutants.txt');
+writeFileSync(out, `${lines.join('\n')}\n`);
+console.log(`wrote ${out}`);
 process.exit(bad === 0 ? 0 : 1);

@@ -3,6 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tempDir } from '../../server/test/helpers.ts';
 import type { TaskA } from '../model.ts';
+import { localRunner } from '../runner.ts';
+import { prepareTask } from '../workspace.ts';
 
 export const BUGGY = `export const slug = (s) => s.toLowerCase().replace(/ /g, '-');\n`;
 export const FIXED = `export const slug = (s) => s.trim().toLowerCase().replace(/\\s+/g, '-');\n`;
@@ -25,6 +27,9 @@ const FIXED_TEST = `${OLD_TEST}test('tabs', () => {
 });
 `;
 
+const PACKAGE =
+  '{"name":"slug","version":"1.0.0","type":"module","repository":"acme/proj","homepage":"https://github.com/acme/proj","bugs":"https://github.com/acme/proj/issues"}\n';
+
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
     encoding: 'utf8',
@@ -46,7 +51,7 @@ export const makeFixture = (over: Partial<TaskA> = {}, options: { duplicate?: bo
   const reposRoot = tempDir('bench-repos');
   const work = tempDir('bench-work');
   git(work, 'init', '-q', '-b', 'main');
-  put(work, 'package.json', '{"type":"module"}\n');
+  put(work, 'package.json', PACKAGE);
   put(work, 'src/slug.js', BUGGY);
   put(work, 'test/basic.test.js', OLD_TEST);
   put(work, 'test/visible.test.js', OLD_TEST.replace('lowercases', 'visible'));
@@ -54,6 +59,7 @@ export const makeFixture = (over: Partial<TaskA> = {}, options: { duplicate?: bo
   git(work, 'commit', '-q', '-m', 'base');
   const baseSha = git(work, 'rev-parse', 'HEAD');
   put(work, 'src/slug.js', FIXED);
+  put(work, 'package.json', PACKAGE.replace('1.0.0', '1.0.1'));
   put(work, 'test/basic.test.js', FIXED_TEST);
   put(
     work,
@@ -74,14 +80,26 @@ export const makeFixture = (over: Partial<TaskA> = {}, options: { duplicate?: bo
     body: 'slug("  a   b ") should be "a-b".',
     fixSha,
     hiddenPaths: ['test/slug-hidden.test.js', 'test/basic.test.js'],
+    specs: ['test/slug-hidden.test.js', 'test/basic.test.js'],
     installCommand: null,
     testCommand: ['node', '--test'],
-    expect: '(pass|# pass) [1-9]',
-    baseFail: '(fail|# fail) [1-9]',
+    reporter: 'node-test',
     image: 'unused-by-the-local-runner',
     timeoutMs: 60_000,
     confirmed: false,
     ...over,
   };
   return { reposRoot, fixSha, baseSha, task };
+};
+
+export const prepareFixture = async (over: Partial<TaskA> = {}) => {
+  const fx = makeFixture(over);
+  const cache = tempDir('bench-cache');
+  const scratch = join(cache, 'grading');
+  const prepared = await prepareTask(fx.task, {
+    cache,
+    repoUrl: (repo) => join(fx.reposRoot, `${repo}.git`),
+    runner: localRunner,
+  });
+  return { fx, cache, scratch, prepared };
 };

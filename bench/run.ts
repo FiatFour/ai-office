@@ -6,17 +6,17 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { cageShells } from '../server/agents/cage-shell.ts';
 import { imageFor } from '../server/config.ts';
-import { SandboxDriver } from '../server/sandbox/container.ts';
 import { pickEngine } from '../server/sandbox/engine.ts';
 import type { Arm } from './arms.ts';
 import { type Script, scriptedArm } from './arms.ts';
 import { baselineArm, ticketOf } from './arms-live.ts';
+import { BenchCage } from './cage.ts';
 import { grade, revertSanity } from './grade.ts';
 import { readMergeState } from './merge-state.ts';
 import { parseTask, type Row, type Task, type TaskA, TaskRefused } from './model.ts';
 import { readRows } from './report.ts';
 import { dockerRunner, localRunner, type Runner } from './runner.ts';
-import { fixFiles, mirrorPath, type Prepared, prepareTask } from './workspace.ts';
+import { fixChange, mirrorPath, type Prepared, prepareTask } from './workspace.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const NEEDS_LOGIN = 'not run, needs operator login confirmation';
@@ -35,10 +35,12 @@ export interface RunContext {
 const failure = (message: string): string => message.replace(/\s+/g, ' ').slice(0, 300);
 
 export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx: RunContext): Promise<Row> => {
-  if (!existsSync(join(prepared.dir, 'verified.json')))
+  const verifiedFile = join(prepared.dir, 'verified.json');
+  if (!existsSync(verifiedFile))
     throw new TaskRefused(
       `task ${task.id} was never verified: run prepare, which checks the hidden tests fail at the base`,
     );
+  const { prepareMs } = JSON.parse(readFileSync(verifiedFile, 'utf8')) as { prepareMs: number };
   const clock = ctx.clock ?? performance;
   const wallStart = clock.now();
   const abort = new AbortController();
@@ -49,7 +51,7 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
       resolveTimeout('timeout');
     }, task.timeoutMs);
   });
-  const base = { task: task.id, set: 'A', arm: ctx.arm.name, run } as const;
+  const base = { task: task.id, set: 'A', arm: ctx.arm.name, scripted: ctx.arm.scripted, run } as const;
   const agentStart = clock.now();
   const outcome = await Promise.race([
     ctx.arm.run(task, prepared, abort.signal).then(
@@ -66,6 +68,7 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
     return {
       ...base,
       ...empty,
+      prepareMs,
       outcome: 'timeout',
       wallMs: wall(),
       agentMs,
@@ -75,15 +78,17 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
     return {
       ...base,
       ...empty,
+      prepareMs,
       outcome: 'error',
       wallMs: wall(),
       agentMs,
       note: failure(outcome.error instanceof Error ? outcome.error.message : String(outcome.error)),
     };
   const { done } = outcome;
-  const graded = await grade(task, prepared, done.files, ctx.runner, ctx.scratch);
+  const graded = await grade(task, prepared, { files: done.files, deleted: done.deleted }, ctx.runner, ctx.scratch);
   return {
     ...base,
+    prepareMs,
     outcome: graded.outcome,
     reviewRounds: done.reviewRounds,
     tokens: done.tokens,
@@ -96,11 +101,13 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
 };
 
 export const verifyTask = async (task: TaskA, prepared: Prepared, runner: Runner, scratch: string) => {
+  const started = performance.now();
   const sanity = await revertSanity(task, prepared, runner, scratch);
   if (!sanity.failsAtBase) throw new TaskRefused(`task ${task.id}: ${sanity.note}`);
+  const prepareMs = prepared.prepareMs + Math.round(performance.now() - started);
   writeFileSync(
     join(prepared.dir, 'verified.json'),
-    `${JSON.stringify({ baseSha: prepared.baseSha, note: sanity.note })}\n`,
+    `${JSON.stringify({ baseSha: prepared.baseSha, note: sanity.note, prepareMs })}\n`,
   );
   return sanity;
 };
@@ -135,24 +142,23 @@ const runBaseline = async (
   values: BaselineValues,
   wiring: { repoUrl: (repo: string) => string; runner: Runner; scratch: string },
 ): Promise<number> => {
-  if (values.bin === undefined) {
-    if (!task.confirmed) throw new TaskRefused(`task ${task.id} is not confirmed by the operator: no model run`);
-    if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1') throw new TaskRefused(NEEDS_LOGIN);
-  }
+  if (!task.confirmed) throw new TaskRefused(`task ${task.id} is not confirmed by the operator: no model run`);
+  if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1') throw new TaskRefused(NEEDS_LOGIN);
   if (values.home === undefined)
     throw new TaskRefused('--arm baseline needs --home <dir>, the cage home that holds the login');
   const engine = await pickEngine(undefined, process.env);
   if (engine === null) throw new TaskRefused('no container engine is available for the cage');
-  const driver = new SandboxDriver({
+  const prepared = await prepareTask(task, { cache: values.cache, ...wiring });
+  await verifyTask(task, prepared, wiring.runner, wiring.scratch);
+  const driver = new BenchCage({
     engine,
     home: resolve(values.home),
     hq: randomBytes(3).toString('hex'),
     image: imageFor(process.env),
     project: 'agent-works-bench',
+    installed: prepared.installed,
   });
   try {
-    const prepared = await prepareTask(task, { cache: values.cache, ...wiring });
-    await verifyTask(task, prepared, wiring.runner, wiring.scratch);
     const shells = cageShells(async () => driver, prepared.source);
     const arm = baselineArm(() => shells('baseline', ticketOf(task).id), {
       ...(values.bin === undefined ? {} : { bin: values.bin }),
@@ -217,10 +223,10 @@ const main = async (argv: string[]): Promise<number> => {
     if (task.set !== 'A') throw new TaskRefused(`task ${task.id} is a Set B task`);
     const prepared = await prepareTask(task, { cache: values.cache, repoUrl, runner });
     await verifyTask(task, prepared, runner, scratch);
-    const files = await fixFiles(task, mirrorPath(values.cache, task.repo));
-    const graded = await grade(task, prepared, files, runner, scratch);
+    const change = await fixChange(task, mirrorPath(values.cache, task.repo));
+    const graded = await grade(task, prepared, change, runner, scratch);
     console.log(
-      `${task.id}: the upstream fix (${files.map((f) => f.path).join(', ')}) grades ${graded.outcome}: ${graded.note}`,
+      `${task.id}: the upstream fix (${change.files.map((f) => f.path).join(', ')}) grades ${graded.outcome}: ${graded.note}`,
     );
     return graded.outcome === 'pass' ? 0 : 1;
   }
@@ -228,7 +234,7 @@ const main = async (argv: string[]): Promise<number> => {
     const scripts: Record<string, Script> = {};
     for (const t of tasks) {
       if (t.set !== 'A') continue;
-      scripts[t.id] = { files: await fixFiles(t, mirrorPath(values.cache, t.repo)) };
+      scripts[t.id] = await fixChange(t, mirrorPath(values.cache, t.repo));
     }
     console.log(JSON.stringify(scripts));
     return 0;

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -28,9 +28,9 @@ const GOOD = {
   body: '',
   fixSha: 'a'.repeat(40),
   hiddenPaths: ['t.test.ts'],
+  specs: ['t.test.ts'],
   testCommand: ['true'],
-  expect: '.',
-  baseFail: '.',
+  reporter: 'vitest',
   image: 'i',
 };
 
@@ -60,6 +60,18 @@ describe.skipIf(!canSpawnTs)('the harness command line', () => {
     expect(ran.stderr).toContain('not run, needs operator login confirmation');
   });
 
+  it('applies both gates when --bin points at another binary', () => {
+    const open = withTasks({ ...GOOD, confirmed: false });
+    const shut = withTasks({ ...GOOD, confirmed: true });
+    const args = (dir: string) => ['run', '--task', 'a-1', '--arm', 'baseline', '--bin', '/bin/true', '--tasks', dir];
+    const unconfirmed = cli(args(open), { AW_BENCH_LOGIN_CONFIRMED: '1' });
+    expect(unconfirmed.status).toBe(3);
+    expect(unconfirmed.stderr).toContain('not confirmed by the operator: no model run');
+    const noLogin = cli(args(shut), { AW_BENCH_LOGIN_CONFIRMED: '' });
+    expect(noLogin.status).toBe(3);
+    expect(noLogin.stderr).toContain('not run, needs operator login confirmation');
+  });
+
   it('does not wire the live factory arm into the command line', () => {
     const ran = cli(['run', '--task', 'a-1', '--arm', 'factory', '--tasks', withTasks({ ...GOOD, confirmed: true })]);
     expect(ran.status).toBe(3);
@@ -70,6 +82,16 @@ describe.skipIf(!canSpawnTs)('the harness command line', () => {
     const dir = withTasks(GOOD);
     expect(cli(['run', '--task', 'a-1', '--tasks', dir]).stderr).toContain('needs --scripts');
     expect(cli(['run', '--task', 'nope', '--tasks', dir]).stderr).toContain('no task nope');
+  });
+});
+
+describe('the cage a model run gets', () => {
+  it('is built from BenchCage, which owns the allowlist, and from no bare SandboxDriver', () => {
+    const dir = fileURLToPath(new URL('..', import.meta.url));
+    const text = (f: string) => readFileSync(join(dir, f), 'utf8');
+    const sources = readdirSync(dir).filter((f) => f.endsWith('.ts'));
+    expect(sources.filter((f) => /new SandboxDriver\(/.test(text(f)))).toEqual([]);
+    expect(text('run.ts')).toMatch(/new BenchCage\(/);
   });
 });
 

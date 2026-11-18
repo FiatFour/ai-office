@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { CageShell } from '../server/agents/claude-code.ts';
@@ -6,17 +7,23 @@ import { AgentFailed, type Ticket, type Usage } from '../server/agents/runtime.t
 import type { GitHost } from '../server/githost/host.ts';
 import { type RunningHq, startHq } from '../server/hq.ts';
 import type { ModeFactory } from '../server/modes/cages.ts';
+import { runBinary } from '../server/sandbox/engine.ts';
 import { type Arm, ArmFailed, type ArmRun } from './arms.ts';
 import type { TaskA, Tokens } from './model.ts';
 
-export const ticketOf = (task: TaskA): Ticket => ({
-  id: `bench/${task.id}`,
-  kind: 'defect',
-  title: task.title,
-  body: task.body === '' ? task.title : task.body,
-  url: `https://github.com/${task.repo}/issues/${task.issue}`,
-  risk: null,
-});
+const LINK = /\b(?:https?:\/\/)?(?:[\w-]+\.)*(?:github\.com|githubusercontent\.com|npmjs\.com|npmjs\.org)\S*/gi;
+
+export const ticketOf = (task: TaskA): Ticket => {
+  const body = task.body.replace(LINK, '[link removed]');
+  return {
+    id: `bench/t-${createHash('sha256').update(task.id).digest('hex').slice(0, 8)}`,
+    kind: 'defect',
+    title: task.title,
+    body: body === '' ? task.title : body,
+    url: null,
+    risk: null,
+  };
+};
 
 export const tokensOf = (usages: readonly (Usage | null)[]): Tokens | null => {
   const seen = usages.filter((u): u is Usage => u !== null);
@@ -34,10 +41,21 @@ export interface BaselineOptions {
   readonly bin?: string;
 }
 
+const GIT = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external='];
+
+const deletedSince = async (shell: CageShell, since: string): Promise<string[]> => {
+  const ran = await shell.exec([...GIT, 'diff', '--name-only', '--no-renames', '--diff-filter=D', '-z', since, 'HEAD']);
+  if (ran.code !== 0) throw new ArmFailed(`the cage diff for deleted files failed: ${ran.err.trim().slice(-200)}`);
+  return ran.out.split('\0').filter(Boolean);
+};
+
 export const baselineArm = (shellFor: (task: TaskA) => CageShell, options: BaselineOptions = {}): Arm => ({
   name: 'baseline',
+  scripted: false,
   async run(task, _prepared, signal) {
     const shell = shellFor(task);
+    const before = await shell.exec([...GIT, 'rev-parse', 'HEAD']);
+    if (before.code !== 0) throw new ArmFailed(`the cage repo has no HEAD: ${before.err.trim()}`);
     const runtime = claudeCode({
       shell: () => shell,
       ...(options.model === undefined ? {} : { model: options.model }),
@@ -56,6 +74,7 @@ export const baselineArm = (shellFor: (task: TaskA) => CageShell, options: Basel
     if (result.role !== 'author') throw new ArmFailed('the baseline runtime returned a review');
     return {
       files: result.files,
+      deleted: await deletedSince(shell, before.out.trim()),
       reviewRounds: null,
       tokens: tokensOf([result.usage]),
       quotaWindows: null,
@@ -71,6 +90,7 @@ export interface FactoryHandle {
   readonly repo: string;
   readonly base: string;
   readonly home: string;
+  readonly removed: (change: { readonly number: number; readonly headSha: string }) => Promise<string[]>;
   readonly close?: () => Promise<void>;
 }
 
@@ -81,8 +101,26 @@ export interface FactoryEnv {
 
 const STOPS = new Set(['ready_to_merge', 'round_limit', 'job_failed']);
 
+export const removedPaths = (pullFiles: readonly unknown[]): string[] =>
+  pullFiles.flatMap((f) => {
+    const file = f as { status?: string; filename?: string; previous_filename?: string };
+    if (file.status === 'removed' && typeof file.filename === 'string') return [file.filename];
+    if (file.status === 'renamed' && typeof file.previous_filename === 'string') return [file.previous_filename];
+    return [];
+  });
+
+export const ghRemovedPaths = async (repo: string, number: number): Promise<string[]> => {
+  const ran = await runBinary('gh', ['api', '--paginate', '--slurp', `repos/${repo}/pulls/${number}/files`], {
+    timeoutMs: 60_000,
+  });
+  if (ran.code !== 0)
+    throw new ArmFailed(`gh could not list the files of ${repo}#${number}: ${ran.err.trim().slice(-200)}`);
+  return removedPaths((JSON.parse(ran.out) as unknown[][]).flat());
+};
+
 export const factoryArm = (env: FactoryEnv): Arm => ({
   name: 'factory',
+  scripted: false,
   async run(task, _prepared, signal): Promise<ArmRun> {
     const ticket = ticketOf(task);
     const handle = await env.open(task, ticket);
@@ -101,6 +139,7 @@ export const factoryArm = (env: FactoryEnv): Arm => ({
       const view = hq.snapshot().mode;
       return {
         files: files.flatMap((f) => (f.content === null ? [] : [{ path: f.path, content: f.content }])),
+        deleted: await handle.removed(change),
         reviewRounds: view?.rounds[ticket.id] ?? 0,
         tokens: tokensOf(view?.usage[ticket.id] ?? []),
         quotaWindows: null,

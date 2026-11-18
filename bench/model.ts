@@ -1,5 +1,9 @@
+import type { FileEdit } from '../server/githost/host.ts';
+
 export type ArmName = 'factory' | 'baseline';
 export type Outcome = 'pass' | 'fail' | 'timeout' | 'error';
+export type Reporter = 'vitest' | 'node-test';
+export const REPORTERS: readonly Reporter[] = ['vitest', 'node-test'];
 
 export interface TaskA {
   readonly set: 'A';
@@ -10,10 +14,10 @@ export interface TaskA {
   readonly body: string;
   readonly fixSha: string;
   readonly hiddenPaths: readonly string[];
+  readonly specs: readonly string[];
   readonly installCommand: readonly string[] | null;
   readonly testCommand: readonly string[];
-  readonly expect: string;
-  readonly baseFail: string;
+  readonly reporter: Reporter;
   readonly image: string;
   readonly timeoutMs: number;
   readonly confirmed: boolean;
@@ -37,15 +41,22 @@ export interface Tokens {
   readonly cacheCreation: number;
 }
 
+export interface Change {
+  readonly files: readonly FileEdit[];
+  readonly deleted: readonly string[];
+}
+
 export interface Row {
   readonly task: string;
   readonly set: 'A' | 'B';
   readonly arm: ArmName;
+  readonly scripted: boolean;
   readonly run: number;
   readonly outcome: Outcome;
   readonly reviewRounds: number | null;
   readonly wallMs: number;
   readonly agentMs: number;
+  readonly prepareMs: number;
   readonly tokens: Tokens | null;
   readonly quotaWindows: number | null;
   readonly humanMinutes: number | null;
@@ -106,17 +117,9 @@ export const parseTask = (raw: unknown, file: string): Task => {
       throw new TaskRefused(`${where}: hiddenPaths entry ${String(p)} is not a safe relative path`);
     return p;
   });
-  const expect = text(o, 'expect', where);
-  const baseFail = text(o, 'baseFail', where);
-  for (const [key, source] of [
-    ['expect', expect],
-    ['baseFail', baseFail],
-  ] as const)
-    try {
-      new RegExp(source);
-    } catch {
-      throw new TaskRefused(`${where}: ${key} is not a regular expression`);
-    }
+  const specs = argv(o, 'specs', where);
+  const reporter = REPORTERS.find((r) => r === o.reporter);
+  if (reporter === undefined) throw new TaskRefused(`${where}: reporter must be one of ${REPORTERS.join(', ')}`);
   return {
     set: 'A',
     id,
@@ -126,11 +129,11 @@ export const parseTask = (raw: unknown, file: string): Task => {
     body: typeof o.body === 'string' ? o.body : '',
     fixSha: o.fixSha,
     hiddenPaths,
+    specs,
     installCommand:
       o.installCommand === null || o.installCommand === undefined ? null : argv(o, 'installCommand', where),
     testCommand: argv(o, 'testCommand', where),
-    expect,
-    baseFail,
+    reporter,
     image: text(o, 'image', where),
     timeoutMs: typeof o.timeoutMs === 'number' ? o.timeoutMs : 1_800_000,
     confirmed,

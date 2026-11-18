@@ -5,6 +5,7 @@ import type { Prepared } from './workspace.ts';
 
 export interface ArmRun {
   readonly files: readonly FileEdit[];
+  readonly deleted: readonly string[];
   readonly reviewRounds: number | null;
   readonly tokens: Tokens | null;
   readonly quotaWindows: number | null;
@@ -14,6 +15,7 @@ export interface ArmRun {
 
 export interface Arm {
   readonly name: ArmName;
+  readonly scripted: boolean;
   run(task: TaskA, prepared: Prepared, signal: AbortSignal): Promise<ArmRun>;
 }
 
@@ -21,6 +23,7 @@ export class ArmFailed extends Error {}
 
 export interface Script {
   readonly files: readonly FileEdit[];
+  readonly deleted?: readonly string[];
   readonly reviewRounds?: number;
   readonly tokens?: Tokens;
   readonly workMs?: number;
@@ -30,6 +33,7 @@ export interface Script {
 
 export const scriptedArm = (name: ArmName, scripts: Readonly<Record<string, Script>>): Arm => ({
   name,
+  scripted: true,
   async run(task, _prepared, signal) {
     const script = scripts[task.id];
     if (script === undefined) throw new ArmFailed(`no script for ${task.id}`);
@@ -38,6 +42,7 @@ export const scriptedArm = (name: ArmName, scripts: Readonly<Record<string, Scri
     if (script.fail !== undefined) throw new ArmFailed(script.fail);
     return {
       files: script.files,
+      deleted: script.deleted ?? [],
       reviewRounds: name === 'factory' ? (script.reviewRounds ?? 0) : null,
       tokens: script.tokens ?? null,
       quotaWindows: null,

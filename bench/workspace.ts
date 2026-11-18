@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { FileEdit } from '../server/githost/host.ts';
 import { type RunResult, runBinary } from '../server/sandbox/engine.ts';
-import { type TaskA, TaskRefused } from './model.ts';
+import { type Change, type TaskA, TaskRefused } from './model.ts';
+import { protectedReason } from './protected.ts';
 import type { Runner } from './runner.ts';
 
 const INSTALL_TIMEOUT_MS = 900_000;
 
 export interface Prepared {
+  readonly prepareMs: number;
   readonly dir: string;
   readonly source: string;
   readonly hidden: string;
@@ -76,6 +79,56 @@ export const gitProblems = async (source: string, fixSha: string): Promise<strin
   return problems;
 };
 
+const UPSTREAM_FIELDS = ['repository', 'homepage', 'bugs'];
+
+export const neutralisePackage = (dir: string): void => {
+  const file = join(dir, 'package.json');
+  if (!existsSync(file)) return;
+  const meta = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+  for (const key of UPSTREAM_FIELDS) delete meta[key];
+  writeFileSync(file, `${JSON.stringify(meta, null, 2)}\n`);
+};
+
+const versionOf = (text: string): [number, number, number] | null => {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(text);
+  return m === null ? null : [Number(m[1]), Number(m[2]), Number(m[3])];
+};
+
+const newerThan = (found: string, base: string): boolean => {
+  const a = versionOf(found);
+  const b = versionOf(base);
+  if (a === null || b === null) return true;
+  for (let i = 0; i < 3; i += 1) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  return false;
+};
+
+export const installedProblems = (installed: string): string[] => {
+  const file = join(installed, 'package.json');
+  if (!existsSync(file)) return [];
+  const own = JSON.parse(readFileSync(file, 'utf8')) as { name?: unknown; version?: unknown };
+  if (typeof own.name !== 'string') return [];
+  const base = typeof own.version === 'string' ? own.version : '';
+  const modules = join(installed, 'node_modules');
+  const copies: Array<[string, string]> = [];
+  const top = join(modules, ...own.name.split('/'), 'package.json');
+  if (existsSync(top))
+    copies.push([
+      `node_modules/${own.name}`,
+      (JSON.parse(readFileSync(top, 'utf8')) as { version?: string }).version ?? '',
+    ]);
+  const store = join(modules, '.pnpm');
+  const prefix = `${own.name.replace('/', '+')}@`;
+  if (existsSync(store))
+    for (const entry of readdirSync(store))
+      if (entry.startsWith(prefix)) copies.push([`node_modules/.pnpm/${entry}`, entry.slice(prefix.length)]);
+  return copies
+    .filter(([, version]) => newerThan(version, base))
+    .map(
+      ([where, version]) =>
+        `${where} is ${version || 'of unknown version'}, newer than the base ${base}, so it may hold the fix`,
+    );
+};
+
 export interface PrepareOptions {
   readonly cache: string;
   readonly repoUrl: (repo: string) => string;
@@ -98,6 +151,7 @@ const mirrorOf = async (task: TaskA, options: PrepareOptions): Promise<string> =
 };
 
 export const prepareTask = async (task: TaskA, options: PrepareOptions): Promise<Prepared> => {
+  const started = performance.now();
   const dir = join(options.cache, 'tasks', task.id);
   rmSync(dir, { recursive: true, force: true });
   const source = join(dir, 'source');
@@ -144,6 +198,7 @@ export const prepareTask = async (task: TaskA, options: PrepareOptions): Promise
     else if (readFileSync(insideOf(source, rel)).equals(readFileSync(copy)))
       throw new TaskRefused(`task ${task.id}: ${rel} is identical before and after the fix, so it cannot be hidden`);
   }
+  neutralisePackage(source);
   await must(source, ['init', '--quiet', '-b', 'main']);
   await must(source, ['add', '-A']);
   await must(source, [
@@ -174,25 +229,31 @@ export const prepareTask = async (task: TaskA, options: PrepareOptions): Promise
     if (ran.code !== 0)
       throw new TaskRefused(`task ${task.id}: install failed: ${(ran.err || ran.out).trim().slice(-300)}`);
   }
-  return { dir, source, hidden, installed, baseSha };
+  const stale = installedProblems(installed);
+  if (stale.length > 0) throw new TaskRefused(`task ${task.id} is not sealed: ${stale.join('; ')}`);
+  return { dir, source, hidden, installed, baseSha, prepareMs: Math.round(performance.now() - started) };
 };
 
-export const fixFiles = async (task: TaskA, mirror: string): Promise<FileEdit[]> => {
-  const listed = await must(mirror, [
-    'diff-tree',
-    '--no-commit-id',
-    '--name-only',
-    '--diff-filter=AM',
-    '-r',
-    '--no-renames',
-    '-z',
-    `${task.fixSha}^`,
-    task.fixSha,
-  ]);
+const listed = async (mirror: string, task: TaskA, filter: string): Promise<string[]> =>
+  (
+    await must(mirror, [
+      'diff-tree',
+      '--no-commit-id',
+      '--name-only',
+      `--diff-filter=${filter}`,
+      '-r',
+      '--no-renames',
+      '-z',
+      `${task.fixSha}^`,
+      task.fixSha,
+    ])
+  )
+    .split('\0')
+    .filter((rel) => rel !== '' && !task.hiddenPaths.includes(rel) && protectedReason(rel) === null);
+
+export const fixChange = async (task: TaskA, mirror: string): Promise<Change> => {
   const files: FileEdit[] = [];
-  for (const rel of listed.split('\0').filter(Boolean)) {
-    if (task.hiddenPaths.includes(rel)) continue;
+  for (const rel of await listed(mirror, task, 'AM'))
     files.push({ path: rel, content: await must(mirror, ['show', `${task.fixSha}:${rel}`]) });
-  }
-  return files;
+  return { files, deleted: await listed(mirror, task, 'D') };
 };

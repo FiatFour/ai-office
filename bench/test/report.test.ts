@@ -1,0 +1,146 @@
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { tempDir } from '../../server/test/helpers.ts';
+import { readMergeState } from '../merge-state.ts';
+import { type Row, TaskRefused } from '../model.ts';
+import { checks, renderReport } from '../report.ts';
+
+const row = (over: Partial<Row>): Row => ({
+  task: 't1',
+  set: 'A',
+  arm: 'factory',
+  run: 1,
+  outcome: 'pass',
+  reviewRounds: 1,
+  wallMs: 60_000,
+  agentMs: 50_000,
+  tokens: { input: 1, output: 2, cacheRead: 3, cacheCreation: 4 },
+  quotaWindows: 0.1,
+  humanMinutes: 5,
+  note: '',
+  ...over,
+});
+
+const byName = (rows: Row[]) => Object.fromEntries(checks(rows).map((c) => [c.name, c.verdict]));
+
+describe('thresholds', () => {
+  it('passes at exactly the thresholds and fails just past each', () => {
+    const five = (n: number, over: Partial<Row>) =>
+      Array.from({ length: 10 }, (_, i) => row({ task: `t${i}`, outcome: i < n ? 'pass' : 'fail', ...over }));
+    expect(byName(five(5, { quotaWindows: 0.1, humanMinutes: 10 }))).toEqual({
+      'Merge rate': 'PASS',
+      Cost: 'PASS',
+      'Human minutes': 'PASS',
+    });
+    expect(byName(five(4, {}))['Merge rate']).toBe('FAIL');
+    expect(byName(five(5, { quotaWindows: 0.11 })).Cost).toBe('FAIL');
+    expect(byName(five(5, { humanMinutes: 10.5 }))['Human minutes']).toBe('FAIL');
+  });
+
+  it('says UNMEASURED, never PASS, when a column was not recorded', () => {
+    const rows = [row({ quotaWindows: null, humanMinutes: null }), row({ task: 't2' })];
+    expect(byName(rows)).toEqual({ 'Merge rate': 'PASS', Cost: 'UNMEASURED', 'Human minutes': 'UNMEASURED' });
+  });
+
+  it('fails cost when nothing merged', () => {
+    expect(byName([row({ outcome: 'fail' })]).Cost).toBe('FAIL');
+  });
+
+  it('counts timeouts and errors against the merge rate and uses factory rows only', () => {
+    const rows = [
+      row({ outcome: 'timeout' }),
+      row({ task: 't2', outcome: 'error' }),
+      row({ task: 't3', arm: 'baseline' }),
+    ];
+    expect(checks(rows)[0]?.value).toBe('0 of 2 (0%)');
+  });
+});
+
+describe('report', () => {
+  it('prints factory and baseline per task and in total, each threshold with its value', () => {
+    const rows = [
+      row({}),
+      row({ arm: 'baseline', reviewRounds: null, outcome: 'fail', quotaWindows: null, humanMinutes: null }),
+      row({ task: 't2', outcome: 'timeout' }),
+    ];
+    const text = renderReport(rows, '2026-11-19');
+    expect(text).toContain('| Merge rate | 1 of 2 (50%) | at least 50% | PASS |');
+    expect(text).toContain(
+      '| Cost | 1 five-hour windows per 5 merged PRs | at most 1 five-hour window per 5 merged PRs | PASS |',
+    );
+    expect(text).toMatch(/\| factory \| 2 \| 1 \|/);
+    expect(text).toMatch(/\| baseline \| 1 \| 0 \|/);
+    expect(text).toMatch(/\| t1 \| A \| pass \|/);
+    expect(text).toMatch(/\| t2 \| A \| timeout \|/);
+  });
+
+  it('shows the spread of every column across runs of the same task', () => {
+    const rows = [1, 2, 3].map((run) =>
+      row({
+        run,
+        wallMs: run * 10_000,
+        reviewRounds: run,
+        tokens: { input: run, output: 0, cacheRead: 0, cacheCreation: 0 },
+      }),
+    );
+    const text = renderReport(rows, 'd');
+    expect(text).toContain('| pass, pass, pass | 2 (1 to 3) | 20 (10 to 30) |');
+    expect(text).toContain('2 (1 to 3) |');
+  });
+
+  it('flags a column that some runs did not record', () => {
+    const text = renderReport([row({ run: 1 }), row({ run: 2, humanMinutes: null })], 'd');
+    expect(text).toContain('5 [1 missing]');
+  });
+
+  it('runs from the command line and writes the markdown beside the rows', () => {
+    const dir = tempDir('bench-report');
+    const file = join(dir, '2026-11-19.jsonl');
+    fs.writeFileSync(file, `${JSON.stringify(row({}))}\n`);
+    const ran = spawnSync('node', [fileURLToPath(new URL('../report.ts', import.meta.url)), file], {
+      encoding: 'utf8',
+    });
+    expect(ran.status).toBe(0);
+    expect(readFileSync(join(dir, '2026-11-19.md'), 'utf8')).toContain('# Benchmark 2026-11-19');
+  });
+});
+
+describe('Set B merge state', () => {
+  const task = { set: 'B', id: 'b1', repo: 'a/b', pr: 7, readyHeadSha: 'a'.repeat(40), confirmed: true } as const;
+  const pull = (over = {}) => ({
+    state: 'closed',
+    merged: true,
+    head: { sha: 'a'.repeat(40) },
+    created_at: '2026-11-19T00:00:00Z',
+    merged_at: '2026-11-19T00:10:00Z',
+    ...over,
+  });
+
+  it('passes a PR merged at the head the factory reported', async () => {
+    expect(await readMergeState(task, 4, async () => pull())).toMatchObject({
+      outcome: 'pass',
+      humanMinutes: 4,
+      wallMs: 600_000,
+      note: 'merged unchanged',
+    });
+  });
+
+  it('fails a PR merged after the head moved, and one closed without a merge', async () => {
+    expect((await readMergeState(task, null, async () => pull({ head: { sha: 'b'.repeat(40) } }))).outcome).toBe(
+      'fail',
+    );
+    expect((await readMergeState(task, null, async () => pull({ merged: false, merged_at: null }))).note).toBe(
+      'closed without a merge',
+    );
+  });
+
+  it('refuses a PR that is still open', async () => {
+    await expect(
+      readMergeState(task, null, async () => pull({ state: 'open', merged: false, merged_at: null })),
+    ).rejects.toBeInstanceOf(TaskRefused);
+  });
+});

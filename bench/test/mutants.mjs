@@ -80,7 +80,7 @@ const MUTANTS = [
   {
     name: 'unverified-task-runs',
     claim: 'a task whose hidden tests were never checked at the base does not run',
-    edits: [['bench/run.ts', "if (!existsSync(verifiedFile))", 'if (false)']],
+    edits: [['bench/run.ts', 'if (!existsSync(verifiedFile))', 'if (false)']],
     tests: [SETUP],
   },
   {

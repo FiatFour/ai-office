@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { tempDir } from '../../server/test/helpers.ts';
+import { canSpawnTs, tempDir } from '../../server/test/helpers.ts';
 import { loadTasks } from '../run.ts';
 
 const RUN = fileURLToPath(new URL('../run.ts', import.meta.url));
@@ -34,7 +34,7 @@ const GOOD = {
   image: 'i',
 };
 
-describe('the harness command line', () => {
+describe.skipIf(!canSpawnTs)('the harness command line', () => {
   it('refuses a task with no hidden-test commit and says what is missing', () => {
     const dir = withTasks({ ...GOOD, id: 'no-hidden', fixSha: undefined, hiddenPaths: [] });
     const ran = cli(['prepare', '--task', 'no-hidden', '--tasks', dir]);

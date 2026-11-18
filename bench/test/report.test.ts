@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { tempDir } from '../../server/test/helpers.ts';
+import { canSpawnTs, tempDir } from '../../server/test/helpers.ts';
 import { readMergeState } from '../merge-state.ts';
 import { type Row, TaskRefused } from '../model.ts';
 import { checks, renderReport } from '../report.ts';
@@ -97,7 +97,7 @@ describe('report', () => {
     expect(text).toContain('5 [1 missing]');
   });
 
-  it('runs from the command line and writes the markdown beside the rows', () => {
+  it.skipIf(!canSpawnTs)('runs from the command line and writes the markdown beside the rows', () => {
     const dir = tempDir('bench-report');
     const file = join(dir, '2026-11-19.jsonl');
     fs.writeFileSync(file, `${JSON.stringify(row({}))}\n`);

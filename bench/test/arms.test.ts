@@ -32,7 +32,7 @@ const verified = async () => {
   return { fx, scratch, prepared };
 };
 
-describe('baseline arm', () => {
+describe.skipIf(process.platform === 'win32')('baseline arm', () => {
   it('runs one Claude Code author session, carries its usage and grades the committed files', async () => {
     const { fx, scratch, prepared } = await verified();
     const seen: string[][] = [];
@@ -57,7 +57,7 @@ describe('baseline arm', () => {
   });
 });
 
-describe.skipIf(!hasSqlite)('factory arm', () => {
+describe.skipIf(!hasSqlite || process.platform === 'win32')('factory arm', () => {
   const open =
     (fake: FakeGithub, reviews: 'approve' | 'changes-then-approve') =>
     async (task: { id: string }, ticket: { id: string }) => {

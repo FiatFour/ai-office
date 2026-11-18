@@ -12,6 +12,8 @@ import { localRunner } from '../runner.ts';
 import { gitProblems, prepareTask, sealedProblems } from '../workspace.ts';
 import { BUGGY, FIXED, HIDDEN_NEW, makeFixture } from './fixture.ts';
 
+const POSIX_ONLY = process.platform === 'win32';
+
 const setup = async (over = {}) => {
   const fx = makeFixture(over);
   const cache = tempDir('bench-cache');
@@ -24,7 +26,7 @@ const setup = async (over = {}) => {
   return { fx, cache, scratch, prepared };
 };
 
-describe('task setup', () => {
+describe.skipIf(POSIX_ONLY)('task setup', () => {
   it('builds a cage source at the reverted base without the hidden tests, history or fix commit', async () => {
     const { fx, prepared } = await setup();
     expect(prepared.baseSha).toBe(fx.baseSha);
@@ -92,7 +94,7 @@ describe('task setup', () => {
   });
 });
 
-describe('refusals', () => {
+describe.skipIf(POSIX_ONLY)('refusals', () => {
   const base = {
     set: 'A',
     id: 'x',
@@ -139,7 +141,7 @@ describe('refusals', () => {
   });
 });
 
-describe('rows', () => {
+describe.skipIf(POSIX_ONLY)('rows', () => {
   const verified = async (over = {}) => {
     const s = await setup(over);
     await verifyTask(s.fx.task, s.prepared, localRunner, s.scratch);
@@ -198,7 +200,8 @@ describe('rows', () => {
   });
 
   it('records timeout, not pass, for a run past the limit, even when the arm ignores the abort signal', async () => {
-    const { fx, scratch, prepared } = await verified({ timeoutMs: 150 });
+    const { fx: base, scratch, prepared } = await verified();
+    const fx = { ...base, task: { ...base.task, timeoutMs: 150 } };
     const hang = scriptedArm('factory', { 'slug-1': { files: [], hang: true } });
     const stubborn: Arm = { name: 'baseline', run: () => new Promise(() => {}) };
     for (const arm of [hang, stubborn]) {

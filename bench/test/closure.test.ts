@@ -14,6 +14,7 @@ import { installedProblems, neutralisePackage } from '../workspace.ts';
 import { FIXED, GUARDED, prepareFixture } from './fixture.ts';
 
 const POSIX_ONLY = process.platform === 'win32';
+const NODE_STAND_IN = Number(process.versions.node.split('.')[0]) >= 22;
 const HACK = fileURLToPath(new URL('./hack.json', import.meta.url));
 
 const spec = (cwd: string, rel: string, passed: number, failed: number) => ({ file: join(cwd, rel), passed, failed });
@@ -329,9 +330,12 @@ const reported = (files: Record<string, string>) => {
 };
 
 describe.skipIf(POSIX_ONLY)('the node:test report', () => {
-  it('counts a file that ends before it reports its tests as a failure, not as the stand-in pass node prints for it', () => {
-    expect(reported(EXIT_EARLY)).toEqual([expect.objectContaining({ passed: 0, failed: 1 })]);
-  });
+  it.skipIf(!NODE_STAND_IN)(
+    'counts a file that ends before it reports its tests as a failure, not as the stand-in pass node prints for it',
+    () => {
+      expect(reported(EXIT_EARLY)).toEqual([expect.objectContaining({ passed: 0, failed: 1 })]);
+    },
+  );
 
   it('counts real tests, skips excluded', () => {
     const files = {
@@ -346,13 +350,23 @@ test('d', () => { throw new Error('x'); });
     expect(reported(files)).toEqual([expect.objectContaining({ passed: 2, failed: 1 })]);
   });
 
-  it('fails a PR whose code calls process.exit(0) ahead of the hidden assertions, and marks the row suspect', async () => {
-    const { fx, prepared, scratch } = await prepareFixture();
-    const exit0: Change = { files: [{ path: 'src/slug.js', content: `process.exit(0);\n${FIXED}` }], deleted: [] };
-    const g = await grade(fx.task, prepared, exit0, localRunner, scratch);
-    expect(g.outcome).toBe('fail');
-    expect(g.suspect).toEqual([expect.stringContaining('calls process.exit')]);
-  });
+  it.skipIf(!NODE_STAND_IN)(
+    'fails a PR whose code calls process.exit(0) ahead of the hidden assertions, and marks the row suspect',
+    async () => {
+      const { fx, prepared, scratch } = await prepareFixture();
+      const exit0: Change = { files: [{ path: 'src/slug.js', content: `process.exit(0);\n${FIXED}` }], deleted: [] };
+      const g = await grade(fx.task, prepared, exit0, localRunner, scratch);
+      expect(g.outcome).toBe('fail');
+      expect(g.suspect).toEqual([expect.stringContaining('calls process.exit')]);
+      await writeVerified(prepared.dir, 0);
+      const row = await runTask(fx.task, 1, prepared, {
+        arm: scriptedArm('baseline', { [fx.task.id]: exit0 }),
+        runner: localRunner,
+        scratch,
+      });
+      expect(row).toMatchObject({ flag: 'suspect', outcome: 'fail' });
+    },
+  );
 });
 
 describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree', () => {
@@ -501,24 +515,27 @@ describe('the static scan of the files a PR changes', () => {
     expect(suspectReasons('docs/notes.md', '', 'call process.exit(0) from vitest')).toEqual([]);
   });
 
-  it('records that a patched assert passes the grader in the same process, and flags the row instead', async () => {
-    const { fx, prepared, scratch } = await prepareFixture();
-    const forged: Change = {
-      files: [
-        {
-          path: 'src/slug.js',
-          content: `import assert from 'node:assert/strict';\nassert.equal = () => {};\nexport const slug = () => 'x';\n`,
-        },
-      ],
-      deleted: [],
-    };
-    const g = await grade(fx.task, prepared, forged, localRunner, scratch);
-    expect(g.outcome).toBe('pass');
-    expect(g.suspect).toEqual([expect.stringContaining('imports node:assert or assert')]);
-  });
+  it.skipIf(POSIX_ONLY)(
+    'records that a patched assert passes the grader in the same process, and flags the row instead',
+    async () => {
+      const { fx, prepared, scratch } = await prepareFixture();
+      const forged: Change = {
+        files: [
+          {
+            path: 'src/slug.js',
+            content: `import assert from 'node:assert/strict';\nassert.equal = () => {};\nexport const slug = () => 'x';\n`,
+          },
+        ],
+        deleted: [],
+      };
+      const g = await grade(fx.task, prepared, forged, localRunner, scratch);
+      expect(g.outcome).toBe('pass');
+      expect(g.suspect).toEqual([expect.stringContaining('imports node:assert or assert')]);
+    },
+  );
 });
 
-describe('the row flags', () => {
+describe.skipIf(POSIX_ONLY)('the row flags', () => {
   it('flags a row contaminated when the agent made server-side web requests, and suspect when its PR touches test machinery', async () => {
     const { fx, prepared, scratch } = await prepareFixture();
     await writeVerified(prepared.dir, 0);
@@ -532,8 +549,6 @@ describe('the row flags', () => {
     expect(await run({ files })).toMatchObject({ flag: null, outcome: 'pass' });
     expect(await run({ files, webRequests: 2 })).toMatchObject({ flag: 'contaminated', outcome: 'pass' });
     expect((await run({ files, webRequests: 2 })).note).toMatch(/^2 server-side web requests;/);
-    const exiting = await run({ files: [{ path: 'src/slug.js', content: `process.exit(0);\n${FIXED}` }] });
-    expect(exiting).toMatchObject({ flag: 'suspect', outcome: 'fail' });
     expect(await run({ files, webRequests: 0 })).toMatchObject({ flag: null });
   });
 });

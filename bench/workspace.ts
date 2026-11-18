@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import type { FileEdit } from '../server/githost/host.ts';
 import { type RunResult, runBinary } from '../server/sandbox/engine.ts';
 import { type Change, type TaskA, TaskRefused } from './model.ts';
-import { isTestSide, protectedReason } from './protected.ts';
+import { isTestSide, normal, protectedReason } from './protected.ts';
 import type { Runner } from './runner.ts';
 
 const INSTALL_TIMEOUT_MS = 900_000;
@@ -117,10 +117,10 @@ const contentProblems = (
   for (const rel of readTree(copy)) {
     const mine = digest(join(copy, rel));
     const planted = hiddenDigests.get(mine);
-    if (planted !== undefined) problems.push(`${where}/${rel} is a copy of the hidden test ${planted}`);
+    if (planted !== undefined) problems.push(`${where}/${normal(rel)} is a copy of the hidden test ${planted}`);
     const own = join(installed, rel);
     if (sameVersion && SOURCE_FILE.test(rel) && existsSync(own) && digest(own) !== mine)
-      problems.push(`${where}/${rel} differs from the same file in the base tree, so the copy is not the base`);
+      problems.push(`${where}/${normal(rel)} differs from the same file in the base tree, so the copy is not the base`);
   }
   return problems;
 };

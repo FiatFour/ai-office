@@ -2,6 +2,7 @@ import type { FileEdit } from '../server/githost/host.ts';
 
 export type ArmName = 'factory' | 'baseline';
 export type Outcome = 'pass' | 'fail' | 'timeout' | 'error';
+export type Flag = 'contaminated' | 'suspect';
 export type Reporter = 'vitest' | 'node-test';
 export const REPORTERS: readonly Reporter[] = ['vitest', 'node-test'];
 
@@ -58,6 +59,7 @@ export interface Row {
   readonly agentMs: number;
   readonly prepareMs: number;
   readonly tokens: Tokens | null;
+  readonly flag: Flag | null;
   readonly quotaWindows: number | null;
   readonly humanMinutes: number | null;
   readonly note: string;

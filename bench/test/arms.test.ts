@@ -14,7 +14,7 @@ import { grade } from '../grade.ts';
 import { runTask, verifyTask } from '../run.ts';
 import { localRunner } from '../runner.ts';
 import { prepareTask } from '../workspace.ts';
-import { FIXED, makeFixture } from './fixture.ts';
+import { FIXED, GUARDED, makeFixture } from './fixture.ts';
 
 const STREAM = readFileSync(
   fileURLToPath(new URL('../../server/test/fixtures/claude-stream-author.jsonl', import.meta.url)),
@@ -52,6 +52,26 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
     expect(row).toMatchObject({ arm: 'baseline', outcome: 'pass', reviewRounds: null });
     expect(row.tokens?.output).toBeGreaterThan(0);
     expect(seen.filter((argv) => argv[0] === 'claude')).toHaveLength(1);
+  });
+
+  it('carries the server-side web requests of the session into the arm run', async () => {
+    const { fx, prepared } = await verified();
+    const stream = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      result: 'done',
+      usage: { input_tokens: 1, output_tokens: 1, server_tool_use: { web_search_requests: 2, web_fetch_requests: 0 } },
+    });
+    const arm = baselineArm(() => ({
+      async exec(argv) {
+        if (argv[0] === 'claude') return { code: 0, out: stream, err: '', timedOut: false };
+        if (argv.includes('rev-parse')) return { code: 0, out: 'base\n', err: '', timedOut: false };
+        if (argv.includes('--diff-filter=D')) return { code: 0, out: '', err: '', timedOut: false };
+        if (argv.includes('--numstat')) return { code: 0, out: '1\t1\tsrc/slug.js\0', err: '', timedOut: false };
+        return { code: 0, out: FIXED, err: '', timedOut: false };
+      },
+    }));
+    expect((await arm.run(fx.task, prepared, new AbortController().signal)).webRequests).toBe(2);
   });
 
   it('carries the files the session deleted, renames included, into the graded change', async () => {
@@ -105,6 +125,7 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
       outputTokens: 2 * n,
       cacheReadTokens: 3 * n,
       cacheCreationTokens: 4 * n,
+      webRequests: n,
     });
     expect(tokensOf([usage(1), null, usage(10)])).toEqual({ input: 11, output: 22, cacheRead: 33, cacheCreation: 44 });
     expect(tokensOf([null])).toBeNull();
@@ -124,15 +145,15 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
 
 describe.skipIf(!hasSqlite || process.platform === 'win32')('factory arm', () => {
   const open =
-    (fake: FakeGithub, reviews: 'approve' | 'changes-then-approve', removed: string[] = []) =>
+    (fake: FakeGithub, reviews: 'approve' | 'changes-then-approve', removed: string[] = [], fix = FIXED) =>
     async (task: { id: string }, ticket: { id: string }) => {
       const send = (account: string) => fake.transport(account);
       const agent = scripted({
         scripts: {
           [ticket.id]: {
             author: [
-              { files: [{ path: 'src/slug.js', content: FIXED }] },
-              { files: [{ path: 'src/slug.js', content: `${FIXED}// tidy\n` }] },
+              { files: [{ path: 'src/slug.js', content: fix }] },
+              { files: [{ path: 'src/slug.js', content: `${fix}// tidy\n` }] },
             ],
             reviews:
               reviews === 'approve'
@@ -179,18 +200,15 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')('factory arm', () =>
 
   it('carries the paths the PR removed or renamed away into the change it grades', async () => {
     const { fx, scratch, prepared } = await verified();
-    writeFileSync(
-      join(prepared.installed, 'test/poison.test.js'),
-      `import { test } from 'node:test';\ntest('poison', () => { throw new Error('x'); });\n`,
-    );
+    writeFileSync(join(prepared.installed, 'src/stray.txt'), 'x\n');
     const fake = new FakeGithub();
     const without = await runTask(fx.task, 1, prepared, {
-      arm: factoryArm({ open: open(fake, 'approve') }),
+      arm: factoryArm({ open: open(fake, 'approve', [], GUARDED) }),
       runner: localRunner,
       scratch,
     });
     const withIt = await runTask(fx.task, 1, prepared, {
-      arm: factoryArm({ open: open(new FakeGithub(), 'approve', ['test/poison.test.js']) }),
+      arm: factoryArm({ open: open(new FakeGithub(), 'approve', ['src/stray.txt'], GUARDED) }),
       runner: localRunner,
       scratch,
     });

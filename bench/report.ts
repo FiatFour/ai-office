@@ -58,7 +58,7 @@ const sum = (rows: readonly Row[], pick: (r: Row) => number | null): number | nu
 
 const pct = (n: number, of: number): string => `${n} of ${of} (${fmt((n / of) * 100)}%)`;
 
-const live = (rows: readonly Row[]): Row[] => rows.filter((r) => !r.scripted);
+const live = (rows: readonly Row[]): Row[] => rows.filter((r) => !r.scripted && r.flag === null);
 
 export const checks = (all: readonly Row[]): Check[] => {
   const rows = live(all);
@@ -66,13 +66,12 @@ export const checks = (all: readonly Row[]): Check[] => {
   const setA = (arm: ArmName) => rows.filter((r) => r.arm === arm && r.set === 'A');
   const setB = factory.filter((r) => r.set === 'B');
   const merged = setB.filter((r) => r.outcome === 'pass');
-  const opened = factory.filter((r) => r.set === 'B' || r.outcome === 'pass' || r.outcome === 'fail');
-  const windows = sum(factory, (r) => r.quotaWindows);
-  const minutes = sum(opened, (r) => r.humanMinutes);
+  const windows = sum(setB, (r) => r.quotaWindows);
+  const minutes = sum(setB, (r) => r.humanMinutes);
   const per5 = windows === null || merged.length === 0 ? null : (windows / merged.length) * 5;
-  const perPr = minutes === null || opened.length === 0 ? null : minutes / opened.length;
+  const perPr = minutes === null || setB.length === 0 ? null : minutes / setB.length;
   const onlyScripted = all.length > 0 && rows.length === 0;
-  const none = onlyScripted ? 'only scripted rows, excluded' : 'no live rows';
+  const none = onlyScripted ? 'only scripted or flagged rows, excluded' : 'no live rows';
   const verdict = (value: number | null, ok: (v: number) => boolean): Verdict =>
     value === null ? 'UNMEASURED' : ok(value) ? 'PASS' : 'FAIL';
   const rate = (arm: ArmName): string => {
@@ -115,11 +114,11 @@ export const checks = (all: readonly Row[]): Check[] => {
       name: 'Human minutes',
       value:
         perPr === null
-          ? opened.length === 0
-            ? 'no PR opened by a live factory row'
+          ? setB.length === 0
+            ? 'no live Set B rows'
             : 'human minutes not recorded'
-          : `${fmt(perPr)} per PR opened (${opened.length} opened)`,
-      threshold: `at most ${THRESHOLDS.maxHumanMinutesPerPr} per PR opened`,
+          : `${fmt(perPr)} per Set B PR (${setB.length} PRs)`,
+      threshold: `at most ${THRESHOLDS.maxHumanMinutesPerPr} per Set B PR`,
       verdict: verdict(perPr, (v) => v <= THRESHOLDS.maxHumanMinutesPerPr + 1e-9),
     },
   ];
@@ -191,6 +190,7 @@ const perTask = (rows: readonly Row[]): string[] => {
 export const renderReport = (rows: readonly Row[], date: string): string => {
   const measured = live(rows);
   const scripted = rows.filter((r) => r.scripted);
+  const flagged = rows.filter((r) => !r.scripted && r.flag !== null);
   const spent = overhead(rows);
   return [
     `# Benchmark ${date}`,
@@ -199,7 +199,7 @@ export const renderReport = (rows: readonly Row[], date: string): string => {
     '',
     '## Thresholds',
     '',
-    `Source: ${THRESHOLDS.source}. Only live rows (a real agent or the host) count. Scripted rows are harness checks and sit in their own section.`,
+    `Source: ${THRESHOLDS.source}. Only live, unflagged rows (a real agent or the host) count. Scripted rows are harness checks and sit in their own section. A row flagged contaminated (server-side web search or fetch) or suspect (the PR touches test machinery) is listed in its own section and counts in no verdict. The cost and human-minute checks read Set B factory rows only, the same set that produced the merges.`,
     '',
     '| check | value | threshold | verdict |',
     '| --- | --- | --- | --- |',
@@ -212,6 +212,16 @@ export const renderReport = (rows: readonly Row[], date: string): string => {
     '## Per task, live rows',
     '',
     ...perTask(measured),
+    '',
+    '## Flagged rows, excluded from every verdict',
+    '',
+    ...(flagged.length === 0
+      ? ['None.']
+      : [
+          '| task | arm | run | flag | outcome | note |',
+          '| --- | --- | --- | --- | --- | --- |',
+          ...flagged.map((r) => `| ${r.task} | ${r.arm} | ${r.run} | ${r.flag} | ${r.outcome} | ${r.note} |`),
+        ]),
     '',
     '## Scripted rows, excluded from every verdict',
     '',
@@ -232,8 +242,10 @@ export const readRows = (file: string): Row[] =>
     .filter(Boolean)
     .map((line, i) => {
       const parsed = JSON.parse(line) as Partial<Row>;
-      if (typeof parsed.scripted !== 'boolean' || typeof parsed.prepareMs !== 'number')
-        throw new Error(`${file} line ${i + 1} lacks scripted or prepareMs: rows from an older harness, rerun them`);
+      if (typeof parsed.scripted !== 'boolean' || typeof parsed.prepareMs !== 'number' || parsed.flag === undefined)
+        throw new Error(
+          `${file} line ${i + 1} lacks scripted, prepareMs or flag: rows from an older harness, rerun them`,
+        );
       return parsed as Row;
     });
 

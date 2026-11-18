@@ -24,6 +24,7 @@ const row = (over: Partial<Row>): Row => ({
   quotaWindows: 0.1,
   humanMinutes: 5,
   note: '',
+  flag: null,
   ...over,
 });
 
@@ -71,21 +72,38 @@ describe('thresholds', () => {
     expect(byName([row({ outcome: 'pass' })])['Set B merge rate']).toBe('UNMEASURED');
   });
 
-  it('divides human minutes by the PRs opened, not by every row', () => {
-    const rows = [
-      row({ humanMinutes: 9 }),
-      row({ task: 't2', outcome: 'fail', humanMinutes: 9 }),
-      row({ task: 't3', outcome: 'timeout', humanMinutes: 0 }),
-      row({ task: 't4', outcome: 'error', humanMinutes: 0 }),
-      setB({ humanMinutes: 12 }),
+  it('counts quota windows and human minutes from the Set B factory rows that produced the merges, no other set', () => {
+    const merges = [1, 2, 3, 4, 5].map((i) => setB({ quotaWindows: 0.2, humanMinutes: 2 }, i));
+    expect(cellOf(merges, 'Cost')).toBe('1 five-hour windows per 5 merged PRs');
+    const noise = [
+      row({ task: 'a1', quotaWindows: null, humanMinutes: null }),
+      row({ task: 'a2', outcome: 'error', quotaWindows: 3, humanMinutes: 0 }),
+      row({ task: 'a3', quotaWindows: 3, humanMinutes: 60 }),
     ];
-    expect(cellOf(rows, 'Human minutes')).toBe('10 per PR opened (3 opened)');
-    expect(byName(rows)['Human minutes']).toBe('PASS');
-    expect(byName([...rows, setB({ humanMinutes: 20 }, 2)])['Human minutes']).toBe('FAIL');
+    expect(checks([...merges, ...noise]).slice(1)).toEqual(checks(merges).slice(1));
+    expect(byName([...merges, ...noise])).toMatchObject({ Cost: 'PASS', 'Human minutes': 'PASS' });
+    expect(cellOf(merges, 'Human minutes')).toBe('2 per Set B PR (5 PRs)');
+    expect(byName([...merges, setB({ humanMinutes: 60 }, 6)])['Human minutes']).toBe('FAIL');
+  });
+
+  it('keeps contaminated and suspect rows out of every verdict and lists them in their own section', () => {
+    const merges = [1, 2, 3, 4, 5].map((i) => setB({}, i));
+    const flagged = [
+      row({ task: 'w', flag: 'contaminated', note: '2 server-side web requests' }),
+      row({ task: 's', flag: 'suspect', outcome: 'pass', note: 'src/x.js calls process.exit' }),
+      setB({ flag: 'suspect', outcome: 'pass', humanMinutes: 500, quotaWindows: 50 }, 9),
+    ];
+    expect(checks([...merges, ...flagged])).toEqual(checks(merges));
+    const text = renderReport([...merges, ...flagged], 'd');
+    const section = text.split('## Flagged rows, excluded from every verdict')[1]?.split('## Scripted')[0] ?? '';
+    expect(section).toContain('| w | factory | 1 | contaminated | pass | 2 server-side web requests |');
+    expect(section).toContain('| s | factory | 1 | suspect |');
+    expect(text.split('## Per task, live rows')[1]?.split('## Flagged')[0]).not.toMatch(/\| (w|s) \|/);
+    expect(renderReport(merges, 'd')).toContain('## Flagged rows, excluded from every verdict\n\nNone.');
   });
 
   it('leaves the baseline arm out of every threshold', () => {
-    const rows = [setB({}), row({ arm: 'baseline', humanMinutes: 500, quotaWindows: 50 })];
+    const rows = [setB({}), row({ set: 'B', task: 'bx', arm: 'baseline', humanMinutes: 500, quotaWindows: 50 })];
     expect(byName(rows)).toMatchObject({ Cost: 'PASS', 'Human minutes': 'PASS' });
   });
 
@@ -97,7 +115,7 @@ describe('thresholds', () => {
       Cost: 'UNMEASURED',
       'Human minutes': 'UNMEASURED',
     });
-    expect(cellOf(rows, 'Set B merge rate')).toContain('only scripted rows');
+    expect(cellOf(rows, 'Set B merge rate')).toContain('only scripted or flagged rows');
   });
 
   it('does not let a scripted row change a live verdict', () => {
@@ -118,7 +136,7 @@ describe('report', () => {
     const text = renderReport(rows, '2026-11-19');
     expect(text).toContain('| Set B merge rate | 1 of 1 (100%) | at least 50% | PASS |');
     expect(text).toContain(
-      '| Cost | 1.50 five-hour windows per 5 merged PRs | at most 1 five-hour window per 5 merged PRs | FAIL |',
+      '| Cost | 0.50 five-hour windows per 5 merged PRs | at most 1 five-hour window per 5 merged PRs | PASS |',
     );
     expect(text).toMatch(/\| factory \| 3 \| 2 \|/);
     expect(text).toMatch(/\| baseline \| 1 \| 0 \|/);
@@ -166,9 +184,9 @@ describe('report', () => {
     expect(renderReport(rows(58_000), 'd')).toContain('62 s against 60 s: FAIL.');
   });
 
-  it('refuses rows written before rows carried scripted and prepareMs, whichever is missing', () => {
+  it('refuses rows written before rows carried scripted, prepareMs and flag, whichever is missing', () => {
     const dir = tempDir('bench-rows');
-    for (const missing of ['scripted', 'prepareMs'] as const) {
+    for (const missing of ['scripted', 'prepareMs', 'flag'] as const) {
       const old: Partial<Row> = row({});
       delete old[missing];
       const file = join(dir, `no-${missing}.jsonl`);

@@ -19,10 +19,12 @@ interface StreamLine {
   readonly subtype?: string;
   readonly is_error?: boolean;
   readonly result?: string;
-  readonly usage?: Record<string, unknown>;
+  readonly usage?: Record<string, unknown> & { readonly server_tool_use?: Record<string, unknown> };
+  readonly message?: { readonly content?: unknown };
 }
 
 const TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
+const WITHOUT_WEB = 'WebSearch,WebFetch';
 const GIT = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external='];
 
 const tokens = (usage: Record<string, unknown>, key: string): number => {
@@ -43,6 +45,12 @@ export const parseStream = (raw: string): { text: string; usage: Usage } => {
   if (result.is_error === true || result.subtype !== 'success')
     throw new AgentFailed(`claude ended with ${result.subtype ?? 'an error'}`);
   const usage = result.usage ?? {};
+  const served = lines
+    .flatMap((line) => (Array.isArray(line.message?.content) ? (line.message.content as { type?: unknown }[]) : []))
+    .filter((block) => block?.type === 'server_tool_use').length;
+  const reported =
+    tokens(usage.server_tool_use ?? {}, 'web_search_requests') +
+    tokens(usage.server_tool_use ?? {}, 'web_fetch_requests');
   return {
     text: result.result ?? '',
     usage: {
@@ -50,6 +58,7 @@ export const parseStream = (raw: string): { text: string; usage: Usage } => {
       outputTokens: tokens(usage, 'output_tokens'),
       cacheReadTokens: tokens(usage, 'cache_read_input_tokens'),
       cacheCreationTokens: tokens(usage, 'cache_creation_input_tokens'),
+      webRequests: Math.max(reported, served),
     },
   };
 };
@@ -78,6 +87,8 @@ const claudeArgv = (bin: string, model: string, maxTurns: number): string[] => [
   '--verbose',
   '--allowedTools',
   TOOLS,
+  '--disallowedTools',
+  WITHOUT_WEB,
   '--no-session-persistence',
   '--max-turns',
   String(maxTurns),

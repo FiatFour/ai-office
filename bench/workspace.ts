@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import type { FileEdit } from '../server/githost/host.ts';
 import { type RunResult, runBinary } from '../server/sandbox/engine.ts';
 import { type Change, type TaskA, TaskRefused } from './model.ts';
-import { protectedReason } from './protected.ts';
+import { isTestSide, protectedReason } from './protected.ts';
 import type { Runner } from './runner.ts';
 
 const INSTALL_TIMEOUT_MS = 900_000;
@@ -17,6 +17,7 @@ export interface Prepared {
   readonly hidden: string;
   readonly installed: string;
   readonly baseSha: string;
+  readonly mirror: string;
 }
 
 const GIT_ENV: NodeJS.ProcessEnv = {
@@ -47,7 +48,8 @@ export const readTree = (dir: string, base = dir): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     if (entry.name === '.git' || entry.name === 'node_modules') return [];
     const full = join(dir, entry.name);
-    return entry.isDirectory() ? readTree(full, base) : [full.slice(base.length + 1)];
+    if (entry.isDirectory()) return readTree(full, base);
+    return entry.isFile() ? [full.slice(base.length + 1)] : [];
   });
 
 const digest = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -102,31 +104,62 @@ const newerThan = (found: string, base: string): boolean => {
   return false;
 };
 
-export const installedProblems = (installed: string): string[] => {
+const SOURCE_FILE = /\.[cm]?[jt]sx?$/i;
+
+const contentProblems = (
+  where: string,
+  copy: string,
+  installed: string,
+  hiddenDigests: ReadonlyMap<string, string>,
+  sameVersion: boolean,
+): string[] => {
+  const problems: string[] = [];
+  for (const rel of readTree(copy)) {
+    const mine = digest(join(copy, rel));
+    const planted = hiddenDigests.get(mine);
+    if (planted !== undefined) problems.push(`${where}/${rel} is a copy of the hidden test ${planted}`);
+    const own = join(installed, rel);
+    if (sameVersion && SOURCE_FILE.test(rel) && existsSync(own) && digest(own) !== mine)
+      problems.push(`${where}/${rel} differs from the same file in the base tree, so the copy is not the base`);
+  }
+  return problems;
+};
+
+export const installedProblems = (installed: string, hidden: string | null = null): string[] => {
   const file = join(installed, 'package.json');
   if (!existsSync(file)) return [];
   const own = JSON.parse(readFileSync(file, 'utf8')) as { name?: unknown; version?: unknown };
   if (typeof own.name !== 'string') return [];
   const base = typeof own.version === 'string' ? own.version : '';
   const modules = join(installed, 'node_modules');
-  const copies: Array<[string, string]> = [];
-  const top = join(modules, ...own.name.split('/'), 'package.json');
-  if (existsSync(top))
-    copies.push([
-      `node_modules/${own.name}`,
-      (JSON.parse(readFileSync(top, 'utf8')) as { version?: string }).version ?? '',
-    ]);
+  const copies: Array<{ where: string; version: string; dir: string | null }> = [];
+  const top = join(modules, ...own.name.split('/'));
+  if (existsSync(join(top, 'package.json')))
+    copies.push({
+      where: `node_modules/${own.name}`,
+      version: (JSON.parse(readFileSync(join(top, 'package.json'), 'utf8')) as { version?: string }).version ?? '',
+      dir: top,
+    });
   const store = join(modules, '.pnpm');
   const prefix = `${own.name.replace('/', '+')}@`;
   if (existsSync(store))
     for (const entry of readdirSync(store))
-      if (entry.startsWith(prefix)) copies.push([`node_modules/.pnpm/${entry}`, entry.slice(prefix.length)]);
-  return copies
-    .filter(([, version]) => newerThan(version, base))
-    .map(
-      ([where, version]) =>
-        `${where} is ${version || 'of unknown version'}, newer than the base ${base}, so it may hold the fix`,
-    );
+      if (entry.startsWith(prefix)) {
+        const dir = join(store, entry, 'node_modules', ...own.name.split('/'));
+        copies.push({
+          where: `node_modules/.pnpm/${entry}`,
+          version: entry.slice(prefix.length),
+          dir: existsSync(dir) ? dir : null,
+        });
+      }
+  const hiddenDigests = new Map(hidden === null ? [] : readTree(hidden).map((rel) => [digest(join(hidden, rel)), rel]));
+  return copies.flatMap(({ where, version, dir }) =>
+    newerThan(version, base)
+      ? [`${where} is ${version || 'of unknown version'}, newer than the base ${base}, so it may hold the fix`]
+      : dir === null
+        ? []
+        : contentProblems(where, dir, installed, hiddenDigests, version === base),
+  );
 };
 
 export interface PrepareOptions {
@@ -229,9 +262,9 @@ export const prepareTask = async (task: TaskA, options: PrepareOptions): Promise
     if (ran.code !== 0)
       throw new TaskRefused(`task ${task.id}: install failed: ${(ran.err || ran.out).trim().slice(-300)}`);
   }
-  const stale = installedProblems(installed);
+  const stale = installedProblems(installed, hidden);
   if (stale.length > 0) throw new TaskRefused(`task ${task.id} is not sealed: ${stale.join('; ')}`);
-  return { dir, source, hidden, installed, baseSha, prepareMs: Math.round(performance.now() - started) };
+  return { dir, source, hidden, installed, baseSha, mirror, prepareMs: Math.round(performance.now() - started) };
 };
 
 const listed = async (mirror: string, task: TaskA, filter: string): Promise<string[]> =>
@@ -249,7 +282,9 @@ const listed = async (mirror: string, task: TaskA, filter: string): Promise<stri
     ])
   )
     .split('\0')
-    .filter((rel) => rel !== '' && !task.hiddenPaths.includes(rel) && protectedReason(rel) === null);
+    .filter(
+      (rel) => rel !== '' && !task.hiddenPaths.includes(rel) && protectedReason(rel) === null && !isTestSide(rel),
+    );
 
 export const fixChange = async (task: TaskA, mirror: string): Promise<Change> => {
   const files: FileEdit[] = [];

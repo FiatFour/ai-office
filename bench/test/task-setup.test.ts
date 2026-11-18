@@ -75,6 +75,15 @@ describe.skipIf(POSIX_ONLY)('task setup', () => {
     expect(change.deleted).toEqual([]);
   });
 
+  it('leaves out a test file the fix changed that is not hidden, since the grader restores it from the base', async () => {
+    const { fx, cache } = await setup({
+      hiddenPaths: ['test/slug-hidden.test.js'],
+      specs: ['test/slug-hidden.test.js'],
+    });
+    const change = await fixChange(fx.task, mirrorPath(cache, fx.task.repo));
+    expect(change.files.map((f) => f.path)).toEqual(['src/slug.js']);
+  });
+
   it('shows the hidden tests fail at the reverted base and pass on the fix', async () => {
     const { fx, scratch, prepared } = await setup();
     const sanity = await verifyTask(fx.task, prepared, localRunner, scratch);
@@ -96,6 +105,30 @@ describe.skipIf(POSIX_ONLY)('task setup', () => {
       prepareTask(fx.task, { cache, repoUrl: (r) => join(fx.reposRoot, `${r}.git`), runner: localRunner }),
     ).rejects.toThrow(
       /is not sealed: hidden test test\/slug-hidden.test.js is present in the cage tree as test\/visible.test.js/,
+    );
+  });
+
+  it('records the passing-test count of the upstream fix, and refuses a task whose own fix does not grade pass', async () => {
+    const { fx, scratch, prepared } = await setup();
+    await verifyTask(fx.task, prepared, localRunner, scratch);
+    const { fixPassed } = JSON.parse(readFileSync(join(prepared.dir, 'verified.json'), 'utf8')) as {
+      fixPassed: number;
+    };
+    expect(fixPassed).toBe(4);
+    let calls = 0;
+    const brokenFix: Runner = {
+      run: (spec) =>
+        calls++ === 0 ? localRunner.run(spec) : Promise.resolve({ code: 1, out: '', err: 'boom', timedOut: false }),
+    };
+    await expect(verifyTask(fx.task, prepared, brokenFix, scratch)).rejects.toThrow(/the upstream fix grades fail/);
+  });
+
+  it('refuses a run on a task verified by a harness that did not record the count', async () => {
+    const { fx, scratch, prepared } = await setup();
+    fs.writeFileSync(join(prepared.dir, 'verified.json'), JSON.stringify({ prepareMs: 1 }));
+    const arm = scriptedArm('baseline', { [fx.task.id]: { files: [] } });
+    await expect(runTask(fx.task, 1, prepared, { arm, runner: localRunner, scratch })).rejects.toThrow(
+      /rerun prepare to record the test count/,
     );
   });
 

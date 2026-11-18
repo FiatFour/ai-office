@@ -8,6 +8,7 @@ import { prepareTask } from '../workspace.ts';
 
 export const BUGGY = `export const slug = (s) => s.toLowerCase().replace(/ /g, '-');\n`;
 export const FIXED = `export const slug = (s) => s.trim().toLowerCase().replace(/\\s+/g, '-');\n`;
+export const GUARDED = `import { existsSync } from 'node:fs';\nif (existsSync(new URL('./stray.txt', import.meta.url))) throw new Error('stray');\n${FIXED}`;
 export const HIDDEN_NEW = `import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { slug } from '../src/slug.js';

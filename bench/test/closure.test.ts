@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,10 +7,11 @@ import { tempDir } from '../../server/test/helpers.ts';
 import { type Script, scriptedArm } from '../arms.ts';
 import { grade, NO_CHANGE, parseSpecs } from '../grade.ts';
 import type { Change } from '../model.ts';
-import { runTask, verifyTask } from '../run.ts';
+import { runTask } from '../run.ts';
 import { localRunner, type Runner } from '../runner.ts';
+import { suspectReasons } from '../testside.ts';
 import { installedProblems, neutralisePackage } from '../workspace.ts';
-import { FIXED, prepareFixture } from './fixture.ts';
+import { FIXED, GUARDED, prepareFixture } from './fixture.ts';
 
 const POSIX_ONLY = process.platform === 'win32';
 const HACK = fileURLToPath(new URL('./hack.json', import.meta.url));
@@ -31,6 +33,9 @@ JSON
 exit ${outcome === 'pass' ? 0 : 1}
 `;
 
+const writeVerified = async (dir: string, fixPassed: number) =>
+  writeFileSync(join(dir, 'verified.json'), JSON.stringify({ prepareMs: 0, fixPassed }));
+
 const withRunnerBinary = async () => {
   const s = await prepareFixture({
     reporter: 'vitest',
@@ -42,7 +47,7 @@ const withRunnerBinary = async () => {
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, 'vitest'), FAKE_RUNNER('fail'));
   chmodSync(join(bin, 'vitest'), 0o755);
-  await verifyTask(s.fx.task, s.prepared, localRunner, s.scratch);
+  await writeVerified(s.prepared.dir, 0);
   return s;
 };
 
@@ -88,6 +93,14 @@ describe.skipIf(POSIX_ONLY)('the answer stays out of the grader, channel by chan
     '.env.local',
     '.aw-bench/node-json.mjs',
     '.pnpm-store/v3/x',
+    '.mocharc.json',
+    'packages/a/.mocharc.cjs',
+    'postcss.config.js',
+    'rollup.config.mjs',
+    '.swcrc',
+    '.c8rc.json',
+    '.pnp.cjs',
+    '.yarn/releases/yarn.cjs',
   ])('refuses the PR path %s, written or deleted', async (path) => {
     const { fx, prepared, scratch } = await prepareFixture();
     for (const change of [
@@ -147,15 +160,12 @@ describe.skipIf(POSIX_ONLY)('the answer stays out of the grader, channel by chan
 
   it('applies a PR deletion, so removing a stray file can fix the run', async () => {
     const { fx, prepared, scratch } = await prepareFixture();
-    writeFileSync(
-      join(prepared.installed, 'test/poison.test.js'),
-      `import { test } from 'node:test';\ntest('poison', () => { throw new Error('x'); });\n`,
-    );
-    const files = [{ path: 'src/slug.js', content: FIXED }];
+    writeFileSync(join(prepared.installed, 'src/stray.txt'), 'x\n');
+    const files = [{ path: 'src/slug.js', content: GUARDED }];
     expect((await grade(fx.task, prepared, { files, deleted: [] }, localRunner, scratch)).outcome).toBe('fail');
-    expect(
-      (await grade(fx.task, prepared, { files, deleted: ['test/poison.test.js'] }, localRunner, scratch)).outcome,
-    ).toBe('pass');
+    expect((await grade(fx.task, prepared, { files, deleted: ['src/stray.txt'] }, localRunner, scratch)).outcome).toBe(
+      'pass',
+    );
   });
 
   it('needs every hidden spec in the structured report with a nonzero pass count', async () => {
@@ -209,6 +219,37 @@ describe('the structured report of the runner', () => {
 });
 
 describe('the installed dependencies and package metadata in the cage', () => {
+  const copyWith = (version: string, files: Record<string, string>, base: Record<string, string> = {}) => {
+    const dir = installedWith({ name: 'ufo', version: '1.5.4' }, []);
+    const copy = join(dir, 'node_modules/.pnpm', `ufo@${version}`, 'node_modules/ufo');
+    for (const [root, set] of [
+      [copy, files],
+      [dir, base],
+    ] as const)
+      for (const [rel, text] of Object.entries(set)) {
+        mkdirSync(join(root, rel, '..'), { recursive: true });
+        writeFileSync(join(root, rel), text);
+      }
+    return dir;
+  };
+
+  it('judges an equal-version copy by its content: source that differs from the base tree is reported, docs and dist are not', () => {
+    const base = { 'src/index.ts': 'export const a = 1;\n', 'README.md': 'new\n' };
+    expect(installedProblems(copyWith('1.5.4', { 'dist/index.mjs': 'x', 'README.md': 'old\n' }, base))).toEqual([]);
+    expect(installedProblems(copyWith('1.5.4', { 'src/index.ts': 'export const a = 1;\n' }, base))).toEqual([]);
+    const differing = installedProblems(copyWith('1.5.4', { 'src/index.ts': 'export const a = 2;\n' }, base));
+    expect(differing).toEqual([expect.stringContaining('src/index.ts differs from the same file in the base tree')]);
+    expect(installedProblems(copyWith('1.3.2', { 'src/index.ts': 'export const a = 2;\n' }, base))).toEqual([]);
+  });
+
+  it('reports a copy of the project that carries a hidden test, whatever its version', () => {
+    const dir = copyWith('1.3.2', { 'test/found.test.ts': 'secret\n' });
+    const hidden = tempDir('hidden');
+    writeFileSync(join(hidden, 'x.test.ts'), 'secret\n');
+    expect(installedProblems(dir, hidden)).toEqual([expect.stringContaining('is a copy of the hidden test x.test.ts')]);
+    expect(installedProblems(dir)).toEqual([]);
+  });
+
   const installedWith = (pkg: object, entries: string[]) => {
     const dir = tempDir('installed');
     writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
@@ -254,5 +295,245 @@ describe('the installed dependencies and package metadata in the cage', () => {
       license: 'MIT',
     });
     expect(existsSync(join(dir, 'node_modules'))).toBe(false);
+  });
+});
+
+const NODE_REPORTER = fileURLToPath(new URL('../reporters/node-json.mjs', import.meta.url));
+const EXIT_EARLY = {
+  'package.json': '{"type":"module"}',
+  'src/m.js': 'export const f=(x)=>{ if (x===2) process.exit(0); return x; };\n',
+  'test/h.test.js': `import { test } from 'node:test';
+import assert from 'node:assert';
+import { f } from '../src/m.js';
+test('a', () => assert.equal(f(1), 1));
+test('b', () => assert.equal(f(2), 3));
+`,
+};
+
+const reported = (files: Record<string, string>) => {
+  const dir = tempDir('node-reporter');
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(join(dir, rel, '..'), { recursive: true });
+    writeFileSync(join(dir, rel), text);
+  }
+  const out = join(dir, 'result.json');
+  spawnSync(
+    'node',
+    ['--test', `--test-reporter=${NODE_REPORTER}`, `--test-reporter-destination=${out}`, 'test/h.test.js'],
+    {
+      cwd: dir,
+      encoding: 'utf8',
+    },
+  );
+  return (JSON.parse(readFileSync(out, 'utf8')) as { files: { passed: number; failed: number }[] }).files;
+};
+
+describe.skipIf(POSIX_ONLY)('the node:test report', () => {
+  it('counts a file that ends before it reports its tests as a failure, not as the stand-in pass node prints for it', () => {
+    expect(reported(EXIT_EARLY)).toEqual([expect.objectContaining({ passed: 0, failed: 1 })]);
+  });
+
+  it('counts real tests, skips excluded', () => {
+    const files = {
+      'package.json': '{"type":"module"}',
+      'test/h.test.js': `import { test } from 'node:test';
+test('a', () => {});
+test('b', () => {});
+test('c', { skip: true }, () => {});
+test('d', () => { throw new Error('x'); });
+`,
+    };
+    expect(reported(files)).toEqual([expect.objectContaining({ passed: 2, failed: 1 })]);
+  });
+
+  it('fails a PR whose code calls process.exit(0) ahead of the hidden assertions, and marks the row suspect', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    const exit0: Change = { files: [{ path: 'src/slug.js', content: `process.exit(0);\n${FIXED}` }], deleted: [] };
+    const g = await grade(fx.task, prepared, exit0, localRunner, scratch);
+    expect(g.outcome).toBe('fail');
+    expect(g.suspect).toEqual([expect.stringContaining('calls process.exit')]);
+  });
+});
+
+describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree', () => {
+  const plant = (installed: string, files: Record<string, string>) => {
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(join(installed, rel, '..'), { recursive: true });
+      writeFileSync(join(installed, rel), text);
+    }
+  };
+  const fixed: Change['files'][number] = { path: 'src/slug.js', content: FIXED };
+
+  it.each([
+    'test/helpers/util.js',
+    'test/fixtures/data.json',
+    'test/__snapshots__/a.test.js.snap',
+    'src/cases.spec.ts',
+    'src/cases.spec.js',
+    'src/__snapshots__/x.snap',
+    'src/a.test.mjs',
+    'src/a_test.js',
+    'scripts/setup.ts',
+    'scripts/global.ts',
+    'scripts/global.js',
+    'packages/a/tests/x.js',
+  ])('refuses a PR that writes or deletes %s, which the base tree owns', async (path) => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    plant(prepared.installed, {
+      'test/helpers/util.js': 'export {};\n',
+      'test/fixtures/data.json': '{}\n',
+      'test/__snapshots__/a.test.js.snap': 'x\n',
+      'src/cases.spec.ts': 'export const cases = [1, 2, 3];\n',
+      'src/__snapshots__/x.snap': 'x\n',
+      'src/a.test.mjs': 'export {};\n',
+      'src/a_test.js': 'export {};\n',
+      'packages/a/tests/x.js': 'export {};\n',
+      'vitest.config.ts': `import setup from './scripts/setup.ts';\nexport default { test: { globalSetup: ['./scripts/global.ts'] }, setup };\n`,
+      'scripts/setup.ts': 'export default 1;\n',
+      'scripts/global.ts': 'export default 1;\n',
+    });
+    for (const change of [
+      { files: [fixed, { path, content: '// gutted\n' }], deleted: [] },
+      { files: [fixed], deleted: [path] },
+    ]) {
+      const g = await grade(fx.task, prepared, change, localRunner, scratch);
+      expect(g).toMatchObject({ outcome: 'fail', specs: null });
+      expect(g.note).toMatch(/the PR is refused: .* is a test-side file the grader restores from the base tree/);
+    }
+  });
+
+  it('refuses a PR that empties a spec the hidden spec imports, the path-to-regexp-433 scenario', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    plant(prepared.installed, { 'src/cases.spec.js': `export const cases = ['a', 'b'];\n` });
+    const hidden = join(prepared.hidden, 'test/slug-hidden.test.js');
+    writeFileSync(
+      hidden,
+      `import { cases } from '../src/cases.spec.js';\n${readFileSync(hidden, 'utf8')}test('cases', () => assert.ok(cases.length === 2));\n`,
+    );
+    const emptied = { path: 'src/cases.spec.js', content: 'export const cases = [];\n' };
+    const g = await grade(fx.task, prepared, { files: [fixed, emptied], deleted: [] }, localRunner, scratch);
+    expect(g.note).toMatch(/src\/cases\.spec\.js is a test-side file/);
+    expect((await grade(fx.task, prepared, { files: [fixed], deleted: [] }, localRunner, scratch)).outcome).toBe(
+      'pass',
+    );
+  });
+
+  it('refuses a same-stem file over a hidden test whose name matches no test pattern', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    mkdirSync(join(prepared.hidden, 'src'), { recursive: true });
+    writeFileSync(join(prepared.hidden, 'src/oddname.js'), 'export {};\n');
+    const g = await grade(
+      fx.task,
+      prepared,
+      { files: [fixed, { path: 'src/oddname.ts', content: 'export {};\n' }], deleted: [] },
+      localRunner,
+      scratch,
+    );
+    expect(g.note).toMatch(/src\/oddname\.ts is a test-side file/);
+  });
+
+  it('grades a run against the passing-test count recorded for the upstream fix', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    const files = [{ path: 'src/slug.js', content: FIXED }];
+    const run = async (fixPassed: number) => {
+      await writeVerified(prepared.dir, fixPassed);
+      return runTask(fx.task, 1, prepared, {
+        arm: scriptedArm('baseline', { [fx.task.id]: { files } }),
+        runner: localRunner,
+        scratch,
+      });
+    };
+    expect((await run(4)).outcome).toBe('pass');
+    expect(await run(5)).toMatchObject({ outcome: 'fail' });
+    expect((await run(5)).note).toMatch(/4 tests passed, the upstream fix passes 5/);
+  });
+
+  it('fails a suite that ran fewer passing tests than the upstream fix did, whatever the files say', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    const green = (cwd: string, hidden: readonly string[]) => hidden.map((h) => spec(cwd, h, 3, 0));
+    const run = (floor: number) => grade(fx.task, prepared, NO_CHANGE, reportingRunner(green), scratch, floor);
+    expect((await run(6)).outcome).toBe('pass');
+    const gutted = await run(7);
+    expect(gutted.outcome).toBe('fail');
+    expect(gutted.note).toBe('6 tests passed, the upstream fix passes 7: a suite that shrank cannot pass');
+  });
+
+  it('ignores a test file the PR adds, so an honest new test neither fails the PR nor runs', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    const added = {
+      path: 'test/new-thing.test.js',
+      content: `import { test } from 'node:test';\ntest('x', () => { throw new Error('x'); });\n`,
+    };
+    expect(await grade(fx.task, prepared, { files: [fixed, added], deleted: [] }, localRunner, scratch)).toMatchObject({
+      outcome: 'pass',
+      suspect: [],
+    });
+  });
+
+  it('keeps the code under test editable: a source file a hidden spec imports is not test-side', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    expect((await grade(fx.task, prepared, { files: [fixed], deleted: [] }, localRunner, scratch)).outcome).toBe(
+      'pass',
+    );
+  });
+});
+
+describe('the static scan of the files a PR changes', () => {
+  it.each([
+    ["import { expect } from 'vitest';", 'imports vitest'],
+    ["const c = require('chai');", 'imports chai'],
+    ["import { test } from 'node:test';", 'imports node:test'],
+    ["import assert from 'node:assert/strict';", 'imports node:assert or assert'],
+    ["import assert from 'assert';", 'imports node:assert or assert'],
+    ['expect.extend({ toBe: () => ({ pass: true }) });', 'calls expect.extend'],
+    ['chai.Assertion.prototype.assert = () => {};', 'touches Assertion.prototype'],
+    ['process.exit(0);', 'calls process.exit'],
+    ['process.reallyExit(0);', 'calls process.exit'],
+    ['globalThis.expect = () => {};', 'reaches the test globals'],
+    ["writeFileSync('.aw-bench/result.json', '{}');", 'names the grader work directory'],
+  ])('flags %s', (line, reason) => {
+    expect(suspectReasons('src/x.ts', 'export {};\n', `export {};\n${line}\n`)).toEqual([`src/x.ts ${reason}`]);
+  });
+
+  it('flags only what the PR adds, not a use the base file already had, and reads code files only', () => {
+    expect(suspectReasons('src/cli.ts', 'process.exit(1);\n', 'process.exit(1);\nconst x = 1;\n')).toEqual([]);
+    expect(suspectReasons('src/cli.ts', 'process.exit(1);\n', 'process.exit(1);\nprocess.exit(2);\n')).toHaveLength(1);
+    expect(suspectReasons('docs/notes.md', '', 'call process.exit(0) from vitest')).toEqual([]);
+  });
+
+  it('records that a patched assert passes the grader in the same process, and flags the row instead', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    const forged: Change = {
+      files: [
+        {
+          path: 'src/slug.js',
+          content: `import assert from 'node:assert/strict';\nassert.equal = () => {};\nexport const slug = () => 'x';\n`,
+        },
+      ],
+      deleted: [],
+    };
+    const g = await grade(fx.task, prepared, forged, localRunner, scratch);
+    expect(g.outcome).toBe('pass');
+    expect(g.suspect).toEqual([expect.stringContaining('imports node:assert or assert')]);
+  });
+});
+
+describe('the row flags', () => {
+  it('flags a row contaminated when the agent made server-side web requests, and suspect when its PR touches test machinery', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    await writeVerified(prepared.dir, 0);
+    const run = (script: Script) =>
+      runTask(fx.task, 1, prepared, {
+        arm: scriptedArm('baseline', { [fx.task.id]: script }),
+        runner: localRunner,
+        scratch,
+      });
+    const files = [{ path: 'src/slug.js', content: FIXED }];
+    expect(await run({ files })).toMatchObject({ flag: null, outcome: 'pass' });
+    expect(await run({ files, webRequests: 2 })).toMatchObject({ flag: 'contaminated', outcome: 'pass' });
+    expect((await run({ files, webRequests: 2 })).note).toMatch(/^2 server-side web requests;/);
+    const exiting = await run({ files: [{ path: 'src/slug.js', content: `process.exit(0);\n${FIXED}` }] });
+    expect(exiting).toMatchObject({ flag: 'suspect', outcome: 'fail' });
+    expect(await run({ files, webRequests: 0 })).toMatchObject({ flag: null });
   });
 });

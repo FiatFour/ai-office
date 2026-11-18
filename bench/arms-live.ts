@@ -36,6 +36,11 @@ export const tokensOf = (usages: readonly (Usage | null)[]): Tokens | null => {
   };
 };
 
+export const webRequestsOf = (usages: readonly (Usage | null)[]): number | null => {
+  const seen = usages.filter((u): u is Usage => u !== null);
+  return seen.length === 0 ? null : seen.reduce((n, u) => n + u.webRequests, 0);
+};
+
 export interface BaselineOptions {
   readonly model?: string;
   readonly bin?: string;
@@ -77,6 +82,7 @@ export const baselineArm = (shellFor: (task: TaskA) => CageShell, options: Basel
       deleted: await deletedSince(shell, before.out.trim()),
       reviewRounds: null,
       tokens: tokensOf([result.usage]),
+      webRequests: webRequestsOf([result.usage]),
       quotaWindows: null,
       humanMinutes: null,
       note: 'single Claude Code session, one round, no review',
@@ -142,6 +148,7 @@ export const factoryArm = (env: FactoryEnv): Arm => ({
         deleted: await handle.removed(change),
         reviewRounds: view?.rounds[ticket.id] ?? 0,
         tokens: tokensOf(view?.usage[ticket.id] ?? []),
+        webRequests: webRequestsOf(view?.usage[ticket.id] ?? []),
         quotaWindows: null,
         humanMinutes: null,
         note: `PR #${change.number} at ready_to_merge`,

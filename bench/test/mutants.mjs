@@ -234,7 +234,7 @@ const MUTANTS = [
   {
     name: 'own-copy-allowed',
     claim: 'an installed copy of the project newer than the base is refused',
-    edits: [['bench/workspace.ts', '.filter(([, version]) => newerThan(version, base))', '.filter(() => false)']],
+    edits: [['bench/workspace.ts', 'newerThan(version, base)\n      ?', 'false\n      ?']],
     tests: [CLOSURE, SETUP],
   },
   {
@@ -312,13 +312,7 @@ const MUTANTS = [
   {
     name: 'runner-config-not-protected',
     claim: 'a PR cannot add or change the runner config',
-    edits: [
-      [
-        'bench/protected.ts',
-        '/(^|\\/)(vitest|vite|jest|mocha|ava|babel)\\.(config|workspace)[^/]*$/i,',
-        '/(^|\\/)zz-config$/i,',
-      ],
-    ],
+    edits: [['bench/protected.ts', '  RUNNER_CONFIG,\n', '']],
     tests: [CLOSURE],
   },
   {
@@ -432,7 +426,13 @@ const MUTANTS = [
   {
     name: 'fix-script-keeps-protected-paths',
     claim: 'the upstream fix replayed as a change leaves out the package and runner files the grader refuses',
-    edits: [['bench/workspace.ts', ' && protectedReason(rel) === null);', ');']],
+    edits: [['bench/workspace.ts', ' && protectedReason(rel) === null &&', ' &&']],
+    tests: [SETUP],
+  },
+  {
+    name: 'fix-script-keeps-test-side-paths',
+    claim: 'the upstream fix replayed as a change leaves out the test-side files the grader refuses',
+    edits: [['bench/workspace.ts', ' && !isTestSide(rel),', ',']],
     tests: [SETUP],
   },
   {
@@ -444,7 +444,9 @@ const MUTANTS = [
   {
     name: 'scripted-rows-count',
     claim: 'scripted rows never reach a verdict',
-    edits: [['bench/report.ts', 'rows.filter((r) => !r.scripted)', 'rows.filter(() => true)']],
+    edits: [
+      ['bench/report.ts', 'rows.filter((r) => !r.scripted && r.flag === null)', 'rows.filter((r) => r.flag === null)'],
+    ],
     tests: [REPORT],
   },
   {
@@ -454,16 +456,204 @@ const MUTANTS = [
     tests: [REPORT],
   },
   {
-    name: 'minutes-per-row',
-    claim: 'human minutes are divided by the PRs opened, not by every row',
+    name: 'cost-reads-every-factory-row',
+    claim: 'the cost check divides the windows of Set B rows by the Set B merges, not the windows of every factory row',
     edits: [
       [
         'bench/report.ts',
-        "const opened = factory.filter((r) => r.set === 'B' || r.outcome === 'pass' || r.outcome === 'fail');",
-        'const opened = factory;',
+        'const windows = sum(setB, (r) => r.quotaWindows);',
+        'const windows = sum(factory, (r) => r.quotaWindows);',
       ],
     ],
     tests: [REPORT],
+  },
+  {
+    name: 'minutes-read-every-factory-row',
+    claim: 'the human-minutes check reads Set B rows only',
+    edits: [
+      [
+        'bench/report.ts',
+        'const minutes = sum(setB, (r) => r.humanMinutes);',
+        'const minutes = sum(factory, (r) => r.humanMinutes);',
+      ],
+    ],
+    tests: [REPORT],
+  },
+  {
+    name: 'flagged-rows-count',
+    claim: 'a contaminated or suspect row reaches no verdict',
+    edits: [['bench/report.ts', '!r.scripted && r.flag === null);', '!r.scripted);']],
+    tests: [REPORT],
+  },
+  {
+    name: 'flagged-rows-hidden',
+    claim: 'the report lists the flagged rows in their own section',
+    edits: [
+      [
+        'bench/report.ts',
+        'const flagged = rows.filter((r) => !r.scripted && r.flag !== null);',
+        'const flagged: Row[] = [];',
+      ],
+    ],
+    tests: [REPORT],
+  },
+  {
+    name: 'old-rows-without-flag-accepted',
+    claim: 'rows written before the flag column are refused',
+    edits: [['bench/report.ts', '|| parsed.flag === undefined', '']],
+    tests: [REPORT],
+  },
+  {
+    name: 'standin-pass-counted',
+    claim: 'the stand-in pass node prints for a file that ended early is not a passing test',
+    edits: [
+      [
+        'bench/reporters/node-json.mjs',
+        "if (event.type === 'test:fail' || standIn)",
+        "if (event.type === 'test:fail')",
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'standin-never-matches',
+    claim: 'the stand-in test is recognised by its file-path name at the top level',
+    edits: [['bench/reporters/node-json.mjs', 'const standIn = nesting === 0 &&', 'const standIn = false &&']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'test-side-edit-allowed',
+    claim: 'a PR cannot write or delete a test-side file of the base tree',
+    edits: [['bench/grade.ts', 'if (refusesTestSide(side, path))', 'if (false)']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'shadow-stem-allowed',
+    claim: 'a PR file with the stem of a test-side file, such as cases.spec.js over cases.spec.ts, is refused',
+    edits: [['bench/testside.ts', 'side.files.has(rel) || side.stems.has(stemOf(rel))', 'side.files.has(rel)']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'config-imports-unprotected',
+    claim: 'the files a runner config imports or names are test-side, so a PR cannot plant code the runner loads',
+    edits: [
+      [
+        'bench/testside.ts',
+        'const queue = treeRels.filter((rel) => RUNNER_CONFIG.test(rel));',
+        'const queue: string[] = [];',
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'test-dirs-unprotected',
+    claim: 'files under test, tests, fixtures and snapshot directories are test-side',
+    edits: [
+      [
+        'bench/protected.ts',
+        '(__snapshots__|__tests__|__mocks__|__fixtures__|test|tests|fixtures|e2e)',
+        '(__snapshots__|__tests__|__mocks__|__fixtures__)',
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'hidden-files-unprotected',
+    claim: 'the hidden test files are test-side even when no pattern names them',
+    edits: [
+      [
+        'bench/testside.ts',
+        'new Set([...readTree(hidden).map(normal), ...treeRels.filter(isTestSide)])',
+        'new Set(treeRels.filter(isTestSide))',
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'new-test-file-applied',
+    claim: 'a test file the PR adds is not applied to the graded tree',
+    edits: [['bench/grade.ts', 'if (skipped.has(edit.path)) continue;', 'void skipped;']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'count-floor-off',
+    claim: 'a suite that passes fewer tests than the upstream fix did cannot pass',
+    edits: [['bench/grade.ts', 'if (passed < minPassed)', 'if (false)']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'floor-not-passed-to-grade',
+    claim: 'a run grades against the count the upstream fix reached',
+    edits: [['bench/run.ts', '    ctx.scratch,\n    fixPassed,\n', '    ctx.scratch,\n']],
+    tests: [CLOSURE, SETUP],
+  },
+  {
+    name: 'floor-recorded-as-zero',
+    claim: 'verify records the real passing-test count of the upstream fix',
+    edits: [['bench/run.ts', 'fixPassed: totalPassed(fixed.specs)', 'fixPassed: 0']],
+    tests: [SETUP],
+  },
+  {
+    name: 'verify-skips-upstream-fix',
+    claim: 'a task whose own upstream fix does not grade pass is refused',
+    edits: [['bench/run.ts', "if (fixed.outcome !== 'pass' || fixed.specs === null)", 'if (false)']],
+    tests: [SETUP],
+  },
+  {
+    name: 'suspect-scan-off',
+    claim: 'a PR file that imports test machinery or exits the process is marked suspect',
+    edits: [['bench/testside.ts', 'count(after, pattern) > count(before, pattern)', 'false']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'suspect-ignores-base-use',
+    claim: 'the scan flags what the PR adds, not a use the base file had',
+    edits: [['bench/testside.ts', 'count(after, pattern) > count(before, pattern)', 'count(after, pattern) > 0']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'suspect-flag-dropped',
+    claim: 'a suspect scan result reaches the row as a suspect flag',
+    edits: [['bench/run.ts', ": suspect.length > 0\n      ? ['suspect'", ": false\n      ? ['suspect'"]],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'web-requests-not-flagged',
+    claim: 'a run that made server-side web requests is flagged contaminated',
+    edits: [['bench/run.ts', 'webRequests !== null && webRequests > 0', 'false']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'web-tools-allowed',
+    claim: 'claude runs with WebSearch and WebFetch disallowed',
+    edits: [['server/agents/claude-code.ts', "  '--disallowedTools',\n  WITHOUT_WEB,\n", '']],
+    tests: ['server/test/agents.test.ts'],
+  },
+  {
+    name: 'web-requests-uncounted',
+    claim: 'the stream reader counts server-side web searches and fetches',
+    edits: [['server/agents/claude-code.ts', 'webRequests: Math.max(reported, served)', 'webRequests: 0']],
+    tests: ['server/test/agents.test.ts'],
+  },
+  {
+    name: 'web-requests-not-carried',
+    claim: 'the baseline arm carries the web request count into the row',
+    edits: [
+      ['bench/arms-live.ts', '      webRequests: webRequestsOf([result.usage]),\n', '      webRequests: null,\n'],
+    ],
+    tests: [ARMS],
+  },
+  {
+    name: 'equal-copy-content-unjudged',
+    claim: 'an installed copy at the base version is judged by its content against the base tree',
+    edits: [['bench/workspace.ts', 'if (sameVersion && SOURCE_FILE.test(rel)', 'if (false && SOURCE_FILE.test(rel)']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'hidden-copy-in-package-unjudged',
+    claim: 'an installed copy of the project that carries a hidden test is refused',
+    edits: [['bench/workspace.ts', 'if (planted !== undefined) problems.push', 'if (false) problems.push']],
+    tests: [CLOSURE],
   },
   {
     name: 'overhead-drops-prepare',

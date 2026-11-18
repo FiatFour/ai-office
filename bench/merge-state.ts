@@ -45,6 +45,7 @@ export const readMergeState = async (
     agentMs: 0,
     prepareMs: 0,
     tokens: null,
+    flag: null,
     quotaWindows: null,
     humanMinutes,
     note,

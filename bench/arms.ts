@@ -8,6 +8,7 @@ export interface ArmRun {
   readonly deleted: readonly string[];
   readonly reviewRounds: number | null;
   readonly tokens: Tokens | null;
+  readonly webRequests: number | null;
   readonly quotaWindows: number | null;
   readonly humanMinutes: number | null;
   readonly note: string;
@@ -26,6 +27,7 @@ export interface Script {
   readonly deleted?: readonly string[];
   readonly reviewRounds?: number;
   readonly tokens?: Tokens;
+  readonly webRequests?: number;
   readonly workMs?: number;
   readonly hang?: boolean;
   readonly fail?: string;
@@ -45,6 +47,7 @@ export const scriptedArm = (name: ArmName, scripts: Readonly<Record<string, Scri
       deleted: script.deleted ?? [],
       reviewRounds: name === 'factory' ? (script.reviewRounds ?? 0) : null,
       tokens: script.tokens ?? null,
+      webRequests: script.webRequests ?? null,
       quotaWindows: null,
       humanMinutes: null,
       note: 'scripted',

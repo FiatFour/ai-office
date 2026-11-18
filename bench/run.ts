@@ -11,9 +11,9 @@ import type { Arm } from './arms.ts';
 import { type Script, scriptedArm } from './arms.ts';
 import { baselineArm, ticketOf } from './arms-live.ts';
 import { BenchCage } from './cage.ts';
-import { grade, revertSanity } from './grade.ts';
+import { grade, revertSanity, totalPassed } from './grade.ts';
 import { readMergeState } from './merge-state.ts';
-import { parseTask, type Row, type Task, type TaskA, TaskRefused } from './model.ts';
+import { type Flag, parseTask, type Row, type Task, type TaskA, TaskRefused } from './model.ts';
 import { readRows } from './report.ts';
 import { dockerRunner, localRunner, type Runner } from './runner.ts';
 import { fixChange, mirrorPath, type Prepared, prepareTask } from './workspace.ts';
@@ -34,13 +34,25 @@ export interface RunContext {
 
 const failure = (message: string): string => message.replace(/\s+/g, ' ').slice(0, 300);
 
+const flagOf = (webRequests: number | null, suspect: readonly string[]): [Flag | null, string] =>
+  webRequests !== null && webRequests > 0
+    ? ['contaminated', `${webRequests} server-side web requests; `]
+    : suspect.length > 0
+      ? ['suspect', `${suspect.join(', ')}; `]
+      : [null, ''];
+
 export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx: RunContext): Promise<Row> => {
   const verifiedFile = join(prepared.dir, 'verified.json');
   if (!existsSync(verifiedFile))
     throw new TaskRefused(
       `task ${task.id} was never verified: run prepare, which checks the hidden tests fail at the base`,
     );
-  const { prepareMs } = JSON.parse(readFileSync(verifiedFile, 'utf8')) as { prepareMs: number };
+  const { prepareMs, fixPassed } = JSON.parse(readFileSync(verifiedFile, 'utf8')) as {
+    prepareMs: number;
+    fixPassed?: number;
+  };
+  if (typeof fixPassed !== 'number')
+    throw new TaskRefused(`task ${task.id} was verified by an older harness: rerun prepare to record the test count`);
   const clock = ctx.clock ?? performance;
   const wallStart = clock.now();
   const abort = new AbortController();
@@ -62,7 +74,7 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
   ]);
   clearTimeout(timer);
   const agentMs = Math.round(clock.now() - agentStart);
-  const empty = { reviewRounds: null, tokens: null, quotaWindows: null, humanMinutes: null };
+  const empty = { reviewRounds: null, tokens: null, flag: null, quotaWindows: null, humanMinutes: null };
   const wall = () => Math.round(clock.now() - wallStart);
   if (outcome === 'timeout')
     return {
@@ -85,18 +97,27 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
       note: failure(outcome.error instanceof Error ? outcome.error.message : String(outcome.error)),
     };
   const { done } = outcome;
-  const graded = await grade(task, prepared, { files: done.files, deleted: done.deleted }, ctx.runner, ctx.scratch);
+  const graded = await grade(
+    task,
+    prepared,
+    { files: done.files, deleted: done.deleted },
+    ctx.runner,
+    ctx.scratch,
+    fixPassed,
+  );
+  const [flag, why] = flagOf(done.webRequests, graded.suspect);
   return {
     ...base,
     prepareMs,
     outcome: graded.outcome,
     reviewRounds: done.reviewRounds,
     tokens: done.tokens,
+    flag,
     quotaWindows: done.quotaWindows,
     humanMinutes: done.humanMinutes,
     wallMs: wall(),
     agentMs,
-    note: failure(`${done.note}; ${graded.note}`),
+    note: failure(`${why}${done.note}; ${graded.note}`),
   };
 };
 
@@ -104,10 +125,13 @@ export const verifyTask = async (task: TaskA, prepared: Prepared, runner: Runner
   const started = performance.now();
   const sanity = await revertSanity(task, prepared, runner, scratch);
   if (!sanity.failsAtBase) throw new TaskRefused(`task ${task.id}: ${sanity.note}`);
+  const fixed = await grade(task, prepared, await fixChange(task, prepared.mirror), runner, scratch);
+  if (fixed.outcome !== 'pass' || fixed.specs === null)
+    throw new TaskRefused(`task ${task.id}: the upstream fix grades ${fixed.outcome}: ${fixed.note}`);
   const prepareMs = prepared.prepareMs + Math.round(performance.now() - started);
   writeFileSync(
     join(prepared.dir, 'verified.json'),
-    `${JSON.stringify({ baseSha: prepared.baseSha, note: sanity.note, prepareMs })}\n`,
+    `${JSON.stringify({ baseSha: prepared.baseSha, note: sanity.note, prepareMs, fixPassed: totalPassed(fixed.specs) })}\n`,
   );
   return sanity;
 };
@@ -223,12 +247,11 @@ const main = async (argv: string[]): Promise<number> => {
     if (task.set !== 'A') throw new TaskRefused(`task ${task.id} is a Set B task`);
     const prepared = await prepareTask(task, { cache: values.cache, repoUrl, runner });
     await verifyTask(task, prepared, runner, scratch);
-    const change = await fixChange(task, mirrorPath(values.cache, task.repo));
-    const graded = await grade(task, prepared, change, runner, scratch);
-    console.log(
-      `${task.id}: the upstream fix (${change.files.map((f) => f.path).join(', ')}) grades ${graded.outcome}: ${graded.note}`,
-    );
-    return graded.outcome === 'pass' ? 0 : 1;
+    const { fixPassed } = JSON.parse(readFileSync(join(prepared.dir, 'verified.json'), 'utf8')) as {
+      fixPassed: number;
+    };
+    console.log(`${task.id}: the upstream fix grades pass with ${fixPassed} tests, the floor a PR must reach`);
+    return 0;
   }
   if (command === 'fix-scripts') {
     const scripts: Record<string, Script> = {};

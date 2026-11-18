@@ -1,16 +1,24 @@
 # What keeps the answer from the agent
 
-Premise: the cage and the grader keep the answer out of the agent's reach. The answer is the fix commit, the hidden tests, any later release that carries the fix, and the verdict itself. Each channel is tested directly. A channel with no closure is a recorded limit.
+Premise 1: the cage and the grader keep the answer out of the agent's reach. The answer is the fix commit, the hidden tests, any later release that carries the fix, and the verdict itself.
+
+Premise 2: the graded verdict is trustworthy when PR-authored code runs in the same tree and the same process as the grader and the tests. This is false in general. A PR can change what the tests load, exit before they report, or patch the assertion library in the process that counts them. The structural closures below remove every channel that does not need the PR's code to run inside the runner. The rest are recorded limits with a heuristic flag.
+
+Each channel is tested directly. A channel with no closure is a recorded limit.
 
 | Channel | Closure | Test |
 | --- | --- | --- |
 | Network from the cage (git fetch, ls-remote, registry install) | `BenchCage` runs the firewall with `api.anthropic.com` only. Tests run offline from dependencies installed before the run. | `cage-mount.test.ts`, real cage, denials seen for github.com and registry.npmjs.org |
-| Package versions | No registry. `installedProblems` refuses an install that holds a copy of the project newer than the base. | `closure.test.ts`, `task-setup.test.ts` |
+| Package versions | No registry. `installedProblems` refuses an install that holds a copy of the project newer than the base. A copy at the base version, the `.pnpm` ones included, is judged by content: a source file that differs from the same file in the base tree, or a file equal to a hidden test, is refused. Documentation and the built `dist` are not compared. | `closure.test.ts`, `task-setup.test.ts` |
 | Git objects | The cage repo is `git archive` of one base commit, re-initialised. Source checks refuse a second commit, a remote or tag ref, a reachable fix commit. | `task-setup.test.ts` |
 | Hidden test files | Removed from the source, matched by content in the seal check, copied back only at grading. | `task-setup.test.ts`, `cage-mount.test.ts` |
 | Ticket and package metadata | No issue url, github and npm links cut from the body, ticket id is a hash, `repository`, `homepage`, `bugs` removed from package.json. | `arms.test.ts`, `task-setup.test.ts` |
 | PR path into the graded tree | Refused: node_modules, package and lock files, runner and tsconfig files, `.aw-bench`, the spec files, paths through a symbolic link. Deletions and rename sources are applied. | `closure.test.ts` |
-| Graded runner and verdict | Runner and config are the base ones. The verdict is the runner's JSON report: every spec file named by the task must appear with a nonzero pass count and no failure, and the exit code must be 0. | `closure.test.ts`, `task-setup.test.ts` |
+| Test-side files the hidden specs load | Every test-side file of the base tree is the grader's, not the PR's: any `*.spec.*`, `*.test.*`, `*-test.*`, `test-*`, `*.snap`, anything under `test`, `tests`, `__tests__`, `__snapshots__`, `__mocks__`, `fixtures` or `e2e`, the hidden files, and every file a runner config imports or names (setup files, global setup). A PR that writes or deletes one is refused. A file with the same name before the extension (`cases.spec.js` over `cases.spec.ts`) is refused too. A test file the PR adds that is not one of these is not applied and does not run. | `closure.test.ts` (path-to-regexp-433 replayed on the real harness, 367 tests and 4 refused edits) |
+| A gutted suite | Verification grades the upstream fix on the harness and refuses the task if it does not pass. It stores the passing-test count in `verified.json`, and a graded run needs at least that many passing tests. | `closure.test.ts`, `task-setup.test.ts` |
+| Graded runner and verdict | Runner and config are the base ones. The verdict is the runner's JSON report: every spec file named by the task must appear with a nonzero pass count and no failure, and the exit code must be 0. The node:test reporter counts only real tests. The stand-in test node prints for a file that ended without reporting (`process.exit(0)` in the code under test) counts as a failure. | `closure.test.ts`, `task-setup.test.ts` |
+| Live web search and fetch through `api.anthropic.com` | `claude` runs with `--disallowedTools WebSearch,WebFetch`. A row whose stream reports server-side web search or fetch requests (`usage.server_tool_use`, or `server_tool_use` blocks) is flagged `contaminated` and counts in no verdict. | `agents.test.ts`, `closure.test.ts`, `report.test.ts` |
+| Forged assertions in the test process | Heuristic only. A static scan of the non-test files a PR adds or changes flags `suspect` when the PR adds an import of vitest, chai, node:test or node:assert, `expect.extend`, `Assertion.prototype`, `process.exit`, `process.reallyExit`, `process.abort`, a use of the test globals on `globalThis`, or a mention of `.aw-bench`. A suspect row counts in no verdict and is listed in the report. | `closure.test.ts`, `report.test.ts` |
 | Operator gates | Every non-scripted arm needs a confirmed task and `AW_BENCH_LOGIN_CONFIRMED=1`, with or without `--bin`. | `cli.test.ts` |
 
 ## Allowlist decision
@@ -21,7 +29,12 @@ A model run needs `api.anthropic.com`. The repo tests run with the dependencies 
 
 - The model may remember the upstream fix from training. No harness closes that.
 - README, CHANGELOG and source comments in the base tree can name the upstream project. With no network that only names the repo.
-- Code under test runs in the same process as the runner's report writer, so a PR that patches the runner at run time can forge the report. Only a second runner in a separate container would close it.
+- Code under test runs in the same process as the assertions, the test files and the runner's report writer. Two lines in a source file forge a pass: `expect.extend({ toBe: () => ({ pass: true }) })`, `chai.Assertion.prototype.assert = () => {}`, or a patched `node:assert`. This is trivially forgeable in-process. The scan above is a heuristic backstop, not a seal. It misses a patch written through an indirection such as `globalThis['ex' + 'pect']` or a computed dynamic import, and it flags honest code that uses these names. Only a second runner in a separate container, with the verdict computed outside the PR's process, would close it, and it is not built.
+- A test helper outside every test-side pattern that a hidden spec imports (for example `src/testing.ts`) looks like code under test and stays editable. The count floor and the scan are the only backstops.
+- A runner config that imports code the fix needs to change makes the fix unfixable: the file is refused as test-side. No current task does.
+- A new test file the PR adds is not applied, so a model that adds tests gets no credit and no penalty for them.
+- Server-side web search and fetch also reach the model API through a nested `claude -p --allowedTools WebSearch` or a direct call to `/v1/messages` with the `web_search` or `web_fetch` tool, run by the agent from Bash with the login in the cage home. `--disallowedTools` covers only the outer session. The usage flag sees only the outer session. A nested or direct call is not seen and not closed. Rows carry no proof against it, so the first live run reads as "no contamination seen", never "none".
+- The cage home (`--home`) persists across runs and tasks, because the login lives there. Files an agent leaves in it, such as memory, settings or a shell history, are readable by the next task. A fresh home per task would need a copy of the login, which this harness does not read or copy. The operator should clear everything but the login between tasks.
 - A copy of the project nested deeper than `node_modules/<name>` and `node_modules/.pnpm/<name>@*` is not scanned.
-- The login token in the cage home can reach `api.anthropic.com`; the model API itself is the one open channel.
+- The login token in the cage home can reach `api.anthropic.com`. The model API is the one open channel, and it carries the server-side web tools described above.
 - The factory arm learns removed paths from the host API through `gh`, which the operator wires when the live arm is seeded.

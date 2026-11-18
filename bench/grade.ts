@@ -1,10 +1,11 @@
-import { cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Change, TaskA } from './model.ts';
 import { TaskRefused } from './model.ts';
-import { normal, protectedReason } from './protected.ts';
+import { isTestSide, normal, protectedReason } from './protected.ts';
 import type { Runner } from './runner.ts';
+import { isNewTestFile, refusesTestSide, suspectReasons, type TestSide, testSideOf } from './testside.ts';
 import { insideOf, type Prepared, readTree } from './workspace.ts';
 
 export interface SpecCount {
@@ -17,6 +18,7 @@ export interface Grade {
   readonly outcome: 'pass' | 'fail' | 'timeout';
   readonly note: string;
   readonly specs: readonly SpecCount[] | null;
+  readonly suspect: readonly string[];
 }
 
 export const NO_CHANGE: Change = { files: [], deleted: [] };
@@ -86,14 +88,22 @@ const readResult = (work: string): string => {
   }
 };
 
-const refusal = (task: TaskA, change: Change): string | null => {
+const refusal = (task: TaskA, change: Change, side: TestSide): string | null => {
   const graded = new Set([...task.specs, ...task.hiddenPaths].map(normal));
   for (const path of [...change.files.map((f) => f.path), ...change.deleted]) {
     const reason = protectedReason(path);
     if (reason !== null) return reason;
     if (graded.has(normal(path))) return `${path} is a graded test file`;
+    if (refusesTestSide(side, path)) return `${path} is a test-side file the grader restores from the base tree`;
   }
   return null;
+};
+
+export const totalPassed = (specs: readonly SpecCount[]): number => specs.reduce((n, s) => n + s.passed, 0);
+
+const baseText = (root: string, rel: string): string => {
+  const file = join(root, rel);
+  return existsSync(file) ? readFileSync(file, 'utf8') : '';
 };
 
 const throughLink = (root: string, rel: string): boolean => {
@@ -107,8 +117,9 @@ const throughLink = (root: string, rel: string): boolean => {
   return false;
 };
 
-const apply = (work: string, change: Change): string | null => {
+const apply = (work: string, change: Change, skipped: ReadonlySet<string>): string | null => {
   for (const edit of change.files) {
+    if (skipped.has(edit.path)) continue;
     let target: string;
     try {
       target = insideOf(work, edit.path);
@@ -134,20 +145,20 @@ const apply = (work: string, change: Change): string | null => {
   return null;
 };
 
-export const grade = async (
+const runGraded = async (
   task: TaskA,
   prepared: Prepared,
   change: Change,
+  ignored: ReadonlySet<string>,
   runner: Runner,
   scratch: string,
-): Promise<Grade> => {
-  const refused = refusal(task, change);
-  if (refused !== null) return { outcome: 'fail', note: `the PR is refused: ${refused}`, specs: null };
+  minPassed: number,
+): Promise<Omit<Grade, 'suspect'>> => {
   mkdirSync(scratch, { recursive: true });
   const work = mkdtempSync(join(scratch, `${task.id}-`));
   try {
     cpSync(prepared.installed, work, { recursive: true, verbatimSymlinks: true });
-    const problem = apply(work, change);
+    const problem = apply(work, change, ignored);
     if (problem !== null) return { outcome: 'fail', note: `the PR is refused: ${problem}`, specs: null };
     for (const rel of readTree(prepared.hidden)) {
       const target = join(work, rel);
@@ -177,15 +188,43 @@ export const grade = async (
     const failed = specs.reduce((n, s) => n + s.failed, 0);
     if (failed > 0 || ran.code !== 0) {
       const red = specs.filter((s) => s.failed > 0).map((s) => basename(s.file));
-      return { outcome: 'fail', note: `exit ${ran.code}, ${failed} failed in ${red.join(', ') || 'no spec'}`, specs };
+      return {
+        outcome: 'fail',
+        note: `exit ${ran.code}, ${failed} failed in ${red.join(', ') || 'no spec'}`,
+        specs,
+      };
     }
     if (missing.length > 0)
       return { outcome: 'fail', note: `no passing test reported for ${missing.join(', ')}`, specs };
-    const passed = specs.reduce((n, s) => n + s.passed, 0);
+    const passed = totalPassed(specs);
+    if (passed < minPassed)
+      return {
+        outcome: 'fail',
+        note: `${passed} tests passed, the upstream fix passes ${minPassed}: a suite that shrank cannot pass`,
+        specs,
+      };
     return { outcome: 'pass', note: `${passed} tests passed in ${specs.length} files`, specs };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
+};
+
+export const grade = async (
+  task: TaskA,
+  prepared: Prepared,
+  change: Change,
+  runner: Runner,
+  scratch: string,
+  minPassed = 0,
+): Promise<Grade> => {
+  const side = testSideOf(prepared.installed, prepared.hidden);
+  const refused = refusal(task, change, side);
+  if (refused !== null) return { outcome: 'fail', note: `the PR is refused: ${refused}`, specs: null, suspect: [] };
+  const ignored = new Set(change.files.filter((f) => isNewTestFile(side, f.path)).map((f) => f.path));
+  const suspect = change.files
+    .filter((f) => !ignored.has(f.path) && !isTestSide(f.path))
+    .flatMap((f) => suspectReasons(f.path, baseText(prepared.installed, f.path), f.content));
+  return { ...(await runGraded(task, prepared, change, ignored, runner, scratch, minPassed)), suspect };
 };
 
 export const revertSanity = async (

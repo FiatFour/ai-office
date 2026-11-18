@@ -21,6 +21,33 @@ The factory floor (480 by 270 pixel scene, one belt L1, boxes ORDER CODE TEST QC
 | M9 fixture reviewer | See "One-account reviewer" above | `src/test/floor-state.test.ts`; mutant `fixture-poll-by-non-author` |
 | 21 surviving mutants | All ported into `src/scripts/mutants.mjs`, with tiers (unit, then the Playwright lanes). Two extra verifier mutants are included | table below |
 
+## Round 3: what changed after the second verifier (NOT CLEAN at 9db7671: 1 blocker, 7 minors, 11 surviving mutants)
+
+**B1, the premise.** Rounds 1 and 2 each found more differences missing from a hand-written list (8, then 10). The premise "a human-curated difference list is complete" cannot be shown by reading, so it is now checked by a machine. `src/scripts/inventory.mjs` extracts from the rendered canvas artboard and from the built floor (Playwright, computed styles, scene zones in viewBox units) every visible string, every distinct fill, stroke, background, border and text colour per element role, font family and size, scene class, role (icon, stripe, laser, LED, bubble, glyph, ARIA), animation name, shape counts and 4-unit-bucketed bounding boxes per zone, and boxes per station. Lane 9 (`src/e2e/lane9.mjs`) computes the symmetric difference and fails when:
+
+- a differing key is in no entry's `covers:` list ("uncovered"), or in two entries
+- an entry covers a key that no longer differs ("stale"), or a `fixed` entry covers a key that is missing or still differs, or a `not-built` entry covers a key only the built floor has
+- a cell of the 12 by 9 pixel grid (mean colour distance above 40, `docs/review/P1-3-review-pixel-regions.md`, `docs/review/P1-3-review-pixel-heatmap.png`) is in no entry's `regions:` list
+- the compare image is not two 720 px panes of the same size (marker strips found by reading the PNG) plus a legend, the committed image differs from a fresh one, or the image does not change when either input changes (re-composed with a hue-rotated copy of each input)
+
+Numbers (measured, lane 9 note): **372 canvas-only, 99 built-only, 42 changed keys; 513 covered, 0 uncovered; 33 of 108 pixel cells hot, all inside a region.** The list went from 45 to 73 entries (D01 to D75, D67 and D71 unused). Inventory output is identical across two runs (diffed). 17 negative tests run inside lane 9 on mutated copies of the real inputs (entry deleted, covers key deleted, stale key, key covered twice, not-built relabelled fixed, a changed key relabelled fixed, fixed relabelled not-built, changed relabelled not-built over a built-only key, regions dropped, three entries only, PR body table stale, ADR table stale, a not-built text on the built floor, a fixed text gone, the NEED YOU colour, unequal panes, a plain screenshot as the compare image). Lane 9 fails if any of them does not fail.
+
+Differences the verifier listed, now each a keyed entry: built-only header fields (D47), `N boxes · N shipped` (D49), logo icon (D50, fixed) and link (D51, not built), scene label colours (D52, fixed, and D53, conflict: the canvas cage plate is 4.24 to 1), sleep glyph (D54, fixed), "!" bubble (D55, fixed), box colours and motion (D56, D68, D75), per-cell top borders (D59), hazard stripe and dock (D73), cage LED and door gap (D57, fixed), sixth cage (D58), firewall frame, lights and lasers (D72, fixed), roll-up door (D73), toast truck icon and pop (D50, D62, fixed), gantry press and scan lines (D74, fixed). Everything else the tool found is in D46 to D75 or in an older entry. Cheap spec items built: those marked fixed. The rest stays not built.
+
+| Minor | Fix | Test that fails without it |
+| --- | --- | --- |
+| M1 toast title | Lane 8 asserts the title in Thai and English, not only the detail | lane 8; mutant `toast-title-language-frozen` |
+| M2 demo read-only with `AGENT_WORKS_DEMO_EVENTS` | Test starts the CLI with the variable set and expects 403 on three writes | `src/test/demo-cli.test.ts`; mutant `cli-demo-not-read-only-with-env` |
+| M3 CSP strength | Test parses the policy of the floor, an asset, an API reply, an API error and the dashboard: connect-src is exactly `'self'` and the two loopback ws origins, frame-ancestors, object-src, base-uri, form-action are `'none'`, and the directive set is fixed | `src/test/demo.test.ts`; mutants `hq-csp-connect-any-ws`, `hq-csp-no-frame-ancestors`, `hq-csp-no-object-src` |
+| M4 exit hook and blank line | A child process calls `process.exit(7)` mid-replay and the throw-away home must be gone; a line of only spaces or tabs is skipped and still counted in line numbers | `src/test/demo-cli.test.ts`, `src/test/demo.test.ts`; mutants `cli-demo-no-exit-hook`, `demo-fixture-blank-strict` |
+| M5 Sarabun 400 | Lane 8 asserts the two loaded Sarabun faces are exactly 400 and 700 with the network blocked | lane 8; mutant `fonts-sarabun-400-missing` |
+| M6 lane 9 negative tests | The 17 above, one per lane 9 assertion, including the verifier's v32 (not-built check), v33 (stale table) and v34 (minimum count) | mutants `lane9-notbuilt-check-off`, `lane9-stale-table-check-off`, `lane9-min-count-1` and 16 more |
+| M7 orphan demo children | The mutation runner starts each command in its own process group and kills the group when it ends or times out, then checks `pgrep` for new `agent-works.ts` processes | the run prints "0 orphan demo processes" |
+
+Floor changes made to close differences: label colours, firewall frame and four lasers, git and npm lights, dock wall, ramp and roll-up door, cage LED and door gap, QC yellow and red jumping boxes with per-colour bands, the two sleep letters, the "!" drawn from rectangles, the gantry press, scan lines and light stack, the header logo icon, the toast truck icon and pop animation, keyframes named as on the canvas. Cage plate colour stays `#2f343b` for contrast (D53).
+
+Mutants: 109 total (90 unit and e2e, 19 lane 9), 0 survived. The verifier's survivors v10, v11, v12, v17, v19, v21, v30, v31, v32, v33, v34 are ported and killed. Two lane 9 mutants (`lane9-fixed-check-off`, `lane9-layout-widths-off`) survived the first run, which found two missing negative tests; both tests were added and both mutants are now killed.
+
 ## Boundary files: request for the operator to accept
 
 This unit touches files outside `src/` that belong to the server, CI and workspace. The operator is asked to accept them:
@@ -32,9 +59,9 @@ This unit touches files outside `src/` that belong to the server, CI and workspa
 
 ## Verify, unit
 
-`pnpm test` (root): 1342 tests, 51 files, all pass. `pnpm test src`: 92 tests, 5 files. `pnpm lint`: no errors, no warnings. Typecheck root and `src`: clean.
+`pnpm test` (root): 1346 tests, 51 files, all pass. `pnpm lint`: no errors, no warnings. Typecheck root and `src`: clean.
 
-Mutants, `node src/scripts/mutants.mjs` (baseline PASS, 83 mutants, 0 survived; result file `/tmp/swarm-P1-3/owner/mutants-p1-3.txt`). Tier unit runs `pnpm vitest run src/test`; tier e2e rebuilds the floor and runs `node src/e2e/lanes.mjs`.
+Mutants, `node src/scripts/mutants.mjs` (baseline PASS, 109 mutants, 0 survived; result files `/tmp/swarm-P1-3/owner/mutants-p1-3-r3.txt` and `mutants-lane9-r3.txt`). Tier unit runs `pnpm vitest run src/test`; tier e2e rebuilds the floor and runs `node src/e2e/lanes.mjs`; tier lane9 runs `node src/e2e/lane9.mjs`. Every command runs in its own process group and the group is killed afterwards.
 
 | Mutant | Result | Claim it checks |
 | --- | --- | --- |
@@ -105,10 +132,10 @@ Not killed on purpose: the verifier's `qc-mood-on-test-box` (a box in `test` has
 | 5 widths 1440 and 390 | PASS |
 | 3 sprite states | PASS |
 | 4 action drawer | PASS |
-| 7 axe-core | PASS: 0 violations, 171 incomplete nodes recorded, `docs/review/P1-3-review-axe.txt` |
+| 7 axe-core | PASS: 0 violations, 188 incomplete nodes recorded, `docs/review/P1-3-review-axe.txt` |
 | 6 reduced motion | PASS |
 | 3.5 six cages, seven workers | PASS |
-| 9 canvas compare | PASS (45 differences checked, see below) |
+| 9 canvas compare | PASS (73 entries, 513 inventory keys covered, 0 uncovered, 17 negative tests, see below) |
 
 ## Verify, perf (measured, 1440x900 headless Chromium on this machine, `node src/e2e/perf.mjs`)
 
@@ -118,7 +145,7 @@ Not killed on purpose: the verifier's `qc-mood-on-test-box` (a box in `test` has
 - **A literal "rAF p95 <= 16.7 ms" reads 16.8 ms** in probe 1 and in the earlier runs. That interval is the 60 Hz vsync period (16.67 ms) plus jitter, so it cannot be below 16.7 and a literal reading fails by 0.1 ms. **The CI gate trips on work per frame p95 over 16.7 ms or rAF p95 over 33.4 ms** (a dropped frame), for both probes. The operator may want a different reading of the rule.
 - No baseline, trunk empty.
 
-## Canvas compare (lane 9): 45 differences
+## Canvas compare (lane 9): 73 entries
 
 The artboard was rendered, not guessed: `docs/review/canvas/Main.dc.txt` is `project/Main.dc.html` (sha256 `13a3d20a…71198e`), `src/e2e/canvas.mjs` renders it from its own source without the claude.ai runtime. Image: `docs/review/P1-3-review-canvas-compare.png` (canvas left, built floor right, badge n on difference Dn, legend below). The list is `docs/review/P1-3-canvas-differences.md`; the verifier's items are D01 (Demo data), D02 (WIN · PWSH), D10 (+ Hire), D11 (NEED YOU colour), D12 (the "EN" on the canvas is an energy bar label, not a language chip), D21 (+50 XP), D30 to D32 (run-mode labels), D34 (box codes).
 
@@ -172,6 +199,34 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 | D43 | conflict | Fonts. The canvas loads Silkscreen, Press Start 2P, Pixelify Sans and VT323 from Google Fonts. The spec says no network at runtime, so built serves the same four from @fontsource, plus Sarabun for Thai. |
 | D44 | conflict | Language switch. The spec puts it in Settings, Project, Language; the canvas floor has none. Settings is not built, so the switch sits in the Debug drawer. |
 | D45 | changed | HUD frame. The canvas HUD is a two-row header laid over the scene, 32 px controls and a 5 percent by 11 percent hit area per worker. Built is a one-row header above the scene, 28 to 32 px buttons, and a 44 px "!" target at 390 px. |
+| D46 | changed | Roster. The canvas draws Captain, Byte, Pixel, Nova, Echo and Temp-1 (their names, plates and cage plates); the built floor draws the workers HQ reports, with the hair, skin and shirt colours of its six slots. |
+| D47 | changed | Built-only header fields: "Snapshot rev N", the connection state "Live" or "Reconnecting", and "Replaying N of M events" in demo. The canvas header has none of them. |
+| D48 | changed | Built-only page heading "Factory floor" (visually hidden, for screen readers and the landmark outline). |
+| D49 | changed | Built-only "N boxes · N shipped" line in the right panel under the station counters (the canvas shows "N shipped" in the shift clock and "N boxes" per line). |
+| D50 | fixed | Pixel icons: the factory logo in the header and the truck in the toast are drawn as on the canvas (26 px and 34 px SVG art, aria-hidden). |
+| D51 | not-built | The logo is a link to the industrial park ("Industrial park: all factories"). The park screen is not built, so a link would be dead. |
+| D52 | fixed | Scene label colours DISPATCH (#455a64), BREAK +ENERGY (#5d4037) and PR RACK (#454b55) are the canvas colours; they were near-black (#15181c). |
+| D53 | conflict | Cage plate colour. The canvas plate is #454b55 (4.24 to 1 on the cage floor, under 4.5); built keeps #2f343b so the label passes. |
+| D54 | fixed | Sleep glyph: a small "z" and a larger "Z" in Press Start 2P, cream with an ink outline, rising, as on the canvas (built had one "z Z" string in Silkscreen). |
+| D55 | fixed | The "!" bubble is the canvas art (ink frame, yellow face, ink bar and dot) and jumps. It was a yellow box with a Press Start 2P glyph. The hit target stays a 44 px button. |
+| D56 | changed | Box colours and motion. Built now colours a box at QC yellow, one with changes requested red with the jump motion, a scrapped one gray, others blue, each with the canvas band colour. The canvas also has blue boxes on lines 2 and 3, a gray idle box and the HOTFIX tag (D33), and colours by what the box waits for, which the snapshot does not carry. |
+| D57 | fixed | Cage status LED and the door gap in the right wall of every cage, coloured by mood (green working, yellow at QC, red needs you, gray on break). |
+| D58 | conflict | Sixth cage placement. The canvas puts the temp bay (TEMP BAY, hired for L3) in slot 6 and has five cages; the plan and the sharpened prompt name six cages, so built draws a sixth cage there with its own plate and LED. |
+| D59 | not-built | Per-cell top-border colours on the station cells, the order-line chips and the hotbar badges (ORDER gray, CODE blue, TEST orange, QC yellow, SHIP green). Built station counters have one border colour. |
+| D60 | changed | HUD colours. The canvas HUD paints about 70 distinct background, border and text colours (page #1f2328, plates #15181c, chips per status, runtime badges #00add8 and #c74634); built paints its own smaller set from floor.css variables. |
+| D61 | changed | Built-only panel colours and sizes: the Action items list (#15181c rows with a #ffca28 top border), the 12 px Silkscreen headings, #c9cdd4 body text. |
+| D62 | fixed | Animations: bob, jump, blink, zz, belt, press, tA, tB and pop use the canvas names and keyframes (the typing arms were typeA and typeB, the gantry press and the toast pop were missing). |
+| D63 | changed | Cage detail. The canvas draws a desk shadow line, a per-worker monitor with coloured lines and a lamp, and a LED colour per worker; built draws one desk, one monitor and the LED by mood. Cage counts per zone differ (canvas 17 to 44 shapes, built 9). |
+| D64 | not-built | ARIA group on the canvas control panel (the hotbar and menu). Built has no hotbar or menu group. |
+| D65 | changed | Built-only DOM and ARIA: the scene is role="img" with a label, and main, h1, aside, h2 and p landmarks the canvas does not have. |
+| D66 | changed | HUD font sizes. The canvas HUD mixes 7 to 16 px in Silkscreen, Press Start 2P, VT323 and Pixelify Sans; built uses 9 to 17 px in the same families. |
+| D68 | changed | Boxes per station. The canvas draws 2 at ORDER, 3 at CODE and 4 at QC; built draws the boxes of its snapshot (the live run has two in QC and none elsewhere), so the counts differ by design. |
+| D69 | changed | DOM element counts per tag differ: the canvas HUD has about 25 buttons, 200 spans and 30 divs; built has 7 buttons and 24 spans. |
+| D70 | not-built | DOM elements only on the canvas: 19 links (menu), a label and line breaks. |
+| D72 | fixed | Firewall frame (four red edges), the git and npm lights and the four scan lasers are the canvas shapes. The counters and blocked packets are not built (D23). |
+| D73 | fixed | Shipping dock: the hazard stripe, the left wall edge, the side ramp and the roll-up door with its blue bumper are the canvas shapes. The truck load is not built (D24). |
+| D74 | fixed | TEST scan lines, the QC press and light stack, and the MERGE pads are drawn as on the canvas. |
+| D75 | changed | Built-only SHIPPED stamp on a delivered box (green), next to SCRAPPED and CHANGES; the canvas has the HOTFIX and BLOCKED tags only (D33). |
 <!-- differences:end -->
 
 ## Spec versus canvas conflicts (the operator decides; the choice made in the code is stated)
@@ -184,6 +239,6 @@ D16 stations (six, not five), D42 mood chip text colour (dark ink, 5.1 to 1, not
 - Playwright is run against Chromium 1255 here. CI installs its own with `playwright install --with-deps chromium`.
 - `npx agent-works --demo` needs the floor built (`src/dist`). Packaging the build into the published CLI is not part of this unit. Without a build, `--demo` prints how to build it and serves the plain dashboard page.
 - Not done: type-prefixed box codes, XP, host chip, run-mode labels, shift log and the rest of the D-list marked `not-built`.
-- Axe leaves 171 nodes undecided (mostly SVG text over art, header text over a gradient, and "✕" buttons whose label differs from their text). The scene label contrast in `axe.txt` is an estimate, not a proof.
+- Axe leaves 188 nodes undecided (mostly SVG text over art, header text over a gradient, and "✕" buttons whose label differs from their text). The scene label contrast in `axe.txt` is an estimate, not a proof.
 - `deslop` is not installed: `/simplify` was run over the round 2 diff and `/no-comments` too (results in the trail).
 - Every run used `TMPDIR=~/.cache/aw-p1-3-tmp` and the new tests clean up after themselves.

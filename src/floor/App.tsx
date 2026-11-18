@@ -89,6 +89,15 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
   return (
     <div className="floor" data-rev={view.rev}>
       <header className="hud top panel" inert={drawer !== null}>
+        <svg width="26" height="26" viewBox="0 0 10 10" shapeRendering="crispEdges" aria-hidden="true">
+          <rect x="0" y="4" width="10" height="6" fill="#ffca28" />
+          <rect x="1" y="1" width="2" height="4" fill="#ffca28" />
+          <rect x="4" y="2" width="2" height="3" fill="#ffca28" />
+          <rect x="7" y="0" width="2" height="5" fill="#ffca28" />
+          <rect x="1" y="6" width="2" height="2" fill="#15181c" />
+          <rect x="4" y="6" width="2" height="2" fill="#15181c" />
+          <rect x="7" y="6" width="2" height="2" fill="#15181c" />
+        </svg>
         <b className="logo pixel">AGENT WORKS</b>
         {demo === null ? null : (
           <span className="chip demo" data-testid="demo-chip">
@@ -181,7 +190,16 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
       </aside>
 
       {toast === null ? null : (
-        <div className="toast panel" role="status">
+        <div className="toast panel pop" role="status">
+          <svg width="34" height="26" viewBox="0 0 13 10" shapeRendering="crispEdges" aria-hidden="true">
+            <rect x="0" y="2" width="8" height="6" fill="#eceff1" />
+            <rect x="8" y="4" width="4" height="4" fill="#1565c0" />
+            <rect x="9" y="5" width="2" height="1" fill="#90caf9" />
+            <rect x="1" y="8" width="2" height="2" fill="#15181c" />
+            <rect x="9" y="8" width="2" height="2" fill="#15181c" />
+            <rect x="1" y="3" width="3" height="2" fill="#c49a6c" />
+            <rect x="4" y="3" width="3" height="2" fill="#c49a6c" />
+          </svg>
           <b className="pixel">{t('floor.hud.delivered')}</b>
           <span>{t('floor.hud.deliveredDetail', { task: toast })}</span>
           <button type="button" className="btn small" aria-label={t('floor.hud.close')} onClick={() => setToast(null)}>

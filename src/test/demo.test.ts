@@ -113,6 +113,48 @@ describe('built assets', () => {
     },
   );
 
+  it.skipIf(!hasSqlite)('the policy on every kind of response is exactly the one the floor needs', async () => {
+    const hq = await boot({ assets: root });
+    const dashboard = await boot();
+    const directives = (policy: string) =>
+      Object.fromEntries(
+        policy
+          .split(';')
+          .map((part) => part.trim().split(/\s+/))
+          .filter(([name]) => name !== '')
+          .map(([name, ...values]) => [name, values]),
+      );
+    for (const url of [
+      `${hq.url}/`,
+      `${hq.url}/app.js`,
+      `${hq.url}/api/health`,
+      `${hq.url}/api/missing`,
+      `${dashboard.url}/`,
+    ]) {
+      const parsed = directives((await fetch(url)).headers.get('content-security-policy') ?? '');
+      expect(Object.keys(parsed).sort()).toEqual([
+        'base-uri',
+        'connect-src',
+        'default-src',
+        'font-src',
+        'form-action',
+        'frame-ancestors',
+        'img-src',
+        'object-src',
+        'script-src',
+        'style-src',
+      ]);
+      expect(parsed['connect-src']).toEqual(["'self'", 'ws://127.0.0.1:*', 'ws://localhost:*']);
+      expect(parsed['frame-ancestors']).toEqual(["'none'"]);
+      expect(parsed['object-src']).toEqual(["'none'"]);
+      expect(parsed['base-uri']).toEqual(["'none'"]);
+      expect(parsed['form-action']).toEqual(["'none'"]);
+      expect(parsed['default-src']).toEqual(["'self'"]);
+      expect(parsed['img-src']).toEqual(["'self'", 'data:']);
+      expect(parsed['font-src']).toEqual(["'self'"]);
+    }
+  });
+
   it.skipIf(!hasSqlite)('HQ serves them on GET and keeps the API', async () => {
     const hq = await boot({ assets: root });
     expect(await (await fetch(`${hq.url}/`)).text()).toBe('<p>floor</p>');
@@ -170,6 +212,15 @@ describe.skipIf(!hasSqlite)('demo mode', () => {
     writeFileSync(join(dir, 'f.jsonl'), `${good}\nnot json\n`);
     expect(() => loadDemo(join(dir, 'f.jsonl'), 'x.jsonl')).toThrow(/^x\.jsonl line 2: not a JSON line/);
     expect(() => loadDemo(join(dir, 'missing.jsonl'), 'x.jsonl')).toThrow(/cannot read/);
+  });
+
+  it('skips a line of only spaces or tabs and still counts it in the line numbers', () => {
+    const dir = tempDir('blankfixture');
+    const good = '{"seq":1,"event":{"source":"human","kind":"add_worker","worker":"nova"}}';
+    writeFileSync(join(dir, 'g.jsonl'), `${good}\n  \t \n\n`);
+    expect(loadDemo(join(dir, 'g.jsonl'), 'x.jsonl').events).toHaveLength(1);
+    writeFileSync(join(dir, 'h.jsonl'), `${good}\n \t\nnot json\n`);
+    expect(() => loadDemo(join(dir, 'h.jsonl'), 'x.jsonl')).toThrow(/^x\.jsonl line 3: not a JSON line/);
   });
 });
 

@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { canSpawnTs, exited, tempDir } from '../../server/test/helpers.ts';
 
@@ -100,6 +101,50 @@ describe.skipIf(!canSpawnTs)('agent-works --demo', () => {
     expect((await fetch(`${url}/api/health`)).status).toBe(200);
     child.kill('SIGTERM');
     await exited(child);
+  }, 30_000);
+
+  it('stays read-only when AGENT_WORKS_DEMO_EVENTS names the file', async () => {
+    const port = await freePort();
+    const { env } = cleanEnv({
+      AGENT_WORKS_DEMO_INTERVAL_MS: '20',
+      AGENT_WORKS_DEMO_EVENTS: join(import.meta.dirname, '../../fixtures/demo/events.jsonl'),
+    });
+    const child = spawn(process.execPath, [BIN, '--demo', '--no-open', '--port', String(port)], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    await started(child);
+    const url = `http://127.0.0.1:${port}`;
+    for (const path of ['/api/events', '/api/factories', '/api/stop']) {
+      const res = await fetch(`${url}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ source: 'human', kind: 'add_worker', worker: 'mallory' }),
+      });
+      expect(res.status).toBe(403);
+    }
+    child.kill('SIGTERM');
+    await exited(child);
+  }, 30_000);
+
+  it('removes its throw-away home when the process exits without a signal', async () => {
+    const port = await freePort();
+    const { tmp, env } = cleanEnv({ AGENT_WORKS_DEMO_INTERVAL_MS: '20' });
+    const script = join(tmp, 'exit-midway.mjs');
+    const cli = join(import.meta.dirname, '../../server/cli.ts');
+    writeFileSync(
+      script,
+      `import { main } from ${JSON.stringify(pathToFileURL(cli).href)};
+setTimeout(() => process.exit(7), 1500);
+await main(['--demo', '--no-open', '--port', '${port}'], process.env);
+`,
+    );
+    const child = spawn(process.execPath, [script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    await started(child);
+    expect(demoDirs(tmp)).toHaveLength(1);
+    await exited(child);
+    if (process.platform !== 'win32') expect(child.exitCode).toBe(7);
+    expect(demoDirs(tmp)).toEqual([]);
   }, 30_000);
 
   const signals: NodeJS.Signals[] = process.platform === 'win32' ? [] : ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];

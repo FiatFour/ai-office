@@ -1,6 +1,6 @@
-import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const MODEL = 'src/floor/model.ts';
@@ -10,8 +10,11 @@ const HQ = 'server/hq.ts';
 const CLI = 'server/cli.ts';
 const MAIN = 'src/floor/main.tsx';
 const I18N = 'src/floor/i18n.ts';
+const DIFFS = 'docs/review/P1-3-canvas-differences.md';
+const INVENTORY = 'src/scripts/inventory.mjs';
+const CC = 'src/e2e/canvas-compare.mjs';
 
-/** @type {Array<{ name: string, claim: string, tier?: 'e2e', edits: Array<[file: string, find: string, replace: string]> }>} */
+/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
 const MUTANTS = [
   {
     name: 'belt-is-code',
@@ -558,27 +561,237 @@ const MUTANTS = [
       ],
     ],
   },
+  {
+    name: 'hq-csp-connect-any-ws',
+    claim: 'connect-src lists exactly the two loopback socket origins',
+    edits: [
+      [
+        HQ,
+        "const SOCKETS = 'ws://127.0.0.1:* ws://localhost:*';",
+        "const SOCKETS = 'ws://127.0.0.1:* ws://localhost:* ws:';",
+      ],
+    ],
+  },
+  {
+    name: 'hq-csp-no-frame-ancestors',
+    claim: 'the policy forbids framing',
+    edits: [[HQ, "; frame-ancestors 'none'", '']],
+  },
+  {
+    name: 'hq-csp-no-object-src',
+    claim: 'the policy forbids plugins',
+    edits: [[HQ, " object-src 'none';", '']],
+  },
+  {
+    name: 'cli-demo-no-exit-hook',
+    claim: '--demo removes its throw-away home when the process exits without a signal',
+    edits: [[CLI, "process.once('exit', wipe);", '']],
+  },
+  {
+    name: 'cli-demo-not-read-only-with-env',
+    claim: '--demo is read-only when AGENT_WORKS_DEMO_EVENTS is set',
+    edits: [
+      [
+        CLI,
+        'readOnly: DEMO_READ_ONLY,',
+        '...(env.AGENT_WORKS_DEMO_EVENTS === undefined ? { readOnly: DEMO_READ_ONLY } : {}),',
+      ],
+    ],
+  },
+  {
+    name: 'demo-fixture-blank-strict',
+    claim: 'a line of only spaces in the events file is skipped',
+    edits: [['server/modes/demo.ts', "line.trim() === ''", "line === ''"]],
+  },
+  {
+    name: 'fonts-sarabun-400-missing',
+    claim: 'both Sarabun weights load from the build, with no network',
+    tier: 'e2e',
+    edits: [[MAIN, "import '@fontsource/sarabun/thai-400.css';\n", '']],
+  },
+  {
+    name: 'toast-title-language-frozen',
+    claim: 'the toast title follows the language, not only its detail',
+    tier: 'e2e',
+    edits: [['src/floor/App.tsx', "{t('floor.hud.delivered')}", "{t('floor.hud.delivered', { lng: 'en' })}"]],
+  },
+  {
+    name: 'lane9-notbuilt-check-off',
+    claim: 'lane 9 fails when a not-built text is on the built floor',
+    tier: 'lane9',
+    edits: [[CC, "if (d.status === 'not-built' && canvas !== '' && builtText.includes(canvas))", 'if (false)']],
+  },
+  {
+    name: 'lane9-stale-table-check-off',
+    claim: 'lane 9 fails when the table in the PR body or the ADR is stale',
+    tier: 'lane9',
+    edits: [[CC, 'if (BLOCK.exec(doc)?.[1] !== markdown(diffs))', 'if (false)']],
+  },
+  {
+    name: 'lane9-min-count-1',
+    claim: 'lane 9 fails when almost every difference is deleted',
+    tier: 'lane9',
+    edits: [[CC, 'if (diffs.length < 40)', 'if (diffs.length < 1)']],
+  },
+  {
+    name: 'lane9-fixed-check-off',
+    claim: 'lane 9 fails when a fixed entry still differs',
+    tier: 'lane9',
+    edits: [
+      ['src/scripts/inventory.mjs', 'else if (kind !== undefined) problems.push(', 'else if (false) problems.push('],
+    ],
+  },
+  {
+    name: 'lane9-stale-key-check-off',
+    claim: 'lane 9 fails when an entry covers a key that no longer differs',
+    tier: 'lane9',
+    edits: [['src/scripts/inventory.mjs', 'if (kind === undefined) problems.push(', 'if (false) problems.push(']],
+  },
+  {
+    name: 'lane9-uncovered-check-off',
+    claim: 'lane 9 fails when a difference is in no entry',
+    tier: 'lane9',
+    edits: [['src/scripts/inventory.mjs', 'if (!covered.has(key)) problems.push(', 'if (false) problems.push(']],
+  },
+  {
+    name: 'lane9-duplicate-cover-check-off',
+    claim: 'lane 9 fails when two entries cover one key',
+    tier: 'lane9',
+    edits: [['src/scripts/inventory.mjs', 'if (owners.has(key)) problems.push(', 'if (false) problems.push(']],
+  },
+  {
+    name: 'lane9-notbuilt-builtonly-check-off',
+    claim: 'lane 9 fails when a not-built entry covers a key only the built floor has',
+    tier: 'lane9',
+    edits: [['src/scripts/inventory.mjs', "entry.status === 'not-built' && kind === 'built-only'", 'false']],
+  },
+  {
+    name: 'lane9-regions-check-off',
+    claim: 'lane 9 fails when a pixel cell above the threshold is in no region',
+    tier: 'lane9',
+    edits: [
+      [CC, 'for (const { row, col, value } of uncoveredCells(grid, diffs))', 'for (const { row, col, value } of [])'],
+    ],
+  },
+  {
+    name: 'lane9-layout-widths-off',
+    claim: 'lane 9 reads the two pane widths from the comparison image',
+    tier: 'lane9',
+    edits: [[CC, 'if (cw !== bw || cw !== COMPARE.pane)', 'if (false)']],
+  },
+  {
+    name: 'lane9-compare-ignores-built-image',
+    claim: 'lane 9 fails when the comparison image does not change with the built floor image',
+    tier: 'lane9',
+    edits: [[CC, 'img(builtShot)}">', 'img(canvasShot)}">']],
+  },
+  {
+    name: 'lane9-delete-entry',
+    claim: 'deleting an entry makes lane 9 fail',
+    tier: 'lane9',
+    edits: [
+      [
+        DIFFS,
+        'D04 | not-built | Order board | - | Order-board select (First active, Backlog). Needs boards.\n  covers: text:order board\n',
+        '',
+      ],
+    ],
+  },
+  {
+    name: 'lane9-delete-covers-key',
+    claim: 'deleting a covers key makes lane 9 fail',
+    tier: 'lane9',
+    edits: [[DIFFS, '  covers: text:#x\n', '']],
+  },
+  {
+    name: 'lane9-relabel-status',
+    claim: 'relabelling an entry status makes lane 9 fail',
+    tier: 'lane9',
+    edits: [[DIFFS, 'D02 | not-built |', 'D02 | fixed |']],
+  },
+  {
+    name: 'lane9-compare-image-replaced',
+    claim: 'replacing the committed comparison image with another screenshot makes lane 9 fail',
+    tier: 'lane9',
+    edits: [],
+    copies: [['docs/review/P1-3-review-canvas-compare.png', 'docs/review/P1-3-review-floor.png']],
+  },
+  {
+    name: 'lane9-inventory-ignores-svg-text',
+    claim: 'an inventory that ignores SVG text makes lane 9 fail',
+    tier: 'lane9',
+    edits: [[INVENTORY, "'polyline', 'text', 'use'", "'polyline', 'use'"]],
+  },
+  {
+    name: 'lane9-inventory-ignores-buttons',
+    claim: 'an inventory that ignores buttons makes lane 9 fail',
+    tier: 'lane9',
+    edits: [[INVENTORY, "'script',\n    'style',", "'button',\n    'script',\n    'style',"]],
+  },
+  {
+    name: 'lane9-inventory-ignores-fonts',
+    claim: 'an inventory that ignores fonts makes lane 9 fail',
+    tier: 'lane9',
+    edits: [[INVENTORY, 'out[`', "if (family !== 'font') out[`"]],
+  },
+  {
+    name: 'lane9-inventory-ignores-animations',
+    claim: 'an inventory that ignores animation names makes lane 9 fail',
+    tier: 'lane9',
+    edits: [[INVENTORY, "for (const name of anims) put('anim', name);", '']],
+  },
 ];
 
 const only = process.argv.slice(2);
-const e2e = () => {
-  const build = spawnSync('pnpm', ['--filter', '@agent-works/floor', 'build'], { cwd: ROOT, encoding: 'utf8' });
-  if (build.status !== 0) return 'build failed';
-  const lanes = spawnSync('node', ['src/e2e/lanes.mjs'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    timeout: 300_000,
-    env: { ...process.env, OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-lanes') },
+const windows = process.platform === 'win32';
+
+/** @param {string} command @param {string[]} args @param {number} timeout @param {NodeJS.ProcessEnv} [env] */
+const run = (command, args, timeout, env = process.env) =>
+  new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: ROOT,
+      env,
+      detached: !windows,
+      shell: windows,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk) => (stdout += chunk));
+    const sweep = () => {
+      try {
+        process.kill(windows ? child.pid : -child.pid, 'SIGKILL');
+      } catch {}
+    };
+    const timer = setTimeout(sweep, timeout);
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      sweep();
+      resolve({ status, stdout });
+    });
   });
-  return lanes.status === 0 ? null : (lanes.stdout.match(/FAIL lane [\d.]+/g) ?? ['lanes crashed']).join(', ');
+
+const build = () => run('pnpm', ['--filter', '@agent-works/floor', 'build'], 120_000);
+const lanes = async () => {
+  const built = await build();
+  if (built.status !== 0) return 'build failed';
+  const out = join(process.env.TMPDIR ?? '/tmp', 'mutant-lanes');
+  const result = await run('node', ['src/e2e/lanes.mjs'], 300_000, { ...process.env, OUT: out });
+  return result.status === 0 ? null : (result.stdout.match(/FAIL lane [\d.]+/g) ?? ['lanes crashed']).join(', ');
 };
-const vitest = () =>
-  spawnSync('pnpm', ['vitest', 'run', ...SUITE], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-    timeout: 300_000,
+const lane9 = async () => {
+  const result = await run('node', ['src/e2e/lane9.mjs'], 200_000, {
+    ...process.env,
+    OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-lane9'),
   });
+  return result.status === 0 ? null : (result.stdout.match(/FAIL lane 9[^\n]{0,160}/) ?? ['lane 9 crashed'])[0];
+};
+const vitest = () => run('pnpm', ['vitest', 'run', ...SUITE], 300_000);
+
+const demoChildren = () => {
+  const found = spawnSync('pgrep', ['-f', 'bin/agent-works.ts'], { encoding: 'utf8' });
+  return found.status === 0 ? found.stdout.split('\n').filter(Boolean) : [];
+};
+const before = new Set(windows ? [] : demoChildren());
 
 /** @type {string[]} */
 const lines = [];
@@ -588,7 +801,7 @@ const log = (line) => {
   lines.push(line);
 };
 
-const baseline = vitest();
+const baseline = await vitest();
 log(`baseline ${baseline.status === 0 ? 'PASS' : 'FAIL'}`);
 if (baseline.status !== 0) {
   console.error(baseline.stdout.slice(-2000));
@@ -596,29 +809,51 @@ if (baseline.status !== 0) {
 }
 
 let bad = 0;
+let ran = 0;
 for (const mutant of MUTANTS) {
   if (only.length > 0 && !only.includes(mutant.name)) continue;
-  /** @type {Map<string, string>} */
+  ran += 1;
+  /** @type {Map<string, Buffer>} */
   const originals = new Map();
   try {
     for (const [file, find, replace] of mutant.edits) {
       const path = join(ROOT, file);
-      const current = readFileSync(path, 'utf8');
+      const current = readFileSync(path);
       originals.set(path, originals.get(path) ?? current);
-      if (!current.includes(find)) throw new Error(`${mutant.name}: pattern not found in ${file}`);
-      writeFileSync(path, current.replace(find, replace));
+      const text = current.toString('utf8');
+      if (!text.includes(find)) throw new Error(`${mutant.name}: pattern not found in ${file}`);
+      writeFileSync(
+        path,
+        text.replace(find, () => replace),
+      );
     }
-    let how = vitest().status !== 0 ? 'unit tests' : null;
-    if (how === null && mutant.tier === 'e2e') how = e2e();
+    for (const [to, from] of mutant.copies ?? []) {
+      const path = join(ROOT, to);
+      originals.set(path, originals.get(path) ?? readFileSync(path));
+      mkdirSync(dirname(path), { recursive: true });
+      copyFileSync(join(ROOT, from), path);
+    }
+    let how = null;
+    if (mutant.tier === 'lane9') how = await lane9();
+    else {
+      how = (await vitest()).status !== 0 ? 'unit tests' : null;
+      if (how === null && mutant.tier === 'e2e') how = await lanes();
+    }
     if (how === null) bad += 1;
     log(
       `${how === null ? 'BAD ' : 'OK  '} ${mutant.name}: ${how === null ? 'survived' : `caught by ${how}`}. Claim: ${mutant.claim}`,
     );
   } finally {
-    for (const [path, text] of originals) writeFileSync(path, text);
-    if (mutant.tier === 'e2e') spawnSync('pnpm', ['--filter', '@agent-works/floor', 'build'], { cwd: ROOT });
+    for (const [path, bytes] of originals) writeFileSync(path, bytes);
+    if (mutant.tier === 'e2e') await build();
   }
 }
-log(`${MUTANTS.length} mutants, ${bad} survived`);
-writeFileSync(process.env.MUTANT_OUT ?? '/tmp/swarm-P1-3/owner/mutants-p1-3.txt', `${lines.join('\n')}\n`);
+const orphans = windows ? [] : demoChildren().filter((pid) => !before.has(pid));
+if (orphans.length > 0) bad += 1;
+log(
+  `${ran} mutants, ${bad} survived, ${orphans.length} orphan demo processes${orphans.length > 0 ? ` (${orphans.join(' ')})` : ''}`,
+);
+const result = process.env.MUTANT_OUT ?? '/tmp/swarm-P1-3/owner/mutants-p1-3.txt';
+mkdirSync(dirname(result), { recursive: true });
+writeFileSync(result, `${lines.join('\n')}\n`);
 process.exit(bad === 0 ? 0 : 1);

@@ -76,4 +76,32 @@ The artboard `project/Main.dc.html` of the Design canvas was rendered from its o
 | D43 | conflict | Fonts. The canvas loads Silkscreen, Press Start 2P, Pixelify Sans and VT323 from Google Fonts. The spec says no network at runtime, so built serves the same four from @fontsource, plus Sarabun for Thai. |
 | D44 | conflict | Language switch. The spec puts it in Settings, Project, Language; the canvas floor has none. Settings is not built, so the switch sits in the Debug drawer. |
 | D45 | changed | HUD frame. The canvas HUD is a two-row header laid over the scene, 32 px controls and a 5 percent by 11 percent hit area per worker. Built is a one-row header above the scene, 28 to 32 px buttons, and a 44 px "!" target at 390 px. |
+| D46 | changed | Roster. The canvas draws Captain, Byte, Pixel, Nova, Echo and Temp-1 (their names, plates and cage plates); the built floor draws the workers HQ reports, with the hair, skin and shirt colours of its six slots. |
+| D47 | changed | Built-only header fields: "Snapshot rev N", the connection state "Live" or "Reconnecting", and "Replaying N of M events" in demo. The canvas header has none of them. |
+| D48 | changed | Built-only page heading "Factory floor" (visually hidden, for screen readers and the landmark outline). |
+| D49 | changed | Built-only "N boxes · N shipped" line in the right panel under the station counters (the canvas shows "N shipped" in the shift clock and "N boxes" per line). |
+| D50 | fixed | Pixel icons: the factory logo in the header and the truck in the toast are drawn as on the canvas (26 px and 34 px SVG art, aria-hidden). |
+| D51 | not-built | The logo is a link to the industrial park ("Industrial park: all factories"). The park screen is not built, so a link would be dead. |
+| D52 | fixed | Scene label colours DISPATCH (#455a64), BREAK +ENERGY (#5d4037) and PR RACK (#454b55) are the canvas colours; they were near-black (#15181c). |
+| D53 | conflict | Cage plate colour. The canvas plate is #454b55 (4.24 to 1 on the cage floor, under 4.5); built keeps #2f343b so the label passes. |
+| D54 | fixed | Sleep glyph: a small "z" and a larger "Z" in Press Start 2P, cream with an ink outline, rising, as on the canvas (built had one "z Z" string in Silkscreen). |
+| D55 | fixed | The "!" bubble is the canvas art (ink frame, yellow face, ink bar and dot) and jumps. It was a yellow box with a Press Start 2P glyph. The hit target stays a 44 px button. |
+| D56 | changed | Box colours and motion. Built now colours a box at QC yellow, one with changes requested red with the jump motion, a scrapped one gray, others blue, each with the canvas band colour. The canvas also has blue boxes on lines 2 and 3, a gray idle box and the HOTFIX tag (D33), and colours by what the box waits for, which the snapshot does not carry. |
+| D57 | fixed | Cage status LED and the door gap in the right wall of every cage, coloured by mood (green working, yellow at QC, red needs you, gray on break). |
+| D58 | conflict | Sixth cage placement. The canvas puts the temp bay (TEMP BAY, hired for L3) in slot 6 and has five cages; the plan and the sharpened prompt name six cages, so built draws a sixth cage there with its own plate and LED. |
+| D59 | not-built | Per-cell top-border colours on the station cells, the order-line chips and the hotbar badges (ORDER gray, CODE blue, TEST orange, QC yellow, SHIP green). Built station counters have one border colour. |
+| D60 | changed | HUD colours. The canvas HUD paints about 70 distinct background, border and text colours (page #1f2328, plates #15181c, chips per status, runtime badges #00add8 and #c74634); built paints its own smaller set from floor.css variables. |
+| D61 | changed | Built-only panel colours and sizes: the Action items list (#15181c rows with a #ffca28 top border), the 12 px Silkscreen headings, #c9cdd4 body text. |
+| D62 | fixed | Animations: bob, jump, blink, zz, belt, press, tA, tB and pop use the canvas names and keyframes (the typing arms were typeA and typeB, the gantry press and the toast pop were missing). |
+| D63 | changed | Cage detail. The canvas draws a desk shadow line, a per-worker monitor with coloured lines and a lamp, and a LED colour per worker; built draws one desk, one monitor and the LED by mood. Cage counts per zone differ (canvas 17 to 44 shapes, built 9). |
+| D64 | not-built | ARIA group on the canvas control panel (the hotbar and menu). Built has no hotbar or menu group. |
+| D65 | changed | Built-only DOM and ARIA: the scene is role="img" with a label, and main, h1, aside, h2 and p landmarks the canvas does not have. |
+| D66 | changed | HUD font sizes. The canvas HUD mixes 7 to 16 px in Silkscreen, Press Start 2P, VT323 and Pixelify Sans; built uses 9 to 17 px in the same families. |
+| D68 | changed | Boxes per station. The canvas draws 2 at ORDER, 3 at CODE and 4 at QC; built draws the boxes of its snapshot (the live run has two in QC and none elsewhere), so the counts differ by design. |
+| D69 | changed | DOM element counts per tag differ: the canvas HUD has about 25 buttons, 200 spans and 30 divs; built has 7 buttons and 24 spans. |
+| D70 | not-built | DOM elements only on the canvas: 19 links (menu), a label and line breaks. |
+| D72 | fixed | Firewall frame (four red edges), the git and npm lights and the four scan lasers are the canvas shapes. The counters and blocked packets are not built (D23). |
+| D73 | fixed | Shipping dock: the hazard stripe, the left wall edge, the side ramp and the roll-up door with its blue bumper are the canvas shapes. The truck load is not built (D24). |
+| D74 | fixed | TEST scan lines, the QC press and light stack, and the MERGE pads are drawn as on the canvas. |
+| D75 | changed | Built-only SHIPPED stamp on a delivered box (green), next to SCRAPPED and CHANGES; the canvas has the HOTFIX and BLOCKED tags only (D33). |
 <!-- differences:end -->

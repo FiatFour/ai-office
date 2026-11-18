@@ -77,7 +77,7 @@ export const renderCanvas = async (page, workdir) => {
     .replace('</body>', `<script>${EXPAND}</script></body>`);
   const file = join(workdir, 'canvas-render.html');
   writeFileSync(file, html);
-  await page.setViewportSize({ width: 1440, height: 980 });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(pathToFileURL(file).href);
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(400);

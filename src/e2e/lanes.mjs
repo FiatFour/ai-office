@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { canvasCompare, pageText } from './canvas-compare.mjs';
 import {
   change,
   green,
@@ -17,6 +16,7 @@ import {
   sha,
   startHq,
 } from './harness.mjs';
+import { runLane9 } from './lane9.mjs';
 
 /** @type {{ n: number, name: string, ok: boolean }[]} */
 const results = [];
@@ -36,7 +36,6 @@ const browser = await launch();
 const FIXTURE = join(ROOT, 'fixtures', 'demo', 'events.jsonl');
 
 let labels = [];
-let demoText = '';
 const axe = { violations: [], incomplete: [], states: [] };
 const audit = async (/** @type {import('playwright').Page} */ target, /** @type {string} */ label) => {
   const out = await runAxe(target, label);
@@ -155,8 +154,10 @@ try {
   await page.keyboard.press('Escape');
 
   const toastText = () => page.$eval('.toast span', (node) => node.textContent);
+  const toastTitle = () => page.$eval('.toast b', (node) => node.textContent);
   const htmlLang = () => page.evaluate(() => document.documentElement.lang);
   const toastEn = await toastText();
+  const titleEn = await toastTitle();
   const before = await page.evaluate(() => {
     globalThis.__marker = 1;
     return document.body.textContent;
@@ -167,6 +168,13 @@ try {
   const after = await page.evaluate(() => document.body.textContent);
   const marker = await page.evaluate(() => globalThis.__marker);
   const toastTh = await toastText();
+  const titleTh = await toastTitle();
+  const weights = await page.evaluate(() =>
+    [...document.fonts]
+      .filter((face) => face.family.replace(/["']/g, '') === 'Sarabun' && face.status === 'loaded')
+      .map((face) => face.weight)
+      .sort(),
+  );
   const navTh = await page.$eval('header nav', (node) => node.getAttribute('aria-label'));
   const langTh = await htmlLang();
   const svgText = await page.$$eval('svg text', (nodes) => nodes.map((node) => node.textContent ?? '').join(' '));
@@ -197,6 +205,10 @@ try {
       langTh === 'th' &&
       thai.test(toastTh ?? '') &&
       !/merged and shipped/.test(toastTh ?? '') &&
+      thai.test(titleTh ?? '') &&
+      /Shipment delivered/.test(titleEn ?? '') &&
+      !/Shipment delivered/i.test(titleTh ?? '') &&
+      JSON.stringify(weights) === JSON.stringify(['400', '700']) &&
       /merged and shipped/.test(toastEn ?? '') &&
       thai.test(heading) &&
       families.includes('Sarabun') &&
@@ -204,7 +216,7 @@ try {
       keptTh.lang === 'th' &&
       keptTh.text &&
       navTh === 'เมนู HQ',
-    `HUD changed with no reload (marker kept), html lang ${langTh}, toast re-rendered in Thai ("${toastTh}"), scene text has no Thai and keeps SHIPPED, Thai in .pixel drawn with ${families.join(' + ')}, Thai kept after a reload (lang ${keptTh.lang}), nav label "${navTh}"`,
+    `HUD changed with no reload (marker kept), html lang ${langTh}, toast re-rendered in Thai (title "${titleTh}", detail "${toastTh}", English title "${titleEn}"), Sarabun faces loaded with the network blocked: ${weights}, scene text has no Thai and keeps SHIPPED, Thai in .pixel drawn with ${families.join(' + ')}, Thai kept after a reload (lang ${keptTh.lang}), nav label "${navTh}"`,
   );
   await page.keyboard.press('d');
   await page.click('[data-testid=lang-en]');
@@ -278,7 +290,6 @@ try {
   );
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  demoText = await pageText(page);
   await ctx.close();
 } finally {
   await demo.stop();
@@ -337,7 +348,7 @@ try {
       node.getAttribute('data-testid')?.slice(5),
     ),
     art: [...document.querySelectorAll('[data-worker]')]
-      .filter((node) => [...node.querySelectorAll('text')].some((text) => text.textContent === '!'))
+      .filter((node) => node.querySelector('g.jump rect[fill="#ffca28"]') !== null)
       .map((node) => node.getAttribute('data-worker')),
   }));
   const needing = Object.entries(final)
@@ -469,16 +480,13 @@ try {
     `roster lists ${crew} workers, the scene draws ${drawn} (one per cage)`,
   );
 
-  await page.setViewportSize({ width: 1440, height: 980 });
-  await sleep(300);
-  const builtShot = join(OUT, 'floor-live.png');
-  await page.screenshot({ path: builtShot });
-  const verdict = await canvasCompare(browser, page, builtShot, demoText);
-  lane(9, 'canvas compare', verdict.ok, verdict.note);
   await ctx.close();
 } finally {
   await live.stop();
 }
+
+const verdict = await runLane9(browser);
+lane(9, 'canvas compare', verdict.ok, verdict.note);
 
 await browser.close();
 const failed = results.filter((r) => !r.ok);

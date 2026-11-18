@@ -8,17 +8,19 @@ axe-core 4.14.1 on 8 states:
   live EN floor with the worker card open
   live TH floor (Needs you)
 violations of any impact: 0
-incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 distinct rule/target pairs
+incomplete (axe could not decide, NOT passes): 188 nodes over 8 states, 52 distinct rule/target pairs
   demo EN floor (SHIPPED, all on break) color-contrast (serious) .logo
-  demo EN floor (SHIPPED, all on break) color-contrast (serious) .status:nth-child(3)
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) .status:nth-child(4)
   demo EN floor (SHIPPED, all on break) color-contrast (serious) span[data-testid="rev"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) span[data-testid="conn"]
-  demo EN floor (SHIPPED, all on break) color-contrast (serious) .status:nth-child(5)
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) .status:nth-child(6)
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="242"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[y="56.4"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[y="98.6"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="176.5"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="239.5"]
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="220.5"]
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="258.5"][y="64.4"][font-family="VT323"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[y="54"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="354"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[y="144.5"][x="120"][fill="#2f343b"]
@@ -28,7 +30,7 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[y="232.5"][x="120"][fill="#2f343b"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[y="232.5"][x="163"][fill="#2f343b"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="195"]
-  demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="258.5"]
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) text[fill="#8a3500"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="287"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="312"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="194.5"]
@@ -36,9 +38,11 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="4.5"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) text[x="-5.5"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) g[data-worker="nova"] > text[y="-9"][font-size="3.6"][x="5"]
-  demo EN floor (SHIPPED, all on break) color-contrast (serious) g[data-worker="nova"] > .zz[x="11"][y="0"]
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) g[data-worker="nova"] > .zz[x="10"][y="-1"]
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) g[data-worker="nova"] > text[x="13"][y="-4"][font-size="5"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) g[data-worker="vega"] > text[y="-9"][font-size="3.6"][x="5"]
-  demo EN floor (SHIPPED, all on break) color-contrast (serious) g[data-worker="vega"] > .zz[x="11"][y="0"]
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) g[data-worker="vega"] > .zz[x="10"][y="-1"]
+  demo EN floor (SHIPPED, all on break) color-contrast (serious) g[data-worker="vega"] > text[x="13"][y="-4"][font-size="5"]
   demo EN floor (SHIPPED, all on break) color-contrast (serious) .small
   demo EN floor (SHIPPED, all on break) label-content-name-mismatch (serious) .small
   demo EN Action items drawer (empty) color-contrast (serious) .toast > .small.btn[aria-label="Close"]
@@ -50,15 +54,17 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   demo TH Debug drawer label-content-name-mismatch (serious) .toast > .small.btn[aria-label="ปิด"]
   demo TH Debug drawer label-content-name-mismatch (serious) .row > .small.btn[aria-label="ปิด"]
   demo TH floor color-contrast (serious) .logo
-  demo TH floor color-contrast (serious) .status:nth-child(3)
+  demo TH floor color-contrast (serious) .status:nth-child(4)
   demo TH floor color-contrast (serious) span[data-testid="rev"]
   demo TH floor color-contrast (serious) span[data-testid="conn"]
-  demo TH floor color-contrast (serious) .status:nth-child(5)
+  demo TH floor color-contrast (serious) .status:nth-child(6)
   demo TH floor color-contrast (serious) text[x="242"]
   demo TH floor color-contrast (serious) text[y="56.4"]
   demo TH floor color-contrast (serious) text[y="98.6"]
   demo TH floor color-contrast (serious) text[x="176.5"]
   demo TH floor color-contrast (serious) text[x="239.5"]
+  demo TH floor color-contrast (serious) text[x="220.5"]
+  demo TH floor color-contrast (serious) text[x="258.5"][y="64.4"][font-family="VT323"]
   demo TH floor color-contrast (serious) text[y="54"]
   demo TH floor color-contrast (serious) text[x="354"]
   demo TH floor color-contrast (serious) text[y="144.5"][x="120"][fill="#2f343b"]
@@ -68,7 +74,7 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   demo TH floor color-contrast (serious) text[y="232.5"][x="120"][fill="#2f343b"]
   demo TH floor color-contrast (serious) text[y="232.5"][x="163"][fill="#2f343b"]
   demo TH floor color-contrast (serious) text[x="195"]
-  demo TH floor color-contrast (serious) text[x="258.5"]
+  demo TH floor color-contrast (serious) text[fill="#8a3500"]
   demo TH floor color-contrast (serious) text[x="287"]
   demo TH floor color-contrast (serious) text[x="312"]
   demo TH floor color-contrast (serious) text[x="194.5"]
@@ -76,13 +82,15 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   demo TH floor color-contrast (serious) text[x="4.5"]
   demo TH floor color-contrast (serious) text[x="-5.5"]
   demo TH floor color-contrast (serious) g[data-worker="nova"] > text[y="-9"][font-size="3.6"][x="5"]
-  demo TH floor color-contrast (serious) g[data-worker="nova"] > .zz[x="11"][y="0"]
+  demo TH floor color-contrast (serious) g[data-worker="nova"] > .zz[x="10"][y="-1"]
+  demo TH floor color-contrast (serious) g[data-worker="nova"] > text[x="13"][y="-4"][font-size="5"]
   demo TH floor color-contrast (serious) g[data-worker="vega"] > text[y="-9"][font-size="3.6"][x="5"]
-  demo TH floor color-contrast (serious) g[data-worker="vega"] > .zz[x="11"][y="0"]
+  demo TH floor color-contrast (serious) g[data-worker="vega"] > .zz[x="10"][y="-1"]
+  demo TH floor color-contrast (serious) g[data-worker="vega"] > text[x="13"][y="-4"][font-size="5"]
   demo TH floor color-contrast (serious) .small
   demo TH floor label-content-name-mismatch (serious) .small
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) .logo
-  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) .status:nth-child(2)
+  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) .status:nth-child(3)
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) span[data-testid="rev"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) span[data-testid="conn"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="242"]
@@ -90,6 +98,8 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[y="98.6"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="176.5"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="239.5"]
+  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="220.5"]
+  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="258.5"][y="64.4"][font-family="VT323"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[y="54"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="354"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[y="144.5"][x="120"][fill="#2f343b"]
@@ -99,23 +109,24 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[y="232.5"][x="120"][fill="#2f343b"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[y="232.5"][x="163"][fill="#2f343b"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="195"]
-  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="258.5"]
+  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[fill="#8a3500"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="287"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="312"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="194.5"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="218.5"]
-  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) g[data-box="alpha/one"] > text[x="4.5"][y="5.6"][font-family="VT323"]
-  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) g[data-box="beta/two"] > text[x="4.5"][y="5.6"][font-family="VT323"]
+  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) g[data-box="alpha/one"] > g > text[y="5.6"][x="4.5"][font-family="VT323"]
+  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) g[data-box="beta/two"] > g > text[y="5.6"][x="4.5"][font-family="VT323"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) g[data-worker="lyra"] > text[y="-9"][font-size="3.6"][x="5"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) g[data-worker="nova"] > text[y="-9"][font-size="3.6"][x="5"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) g[data-worker="orion"] > text[y="-9"][font-size="3.6"][x="5"]
   live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) g[data-worker="vega"] > text[y="-9"][font-size="3.6"][x="5"]
-  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) .zz
+  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[x="10"]
+  live EN floor (Needs you, At QC, Working, On break) color-contrast (serious) text[y="-4"]
   live EN floor (Needs you, At QC, Working, On break) label-content-name-mismatch (serious) .hit-bang
   live EN Action items drawer (one ticket for nova) color-contrast (serious) .small
   live EN Action items drawer (one ticket for nova) label-content-name-mismatch (serious) .small
   live EN floor with the worker card open color-contrast (serious) .logo
-  live EN floor with the worker card open color-contrast (serious) .status:nth-child(2)
+  live EN floor with the worker card open color-contrast (serious) .status:nth-child(3)
   live EN floor with the worker card open color-contrast (serious) span[data-testid="rev"]
   live EN floor with the worker card open color-contrast (serious) span[data-testid="conn"]
   live EN floor with the worker card open color-contrast (serious) text[x="242"]
@@ -123,6 +134,8 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   live EN floor with the worker card open color-contrast (serious) text[y="98.6"]
   live EN floor with the worker card open color-contrast (serious) text[x="176.5"]
   live EN floor with the worker card open color-contrast (serious) text[x="239.5"]
+  live EN floor with the worker card open color-contrast (serious) text[x="220.5"]
+  live EN floor with the worker card open color-contrast (serious) text[x="258.5"][y="64.4"][font-family="VT323"]
   live EN floor with the worker card open color-contrast (serious) text[y="54"]
   live EN floor with the worker card open color-contrast (serious) text[x="354"]
   live EN floor with the worker card open color-contrast (serious) text[y="144.5"][x="120"][fill="#2f343b"]
@@ -132,23 +145,24 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   live EN floor with the worker card open color-contrast (serious) text[y="232.5"][x="120"][fill="#2f343b"]
   live EN floor with the worker card open color-contrast (serious) text[y="232.5"][x="163"][fill="#2f343b"]
   live EN floor with the worker card open color-contrast (serious) text[x="195"]
-  live EN floor with the worker card open color-contrast (serious) text[x="258.5"]
+  live EN floor with the worker card open color-contrast (serious) text[fill="#8a3500"]
   live EN floor with the worker card open color-contrast (serious) text[x="287"]
   live EN floor with the worker card open color-contrast (serious) text[x="312"]
   live EN floor with the worker card open color-contrast (serious) text[x="194.5"]
   live EN floor with the worker card open color-contrast (serious) text[x="218.5"]
-  live EN floor with the worker card open color-contrast (serious) g[data-box="alpha/one"] > text[x="4.5"][y="5.6"][font-family="VT323"]
-  live EN floor with the worker card open color-contrast (serious) g[data-box="beta/two"] > text[x="4.5"][y="5.6"][font-family="VT323"]
+  live EN floor with the worker card open color-contrast (serious) g[data-box="alpha/one"] > g > text[y="5.6"][x="4.5"][font-family="VT323"]
+  live EN floor with the worker card open color-contrast (serious) g[data-box="beta/two"] > g > text[y="5.6"][x="4.5"][font-family="VT323"]
   live EN floor with the worker card open color-contrast (serious) g[data-worker="lyra"] > text[y="-9"][font-size="3.6"][x="5"]
   live EN floor with the worker card open color-contrast (serious) g[data-worker="nova"] > text[y="-9"][font-size="3.6"][x="5"]
   live EN floor with the worker card open color-contrast (serious) g[data-worker="orion"] > text[y="-9"][font-size="3.6"][x="5"]
   live EN floor with the worker card open color-contrast (serious) g[data-worker="vega"] > text[y="-9"][font-size="3.6"][x="5"]
-  live EN floor with the worker card open color-contrast (serious) .zz
+  live EN floor with the worker card open color-contrast (serious) text[x="10"]
+  live EN floor with the worker card open color-contrast (serious) text[y="-4"]
   live EN floor with the worker card open color-contrast (serious) .small
   live EN floor with the worker card open label-content-name-mismatch (serious) .hit-bang
   live EN floor with the worker card open label-content-name-mismatch (serious) .small
   live TH floor (Needs you) color-contrast (serious) .logo
-  live TH floor (Needs you) color-contrast (serious) .status:nth-child(2)
+  live TH floor (Needs you) color-contrast (serious) .status:nth-child(3)
   live TH floor (Needs you) color-contrast (serious) span[data-testid="rev"]
   live TH floor (Needs you) color-contrast (serious) span[data-testid="conn"]
   live TH floor (Needs you) color-contrast (serious) text[x="242"]
@@ -156,6 +170,8 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   live TH floor (Needs you) color-contrast (serious) text[y="98.6"]
   live TH floor (Needs you) color-contrast (serious) text[x="176.5"]
   live TH floor (Needs you) color-contrast (serious) text[x="239.5"]
+  live TH floor (Needs you) color-contrast (serious) text[x="220.5"]
+  live TH floor (Needs you) color-contrast (serious) text[x="258.5"][y="64.4"][font-family="VT323"]
   live TH floor (Needs you) color-contrast (serious) text[y="54"]
   live TH floor (Needs you) color-contrast (serious) text[x="354"]
   live TH floor (Needs you) color-contrast (serious) text[y="144.5"][x="120"][fill="#2f343b"]
@@ -165,29 +181,30 @@ incomplete (axe could not decide, NOT passes): 171 nodes over 8 states, 47 disti
   live TH floor (Needs you) color-contrast (serious) text[y="232.5"][x="120"][fill="#2f343b"]
   live TH floor (Needs you) color-contrast (serious) text[y="232.5"][x="163"][fill="#2f343b"]
   live TH floor (Needs you) color-contrast (serious) text[x="195"]
-  live TH floor (Needs you) color-contrast (serious) text[x="258.5"]
+  live TH floor (Needs you) color-contrast (serious) text[fill="#8a3500"]
   live TH floor (Needs you) color-contrast (serious) text[x="287"]
   live TH floor (Needs you) color-contrast (serious) text[x="312"]
   live TH floor (Needs you) color-contrast (serious) text[x="194.5"]
   live TH floor (Needs you) color-contrast (serious) text[x="218.5"]
-  live TH floor (Needs you) color-contrast (serious) g[data-box="alpha/one"] > text[x="4.5"][y="5.6"][font-family="VT323"]
-  live TH floor (Needs you) color-contrast (serious) g[data-box="beta/two"] > text[x="4.5"][y="5.6"][font-family="VT323"]
+  live TH floor (Needs you) color-contrast (serious) g[data-box="alpha/one"] > g > text[y="5.6"][x="4.5"][font-family="VT323"]
+  live TH floor (Needs you) color-contrast (serious) g[data-box="beta/two"] > g > text[y="5.6"][x="4.5"][font-family="VT323"]
   live TH floor (Needs you) color-contrast (serious) g[data-worker="lyra"] > text[y="-9"][font-size="3.6"][x="5"]
   live TH floor (Needs you) color-contrast (serious) g[data-worker="nova"] > text[y="-9"][font-size="3.6"][x="5"]
   live TH floor (Needs you) color-contrast (serious) g[data-worker="orion"] > text[y="-9"][font-size="3.6"][x="5"]
   live TH floor (Needs you) color-contrast (serious) g[data-worker="vega"] > text[y="-9"][font-size="3.6"][x="5"]
-  live TH floor (Needs you) color-contrast (serious) .zz
+  live TH floor (Needs you) color-contrast (serious) text[x="10"]
+  live TH floor (Needs you) color-contrast (serious) text[y="-4"]
   live TH floor (Needs you) color-contrast (serious) .small
   live TH floor (Needs you) label-content-name-mismatch (serious) .hit-bang
   live TH floor (Needs you) label-content-name-mismatch (serious) .small
 
 Estimated contrast of the scene labels (SVG text against the rect painted under it, an estimate, not axe):
+  1.25:1  "z" size 4  rgb(245,243,236) on rgb(232,217,196)
+  1.25:1  "Z" size 5  rgb(245,243,236) on rgb(232,217,196)
+  1.25:1  "z" size 4  rgb(245,243,236) on rgb(232,217,196)
+  1.25:1  "Z" size 5  rgb(245,243,236) on rgb(232,217,196)
   4.97:1  "QC" size 3  rgb(107,79,0) on rgb(214,208,191)
+  5.05:1  "PR RACK" size 3.2  rgb(69,75,85) on rgb(203,196,177)
   5.06:1  "ORDERS" size 3  rgb(198,40,40) on rgb(245,243,236)
   5.11:1  "FIREWALL" size 4  rgb(239,83,80) on rgb(21,24,28)
-  5.11:1  "MERGE" size 3  rgb(27,94,32) on rgb(214,208,191)
-  5.26:1  "TEST" size 3  rgb(138,53,0) on rgb(214,208,191)
-  5.7:1  "ORDER" size 3  rgb(69,75,85) on rgb(214,208,191)
-  5.7:1  "CODE" size 3  rgb(69,75,85) on rgb(214,208,191)
-  6.05:1  "CAGE 1 · NOVA" size 2.8  rgb(47,52,59) on rgb(185,180,166)
   FIREWALL art label: 5.11:1 (needs 4.5)

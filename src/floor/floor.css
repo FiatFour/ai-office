@@ -386,7 +386,7 @@ main {
     opacity: 1;
   }
 }
-@keyframes typeA {
+@keyframes tA {
   0% {
     opacity: 1;
   }
@@ -397,7 +397,7 @@ main {
     opacity: 1;
   }
 }
-@keyframes typeB {
+@keyframes tB {
   0% {
     opacity: 0;
   }
@@ -421,6 +421,37 @@ main {
     opacity: 0;
   }
 }
+@keyframes pop {
+  0% {
+    transform: translate(-50%, -6px);
+    opacity: 0;
+  }
+  10% {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+.pop {
+  animation: pop 0.5s steps(5) both;
+}
+@keyframes press {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(3px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+.press {
+  animation: press 1.2s steps(2) infinite;
+}
 @keyframes belt {
   0% {
     transform: translateX(0);
@@ -439,10 +470,10 @@ main {
   animation: blink 1s steps(1) infinite;
 }
 .typeA {
-  animation: typeA 0.3s steps(1) infinite;
+  animation: tA 0.3s steps(1) infinite;
 }
 .typeB {
-  animation: typeB 0.3s steps(1) infinite;
+  animation: tB 0.3s steps(1) infinite;
 }
 .zz {
   animation: zz 2s steps(8) infinite;
@@ -457,6 +488,8 @@ main {
   .typeA,
   .typeB,
   .zz,
+  .pop,
+  .press,
   .belt {
     animation: none;
   }

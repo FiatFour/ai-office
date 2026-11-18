@@ -42,7 +42,7 @@ export interface Fixture {
   readonly task: TaskA;
 }
 
-export const makeFixture = (over: Partial<TaskA> = {}): Fixture => {
+export const makeFixture = (over: Partial<TaskA> = {}, options: { duplicate?: boolean } = {}): Fixture => {
   const reposRoot = tempDir('bench-repos');
   const work = tempDir('bench-work');
   git(work, 'init', '-q', '-b', 'main');
@@ -55,7 +55,11 @@ export const makeFixture = (over: Partial<TaskA> = {}): Fixture => {
   const baseSha = git(work, 'rev-parse', 'HEAD');
   put(work, 'src/slug.js', FIXED);
   put(work, 'test/basic.test.js', FIXED_TEST);
-  put(work, 'test/slug-hidden.test.js', HIDDEN_NEW);
+  put(
+    work,
+    'test/slug-hidden.test.js',
+    options.duplicate === true ? OLD_TEST.replace('lowercases', 'visible') : HIDDEN_NEW,
+  );
   git(work, 'add', '-A');
   git(work, 'commit', '-q', '-m', 'fix: slug');
   const fixSha = git(work, 'rev-parse', 'HEAD');
@@ -73,6 +77,7 @@ export const makeFixture = (over: Partial<TaskA> = {}): Fixture => {
     installCommand: null,
     testCommand: ['node', '--test'],
     expect: '(pass|# pass) [1-9]',
+    baseFail: '(fail|# fail) [1-9]',
     image: 'unused-by-the-local-runner',
     timeoutMs: 60_000,
     confirmed: false,

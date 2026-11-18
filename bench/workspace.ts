@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
+import type { FileEdit } from '../server/githost/host.ts';
 import { type RunResult, runBinary } from '../server/sandbox/engine.ts';
 import { type TaskA, TaskRefused } from './model.ts';
 import type { Runner } from './runner.ts';
@@ -79,8 +80,11 @@ export interface PrepareOptions {
   readonly runner: Runner;
 }
 
+export const mirrorPath = (cache: string, repo: string): string =>
+  join(cache, 'mirrors', `${repo.replace('/', '__')}.git`);
+
 const mirrorOf = async (task: TaskA, options: PrepareOptions): Promise<string> => {
-  const mirror = join(options.cache, 'mirrors', `${task.repo.replace('/', '__')}.git`);
+  const mirror = mirrorPath(options.cache, task.repo);
   if (!existsSync(mirror)) {
     mkdirSync(dirname(mirror), { recursive: true });
     const cloned = await runBinary('git', ['clone', '--quiet', '--bare', options.repoUrl(task.repo), mirror], {
@@ -169,4 +173,24 @@ export const prepareTask = async (task: TaskA, options: PrepareOptions): Promise
       throw new TaskRefused(`task ${task.id}: install failed: ${(ran.err || ran.out).trim().slice(-300)}`);
   }
   return { dir, source, hidden, installed, baseSha };
+};
+
+export const fixFiles = async (task: TaskA, mirror: string): Promise<FileEdit[]> => {
+  const listed = await must(mirror, [
+    'diff-tree',
+    '--no-commit-id',
+    '--name-only',
+    '--diff-filter=AM',
+    '-r',
+    '--no-renames',
+    '-z',
+    `${task.fixSha}^`,
+    task.fixSha,
+  ]);
+  const files: FileEdit[] = [];
+  for (const rel of listed.split('\0').filter(Boolean)) {
+    if (task.hiddenPaths.includes(rel)) continue;
+    files.push({ path: rel, content: await must(mirror, ['show', `${task.fixSha}:${rel}`]) });
+  }
+  return files;
 };

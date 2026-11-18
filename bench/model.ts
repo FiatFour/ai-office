@@ -13,6 +13,7 @@ export interface TaskA {
   readonly installCommand: readonly string[] | null;
   readonly testCommand: readonly string[];
   readonly expect: string;
+  readonly baseFail: string;
   readonly image: string;
   readonly timeoutMs: number;
   readonly confirmed: boolean;
@@ -106,11 +107,16 @@ export const parseTask = (raw: unknown, file: string): Task => {
     return p;
   });
   const expect = text(o, 'expect', where);
-  try {
-    new RegExp(expect);
-  } catch {
-    throw new TaskRefused(`${where}: expect is not a regular expression`);
-  }
+  const baseFail = text(o, 'baseFail', where);
+  for (const [key, source] of [
+    ['expect', expect],
+    ['baseFail', baseFail],
+  ] as const)
+    try {
+      new RegExp(source);
+    } catch {
+      throw new TaskRefused(`${where}: ${key} is not a regular expression`);
+    }
   return {
     set: 'A',
     id,
@@ -124,6 +130,7 @@ export const parseTask = (raw: unknown, file: string): Task => {
       o.installCommand === null || o.installCommand === undefined ? null : argv(o, 'installCommand', where),
     testCommand: argv(o, 'testCommand', where),
     expect,
+    baseFail,
     image: text(o, 'image', where),
     timeoutMs: typeof o.timeoutMs === 'number' ? o.timeoutMs : 1_800_000,
     confirmed,

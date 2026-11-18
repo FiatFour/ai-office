@@ -29,11 +29,20 @@ export const tokensOf = (usages: readonly (Usage | null)[]): Tokens | null => {
   };
 };
 
-export const baselineArm = (shellFor: (task: TaskA) => CageShell, model?: string): Arm => ({
+export interface BaselineOptions {
+  readonly model?: string;
+  readonly bin?: string;
+}
+
+export const baselineArm = (shellFor: (task: TaskA) => CageShell, options: BaselineOptions = {}): Arm => ({
   name: 'baseline',
   async run(task, _prepared, signal) {
     const shell = shellFor(task);
-    const runtime = claudeCode({ shell: () => shell, ...(model === undefined ? {} : { model }) });
+    const runtime = claudeCode({
+      shell: () => shell,
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.bin === undefined ? {} : { bin: options.bin }),
+    });
     const ticket = ticketOf(task);
     const result = await runtime.run({
       role: 'author',

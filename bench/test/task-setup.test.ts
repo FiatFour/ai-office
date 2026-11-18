@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,11 +44,37 @@ describe('task setup', () => {
     expect(fixed.outcome).toBe('pass');
   });
 
+  it('refuses to build a source that holds a hidden test under another name', async () => {
+    const fx = makeFixture({ hiddenPaths: ['test/slug-hidden.test.js', 'test/basic.test.js'] }, { duplicate: true });
+    const cache = tempDir('bench-cache');
+    await expect(
+      prepareTask(fx.task, { cache, repoUrl: (r) => join(fx.reposRoot, `${r}.git`), runner: localRunner }),
+    ).rejects.toThrow(
+      /is not sealed: hidden test test\/slug-hidden.test.js is present in the cage tree as test\/visible.test.js/,
+    );
+  });
+
   it('refuses hidden tests that already pass at the base', async () => {
     const { fx, scratch, prepared } = await setup({ testCommand: ['node', '--test', 'test/visible.test.js'] });
     await expect(verifyTask(fx.task, prepared, localRunner, scratch)).rejects.toThrow(
       /do not fail at the reverted base|gave pass/,
     );
+  });
+
+  it('refuses a base failure that is not a test failure, such as a crash before any test runs', async () => {
+    const { fx, scratch, prepared } = await setup({ testCommand: ['node', '-e', 'process.exit(1)'] });
+    await expect(verifyTask(fx.task, prepared, localRunner, scratch)).rejects.toThrow(/not as a test failure/);
+  });
+
+  it('reports a cage source that keeps history or can reach the fix commit', async () => {
+    const fx = makeFixture();
+    const clone = join(tempDir('seal-clone'), 'c');
+    execFileSync('git', ['clone', '-q', join(fx.reposRoot, 'acme/proj.git'), clone]);
+    expect(await gitProblems(clone, fx.fixSha)).toEqual([
+      'the cage source has 2 commits, not 1',
+      'the fix commit is reachable from the cage source',
+      'the cage source keeps remote or tag refs',
+    ]);
   });
 
   it('reports a cage tree that holds a hidden test, by content, whatever its name', () => {
@@ -78,7 +105,9 @@ describe('refusals', () => {
   };
 
   it('refuses a task with no hidden-test commit and says why', () => {
-    expect(() => parseTask({ ...base, hiddenPaths: [] }, 'x.json')).toThrow(/names no hidden-test commit/);
+    expect(() => parseTask({ ...base, fixSha: 'a'.repeat(40), hiddenPaths: [] }, 'x.json')).toThrow(
+      /names no hidden-test commit/,
+    );
     expect(() => parseTask({ ...base, fixSha: 'abc', hiddenPaths: ['t.js'] }, 'x.json')).toThrow(
       /names no hidden-test commit/,
     );

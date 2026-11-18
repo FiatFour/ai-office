@@ -8,7 +8,7 @@ export const THRESHOLDS = {
   minMergeRate: 0.5,
   maxWindowsPerFiveMerged: 1,
   maxHumanMinutesPerPr: 10,
-  source: 'docs/decisions and gates.md, P2-1 thresholds, answered 2026-11-19',
+  source: 'operator answer of 2026-11-19, recorded as the P2-1 thresholds in gates.md',
 } as const;
 
 export type Verdict = 'PASS' | 'FAIL' | 'UNMEASURED';

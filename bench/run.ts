@@ -228,7 +228,6 @@ const main = async (argv: string[]): Promise<number> => {
     const scripts: Record<string, Script> = {};
     for (const t of tasks) {
       if (t.set !== 'A') continue;
-      await prepareTask(t, { cache: values.cache, repoUrl, runner: localRunner }).catch(() => undefined);
       scripts[t.id] = { files: await fixFiles(t, mirrorPath(values.cache, t.repo)) };
     }
     console.log(JSON.stringify(scripts));

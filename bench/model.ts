@@ -137,6 +137,4 @@ export const parseTask = (raw: unknown, file: string): Task => {
   };
 };
 
-export const ROW_COLUMNS = ['reviewRounds', 'wallMs', 'agentMs', 'tokens', 'quotaWindows', 'humanMinutes'] as const;
-
 export const totalTokens = (t: Tokens): number => t.input + t.output + t.cacheRead + t.cacheCreation;

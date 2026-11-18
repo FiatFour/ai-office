@@ -6,6 +6,8 @@ import { type RunResult, runBinary } from '../server/sandbox/engine.ts';
 import { type TaskA, TaskRefused } from './model.ts';
 import type { Runner } from './runner.ts';
 
+const INSTALL_TIMEOUT_MS = 900_000;
+
 export interface Prepared {
   readonly dir: string;
   readonly source: string;
@@ -167,7 +169,7 @@ export const prepareTask = async (task: TaskA, options: PrepareOptions): Promise
       cwd: installed,
       image: task.image,
       network: true,
-      timeoutMs: task.timeoutMs,
+      timeoutMs: INSTALL_TIMEOUT_MS,
     });
     if (ran.code !== 0)
       throw new TaskRefused(`task ${task.id}: install failed: ${(ran.err || ran.out).trim().slice(-300)}`);

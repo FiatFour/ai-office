@@ -27,6 +27,6 @@ Checked on this machine with `node bench/run.ts prepare --task <id>` and `check-
 
 ## Known weak spots
 
-- `ufo-174` and `path-to-regexp-336` are large fixes. Expect them to fail for both arms. They are in the set so the pass rate is not trivially high.
+- `ufo-174` and `path-to-regexp-336` are large fixes. They are the likeliest failures (a guess, not measured), kept so the pass rate is not trivially high.
 - The cage must be able to run the tests, so the operator must allow the npm registry (or accept that the agent cannot run them). The harness does not decide that.
 - The issue text is the public issue body only. Later comments, which may contain the fix, are not given to the agent.

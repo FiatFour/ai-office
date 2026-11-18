@@ -127,25 +127,29 @@ describe.skipIf(!canSpawnTs)('agent-works --demo', () => {
     await exited(child);
   }, 30_000);
 
-  it('removes its throw-away home when the process exits without a signal', async () => {
-    const port = await freePort();
-    const { tmp, env } = cleanEnv({ AGENT_WORKS_DEMO_INTERVAL_MS: '20' });
-    const script = join(tmp, 'exit-midway.mjs');
-    const cli = join(import.meta.dirname, '../../server/cli.ts');
-    writeFileSync(
-      script,
-      `import { main } from ${JSON.stringify(pathToFileURL(cli).href)};
+  it.skipIf(process.platform === 'win32')(
+    'removes its throw-away home when the process exits without a signal',
+    async () => {
+      const port = await freePort();
+      const { tmp, env } = cleanEnv({ AGENT_WORKS_DEMO_INTERVAL_MS: '20' });
+      const script = join(tmp, 'exit-midway.mjs');
+      const cli = join(import.meta.dirname, '../../server/cli.ts');
+      writeFileSync(
+        script,
+        `import { main } from ${JSON.stringify(pathToFileURL(cli).href)};
 setTimeout(() => process.exit(7), 1500);
 await main(['--demo', '--no-open', '--port', '${port}'], process.env);
 `,
-    );
-    const child = spawn(process.execPath, [script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-    await started(child);
-    expect(demoDirs(tmp)).toHaveLength(1);
-    await exited(child);
-    if (process.platform !== 'win32') expect(child.exitCode).toBe(7);
-    expect(demoDirs(tmp)).toEqual([]);
-  }, 30_000);
+      );
+      const child = spawn(process.execPath, [script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      await started(child);
+      expect(demoDirs(tmp)).toHaveLength(1);
+      await exited(child);
+      expect(child.exitCode).toBe(7);
+      expect(demoDirs(tmp)).toEqual([]);
+    },
+    30_000,
+  );
 
   const signals: NodeJS.Signals[] = process.platform === 'win32' ? [] : ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
   it.each(signals)(

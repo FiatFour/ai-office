@@ -496,20 +496,23 @@ describe('the time a run may take', () => {
     expect(one.work).not.toBe(two.work);
   });
 
-  it('refuses a task whose own limit cannot be a timer, before the arm starts', async () => {
-    const { fx, scratch, prepared } = await verified();
-    let ran = false;
-    const arm: Arm = {
-      name: 'factory',
-      scripted: false,
-      async run() {
-        ran = true;
-        throw new Error('no');
-      },
-    };
-    await expect(
-      runTask({ ...fx.task, timeoutMs: Number('abc') }, 1, prepared, { arm, runner: localRunner, scratch }),
-    ).rejects.toThrow('whole number');
-    expect(ran).toBe(false);
-  });
+  it.skipIf(process.platform === 'win32')(
+    'refuses a task whose own limit cannot be a timer, before the arm starts',
+    async () => {
+      const { fx, scratch, prepared } = await verified();
+      let ran = false;
+      const arm: Arm = {
+        name: 'factory',
+        scripted: false,
+        async run() {
+          ran = true;
+          throw new Error('no');
+        },
+      };
+      await expect(
+        runTask({ ...fx.task, timeoutMs: Number('abc') }, 1, prepared, { arm, runner: localRunner, scratch }),
+      ).rejects.toThrow('whole number');
+      expect(ran).toBe(false);
+    },
+  );
 });

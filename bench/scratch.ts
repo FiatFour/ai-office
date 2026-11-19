@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type { AgentRuntime } from '../server/agents/runtime.ts';
 import { github } from '../server/githost/github.ts';
@@ -44,7 +44,7 @@ const isBareRepo = (path: string): boolean =>
   existsSync(join(path, 'HEAD')) && existsSync(join(path, 'objects')) && !existsSync(join(path, '.git'));
 
 export const remoteProblem = (repo: string, remote: string): string | null => {
-  if (remote.startsWith('/'))
+  if (isAbsolute(remote))
     return isBareRepo(remote) ? null : `${remote} is a local path, and a local remote must be a bare repository`;
   const named = GITHUB_REMOTE.exec(remote)?.[1];
   if (named === undefined) return `${remote} is neither a github.com URL of ${repo} nor a bare repository path`;

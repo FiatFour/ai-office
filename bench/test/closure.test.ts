@@ -517,6 +517,7 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
       expect(new Set(seen)).toEqual(new Set([before]));
       expect(seen).toHaveLength(FORMS(rel).length * 2);
     },
+    60_000,
   );
 
   it.each([

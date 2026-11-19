@@ -12,6 +12,7 @@ const CAGE = 'bench/test/cage-mount.test.ts';
 const ARMS = 'bench/test/arms.test.ts';
 const CLI = 'bench/test/cli.test.ts';
 const CLOSURE = 'bench/test/closure.test.ts';
+const FACTORY = 'bench/test/factory.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -745,6 +746,167 @@ const MUTANTS = [
       ],
     ],
     tests: [CLOSURE],
+  },
+  {
+    name: 'seed-keeps-actions',
+    claim: 'the seeded tree has no .github, so a push cannot start Actions on the scratch repo',
+    edits: [
+      ['bench/scratch.ts', "rmSync(join(dir, '.github'), { recursive: true, force: true });", 'void 0;'],
+      [
+        'bench/scratch.ts',
+        "if (tracked.some((path) => path === '.github' || path.startsWith('.github/')))",
+        'if (false)',
+      ],
+    ],
+    tests: [FACTORY],
+  },
+  {
+    name: 'seed-strip-unchecked',
+    claim: 'a .github left in the seeded tree is refused before the push',
+    edits: [
+      [
+        'bench/scratch.ts',
+        "if (tracked.some((path) => path === '.github' || path.startsWith('.github/')))",
+        'if (false)',
+      ],
+      ['bench/scratch.ts', "rmSync(join(dir, '.github'), { recursive: true, force: true });", 'void 0;'],
+    ],
+    tests: [FACTORY],
+  },
+  {
+    name: 'seed-no-force',
+    claim: 'a branch a crashed run left behind is replaced by the new seed',
+    edits: [['bench/scratch.ts', "'push', '--quiet', '--force', remote", "'push', '--quiet', remote"]],
+    tests: [FACTORY],
+  },
+  {
+    name: 'base-ref-any',
+    claim: 'the bench writes and deletes only bench-base refs on the scratch host, never main',
+    edits: [['bench/scratch.ts', 'const BASE_REF = /^bench-base\\/t-[0-9a-f]{8}$/;', 'const BASE_REF = /^.*$/;']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'work-ref-any',
+    claim: 'the bench deletes only aw/bench work branches',
+    edits: [['bench/scratch.ts', 'const WORK_REF = /^aw\\/bench\\/t-[0-9a-f]{8}$/;', 'const WORK_REF = /^.*$/;']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'cleanup-allows-merge',
+    claim: 'the cleanup sender refuses a merge and every write that is not a close or a bench branch delete',
+    edits: [
+      ['bench/scratch.ts', "return 'it is not a GET, a PR close or a delete of a bench work branch';", 'return null;'],
+    ],
+    tests: [FACTORY],
+  },
+  {
+    name: 'cleanup-any-patch',
+    claim: 'the cleanup sender only ever closes a PR',
+    edits: [['bench/scratch.ts', 'JSON.stringify(request.body) === \'{"state":"closed"}\' ? null', 'true ? null']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'scratch-name-any',
+    claim: 'the factory arm refuses a repo that is not named like a scratch repo',
+    edits: [
+      [
+        'bench/scratch.ts',
+        'const SCRATCH_NAME = /^[\\w-][\\w.-]*\\/[\\w.-]*-scratch$/;',
+        'const SCRATCH_NAME = /^.*$/;',
+      ],
+    ],
+    tests: [FACTORY, CLI],
+  },
+  {
+    name: 'stale-pr-stays-open',
+    claim: 'a PR a crashed run left open is closed before the crew starts',
+    edits: [['bench/scratch.ts', '    change !== null;', '    false;']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'cleanup-after-run-skipped',
+    claim: 'the PR and both branches are removed after the run',
+    edits: [['bench/scratch.ts', 'if (o.keep !== true) await clear();', 'void 0;']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'cleanup-before-seed-skipped',
+    claim: 'a leftover PR and branch are cleared before the seed',
+    edits: [
+      [
+        'bench/scratch.ts',
+        '      await clear();\n      await seedBase(prepared.source',
+        '      await seedBase(prepared.source',
+      ],
+    ],
+    tests: [FACTORY],
+  },
+  {
+    name: 'failure-not-recorded',
+    claim: 'the first failed session is remembered so the arm stops without retries',
+    edits: [['bench/scratch.ts', 'failure ??= error instanceof Error ? error.message : String(error);', 'void error;']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'failure-ignored-by-arm',
+    claim: 'the arm ends a run at the first failed session',
+    edits: [['bench/arms-live.ts', 'if (failed !== null) throw new ArmFailed', 'if (false) throw new ArmFailed']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'retry-after-failure',
+    claim: 'no session starts after one failed, so no quota is spent on a retry',
+    edits: [
+      [
+        'bench/scratch.ts',
+        'if (failure !== null) throw new Error(`an earlier session failed: ${failure}`);',
+        'void 0;',
+      ],
+    ],
+    tests: [FACTORY],
+  },
+  {
+    name: 'settled-ignores-head',
+    claim: 'a review of an older head does not settle the PR',
+    edits: [['bench/arms-live.ts', 'r.commitId === snapshot.change.headSha && ', '']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'settled-counts-changes',
+    claim: 'a review that asks for changes does not settle the PR',
+    edits: [['bench/arms-live.ts', "mark?.[1] === reviewer && mark[2] !== 'changes'", 'mark?.[1] === reviewer']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'settled-any-worker',
+    claim: 'only the reviewer worker settles the PR',
+    edits: [['bench/arms-live.ts', 'mark?.[1] === reviewer && ', '']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'arm-ignores-settled',
+    claim:
+      'the arm stops when the reviewer has seen the head and asked for no change, which is the only stop with one account',
+    edits: [
+      [
+        'bench/arms-live.ts',
+        "if (await reviewSettledOnHost(handle, branch)) return { kind: 'review_settled' };",
+        'void 0;',
+      ],
+    ],
+    tests: [FACTORY],
+  },
+  {
+    name: 'removed-ignores-status',
+    claim: 'a failed host listing of PR files is an error, not an empty list of deletions',
+    edits: [['bench/arms-live.ts', 'if (response.status >= 400)', 'if (false)']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'home-worker-ignored',
+    claim: 'every factory worker mounts the home its mapping names',
+    edits: [['server/sandbox/container.ts', 'homeName(this.homeWorker(spec.worker))', 'homeName(spec.worker)']],
+    tests: [CAGE],
   },
 ];
 

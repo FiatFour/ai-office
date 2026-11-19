@@ -72,10 +72,49 @@ describe.skipIf(!canSpawnTs)('the harness command line', () => {
     expect(noLogin.stderr).toContain('not run, needs operator login confirmation');
   });
 
-  it('does not wire the live factory arm into the command line', () => {
-    const ran = cli(['run', '--task', 'a-1', '--arm', 'factory', '--tasks', withTasks({ ...GOOD, confirmed: true })]);
-    expect(ran.status).toBe(3);
-    expect(ran.stderr).toContain('needs a scratch host repo seeded with the task base');
+  it('refuses the factory arm on an unconfirmed task and until the operator confirms the login', () => {
+    const unconfirmed = cli(
+      ['run', '--task', 'a-1', '--arm', 'factory', '--tasks', withTasks({ ...GOOD, confirmed: false })],
+      { AW_BENCH_LOGIN_CONFIRMED: '1' },
+    );
+    expect(unconfirmed.status).toBe(3);
+    expect(unconfirmed.stderr).toContain('not confirmed by the operator: no model run');
+    const shut = withTasks({ ...GOOD, confirmed: true });
+    const noLogin = cli(['run', '--task', 'a-1', '--arm', 'factory', '--tasks', shut], {
+      AW_BENCH_LOGIN_CONFIRMED: '',
+    });
+    expect(noLogin.status).toBe(3);
+    expect(noLogin.stderr).toContain('not run, needs operator login confirmation');
+    const bin = cli(['run', '--task', 'a-1', '--arm', 'factory', '--bin', '/bin/true', '--tasks', shut], {
+      AW_BENCH_LOGIN_CONFIRMED: '',
+    });
+    expect(bin.stderr).toContain('not run, needs operator login confirmation');
+  });
+
+  it('needs a cage home for the factory arm and refuses a scratch repo that is not one', () => {
+    const dir = withTasks({ ...GOOD, confirmed: true });
+    const env = { AW_BENCH_LOGIN_CONFIRMED: '1' };
+    const noHome = cli(['run', '--task', 'a-1', '--arm', 'factory', '--tasks', dir], env);
+    expect(noHome.status).toBe(3);
+    expect(noHome.stderr).toContain('needs --home');
+    const wrong = cli(
+      [
+        'run',
+        '--task',
+        'a-1',
+        '--arm',
+        'factory',
+        '--scratch-repo',
+        'FiatFour/ai-office',
+        '--home',
+        '/nowhere',
+        '--tasks',
+        dir,
+      ],
+      env,
+    );
+    expect(wrong.status).toBe(3);
+    expect(wrong.stderr).toContain('is not a scratch repo');
   });
 
   it('needs a scripted file for the scripted arm and an unknown task id names the directory', () => {

@@ -106,7 +106,7 @@ type Job =
     }
   | { readonly kind: 'brief'; readonly box: Box & { pr: string }; readonly change: Change };
 
-const REVIEW_MARK = /^<!-- agent-works:review worker=(\S+) verdict=(approve|changes|comment) -->$/m;
+export const REVIEW_MARK = /^<!-- agent-works:review worker=(\S+) verdict=(approve|changes|comment) -->$/m;
 const reviewMarker = (worker: string, verdict: Verdict) =>
   `<!-- agent-works:review worker=${worker} verdict=${verdict} -->`;
 const changeRef = (repo: string, number: number) => `${repo.toLowerCase()}#${number}`;

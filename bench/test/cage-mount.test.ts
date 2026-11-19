@@ -107,6 +107,37 @@ describe.skipIf(docker === undefined)('the cage mount of a prepared task, on a r
     });
   }, 300_000);
 
+  it('mounts the home of the mapped login worker for the author and the reviewer of a factory run', async () => {
+    const fx = makeFixture();
+    const cache = tempDir('bench-cache');
+    const prepared = await prepareTask(fx.task, {
+      cache,
+      repoUrl: (r) => join(fx.reposRoot, `${r}.git`),
+      runner: localRunner,
+    });
+    const other = homeName('someone-else');
+    mkdirSync(join(home, 'homes', other), { recursive: true });
+    writeFileSync(join(home, 'homes', homeName('baseline'), 'marker'), 'login home\n');
+    writeFileSync(join(home, 'homes', other, 'marker'), 'other home\n');
+    const mapped = new BenchCage({
+      engine,
+      home,
+      hq: randomBytes(3).toString('hex'),
+      image: IMAGE,
+      project: `agent-works-bench-${randomBytes(3).toString('hex')}`,
+      installed,
+      homeWorker: (worker) => (worker === 'vega' ? 'someone-else' : 'baseline'),
+    });
+    try {
+      const shells = cageShells(async () => mapped, prepared.source);
+      const seen = async (worker: string) =>
+        (await shells(worker, 'bench/home').exec(['cat', '/home/agent/marker'])).out.trim();
+      expect([await seen('nova'), await seen('vega')]).toEqual(['login home', 'other home']);
+    } finally {
+      await mapped.removeAll();
+    }
+  }, 300_000);
+
   it('allows the model API and nothing else', () => {
     expect(BENCH_ALLOWLIST).toEqual(['api.anthropic.com']);
   });

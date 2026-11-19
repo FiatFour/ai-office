@@ -37,4 +37,33 @@ A model run needs `api.anthropic.com`. The repo tests run with the dependencies 
 - The cage home (`--home`) persists across runs and tasks, because the login lives there. Files an agent leaves in it, such as memory, settings or a shell history, are readable by the next task. A fresh home per task would need a copy of the login, which this harness does not read or copy. The operator should clear everything but the login between tasks.
 - A copy of the project nested deeper than `node_modules/<name>` and `node_modules/.pnpm/<name>@*` is not scanned.
 - The login token in the cage home can reach `api.anthropic.com`. The model API is the one open channel, and it carries the server-side web tools described above.
-- The factory arm learns removed paths from the host API through `gh`, which the operator wires when the live arm is seeded.
+
+## The factory arm
+
+The factory arm runs the P1 pipeline for real on the private scratch repo `FiatFour/agent-works-scratch` and grades the PR head the crew leaves. HQ never merges. The cage is the same `BenchCage` as the baseline's: `api.anthropic.com` only, dependencies pre-installed, web tools disallowed, the same sealed ticket.
+
+How the base reaches the host. `seedBase` exports the sealed cage tree (one commit, hidden tests removed, upstream links removed from `package.json`), deletes `.github`, makes a new one-commit repository and pushes it as `bench-base/t-<8 hex of the ticket id>`. The branch has no parent, so no fix commit, no history and no hidden test is in the scratch repo, and a check after the push reads the branch back. `.github` goes because a push to a branch that holds workflows starts Actions, which cost minutes on a private repo. The seed refuses to push if any path under `.github` is left.
+
+What stays visible on the host: the base tree itself (README, CHANGELOG, `package.json` name and the source can name the upstream project, as in the cage), the ticket text with links replaced, the PR title `bench/t-<hash>: <issue title>`, the account FiatFour, and every branch of the scratch repo from other runs (`main`, the P0 to P1 spike branches, `bench-base/*` and `aw/bench/*` while a run is in flight or after `--keep-scratch`). The repo is private. The PR title and branch names are hashed, so they carry no task id or issue number.
+
+What the harness writes on the host. Seeding force-pushes and deletes only `bench-base/t-<hash>`. Cleanup closes PRs headed by `aw/bench/t-<hash>` and deletes that branch through a sender that refuses any other write, a merge included. Stale PRs and branches from a crashed run are cleared before the next seed. After a run the PR is closed and both branches are deleted, when the arm returns, not when grading ends. The graded bytes are the ones the arm already read from the PR head, so nothing changes in the verdict. `--keep-scratch` leaves them for inspection. Every API call goes to `<out>.api.jsonl`.
+
+| Channel | Closure | Test |
+| --- | --- | --- |
+| Fix commit or hidden test in the scratch repo | One-commit orphan seed from the sealed tree, read back after the push | `factory.test.ts` on a local bare repo, and one real push and delete on the scratch repo |
+| Actions on a private repo | `.github` removed from the seed and refused if present, no workflow added by this harness | `factory.test.ts` |
+| Writes outside the bench namespace | Seed and cleanup refs match `bench-base/t-<hash>` and `aw/bench/t-<hash>`, repo name must end in `-scratch` | `factory.test.ts`, `cli.test.ts` |
+| A run that crashed before cleanup | Leftover PR and branches cleared before the next seed | `factory.test.ts` |
+| Retry spend after a failed session | The first failed session ends the row as `error`, no later session starts | `factory.test.ts` |
+
+Limits of the factory arm:
+
+- One GitHub account. GitHub refuses an approval or a request for changes on a PR the same account opened, so the reviewer's verdict is posted as a COMMENT with its intended verdict in a marker. HQ never reaches `ready_to_merge`. The arm stops when the reviewer has reviewed the current head and asked for no change (`review_settled`), and records `head reviewed with no change requested`. That is the reviewer's intent, not a GitHub approval, and the box would wait in `qc` on a real host. With a second account the same arm stops at `ready_to_merge` (parked gate in `gates.md`).
+- Author and reviewer both run on Claude, and by default both cages mount the one cage home that holds the login (`--home`, worker `baseline`). A reviewer can read what the author left in that home. `--no-session-persistence` keeps session transcripts out of it, other files are not checked. `--review-home-worker <name>` mounts a second home for the reviewer, which needs a second interactive login by the operator.
+- The same home is shared with the baseline arm, which already ran there. What a baseline session left in that home is readable by the factory cages. This is the existing "home persists" limit and it now also crosses arms.
+- The crew pushes through the host's REST API. A path with a dot segment (`.eslintrc`, `.github`), a binary file or a tree too large to list is refused or dropped, so a fix that needs one is graded as a failure.
+- A round that fails is not retried. A reviewer that still asks for changes after three rounds ends the row as `error`, not `fail`.
+- The reviewer's cage holds the base repo, not the PR. It reads the PR files from its prompt, as P1-2 designed it.
+- Timing includes `gh` polling (10 s HQ poll, 15 s review check) and the seed and cleanup pushes. A factory row costs more wall time than a baseline row by design, and the task timeout is the same unless `--timeout-ms` is given.
+- Reviewer and author tokens are summed into one `tokens` cell. `quotaWindows` and `humanMinutes` stay null until the operator annotates them.
+- Removed paths come from the PR file listing of the host API through `gh`.

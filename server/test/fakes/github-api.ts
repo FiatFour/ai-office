@@ -183,6 +183,12 @@ export class FakeGithub {
       this.moveRef(name, next);
       return ok({ ref: `refs/heads/${name}`, object: { sha: next } });
     }
+    m = method === 'DELETE' ? /^\/git\/refs\/heads\/(.+)$/.exec(rest) : null;
+    if (m) {
+      const name = m[1] ?? '';
+      if (!this.refs.delete(name)) return fail(422, 'Reference does not exist');
+      return { status: 204, body: null };
+    }
     m = method === 'GET' ? /^\/git\/commits\/([0-9a-f]+)$/.exec(rest) : null;
     if (m) {
       const files = this.trees.get(m[1] ?? '');
@@ -259,6 +265,11 @@ export class FakeGithub {
       if (pr === undefined) return fail(404, 'Not Found');
       const sub = m[2] ?? '';
       if (sub === '' && method === 'GET') return ok(this.prObject(pr));
+      if (sub === '' && method === 'PATCH') {
+        if (input.state === 'closed') pr.state = 'closed';
+        pr.updated = this.tick();
+        return ok(this.prObject(pr));
+      }
       if (sub === '/merge') {
         this.mergeByHuman(pr.number);
         return ok({ merged: true });

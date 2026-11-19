@@ -5,17 +5,20 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { cageShells } from '../server/agents/cage-shell.ts';
+import { claudeCode } from '../server/agents/claude-code.ts';
 import { imageFor } from '../server/config.ts';
+import { cliTransport, fileLog } from '../server/githost/host.ts';
 import { pickEngine } from '../server/sandbox/engine.ts';
 import type { Arm } from './arms.ts';
 import { type Script, scriptedArm } from './arms.ts';
-import { baselineArm, ticketOf } from './arms-live.ts';
+import { baselineArm, factoryArm, ticketOf } from './arms-live.ts';
 import { BenchCage } from './cage.ts';
 import { grade, revertSanity, totalPassed } from './grade.ts';
 import { readMergeState } from './merge-state.ts';
 import { type Flag, parseTask, type Row, type Task, type TaskA, TaskRefused } from './model.ts';
 import { readRows } from './report.ts';
 import { dockerRunner, localRunner, type Runner } from './runner.ts';
+import { AUTHOR, REVIEWER, SCRATCH_REPO, scratchEnv, scratchRepoProblem } from './scratch.ts';
 import { fixChange, mirrorPath, type Prepared, prepareTask } from './workspace.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -155,24 +158,39 @@ export const appendRow = (file: string, row: Row): void => {
 
 const today = (): string => new Date().toISOString().slice(0, 10);
 
-interface BaselineValues {
+interface LiveValues {
   readonly cache: string;
   readonly out: string;
   readonly runs: string;
   readonly home?: string | undefined;
   readonly bin?: string | undefined;
   readonly model?: string | undefined;
+  readonly 'scratch-repo'?: string | undefined;
+  readonly 'scratch-remote'?: string | undefined;
+  readonly 'review-home-worker'?: string | undefined;
+  readonly 'timeout-ms'?: string | undefined;
+  readonly 'keep-scratch'?: boolean | undefined;
 }
 
-const runBaseline = async (
+interface Wiring {
+  readonly repoUrl: (repo: string) => string;
+  readonly runner: Runner;
+  readonly scratch: string;
+}
+
+export const LOGIN_WORKER = 'baseline';
+
+const runLive = async (
   task: TaskA,
-  values: BaselineValues,
-  wiring: { repoUrl: (repo: string) => string; runner: Runner; scratch: string },
+  values: LiveValues,
+  wiring: Wiring,
+  armFor: (prepared: Prepared, driver: BenchCage) => Arm,
+  homeWorker: (worker: string) => string = () => LOGIN_WORKER,
 ): Promise<number> => {
   if (!task.confirmed) throw new TaskRefused(`task ${task.id} is not confirmed by the operator: no model run`);
   if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1') throw new TaskRefused(NEEDS_LOGIN);
   if (values.home === undefined)
-    throw new TaskRefused('--arm baseline needs --home <dir>, the cage home that holds the login');
+    throw new TaskRefused('a live arm needs --home <dir>, the cage home that holds the login');
   const engine = await pickEngine(undefined, process.env);
   if (engine === null) throw new TaskRefused('no container engine is available for the cage');
   const prepared = await prepareTask(task, { cache: values.cache, ...wiring });
@@ -184,15 +202,14 @@ const runBaseline = async (
     image: imageFor(process.env),
     project: 'agent-works-bench',
     installed: prepared.installed,
+    homeWorker,
   });
   try {
-    const shells = cageShells(async () => driver, prepared.source);
-    const arm = baselineArm(() => shells('baseline', ticketOf(task).id), {
-      ...(values.bin === undefined ? {} : { bin: values.bin }),
-      ...(values.model === undefined ? {} : { model: values.model }),
-    });
+    const arm = armFor(prepared, driver);
+    const timeout = values['timeout-ms'];
+    const graded = timeout === undefined ? task : { ...task, timeoutMs: Number(timeout) };
     for (let run = 1; run <= Number(values.runs); run += 1) {
-      const row = await runTask(task, run, prepared, { arm, runner: wiring.runner, scratch: wiring.scratch });
+      const row = await runTask(graded, run, prepared, { arm, runner: wiring.runner, scratch: wiring.scratch });
       appendRow(values.out, row);
       console.log(JSON.stringify(row));
     }
@@ -200,6 +217,48 @@ const runBaseline = async (
   } finally {
     await driver.removeAll();
   }
+};
+
+const agentOptions = (values: LiveValues) => ({
+  ...(values.bin === undefined ? {} : { bin: values.bin }),
+  ...(values.model === undefined ? {} : { model: values.model }),
+});
+
+const runBaseline = (task: TaskA, values: LiveValues, wiring: Wiring): Promise<number> =>
+  runLive(task, values, wiring, (prepared, driver) => {
+    const shells = cageShells(async () => driver, prepared.source);
+    return baselineArm(() => shells('baseline', ticketOf(task).id), agentOptions(values));
+  });
+
+const runFactory = (task: TaskA, values: LiveValues, wiring: Wiring): Promise<number> => {
+  const repo = values['scratch-repo'] ?? SCRATCH_REPO;
+  const problem = scratchRepoProblem(repo);
+  if (problem !== null) throw new TaskRefused(problem);
+  const reviewHome = values['review-home-worker'] ?? LOGIN_WORKER;
+  return runLive(
+    task,
+    values,
+    wiring,
+    (prepared, driver) => {
+      const runtime = claudeCode({
+        shell: cageShells(async () => driver, prepared.source),
+        ...agentOptions(values),
+      });
+      mkdirSync(dirname(values.out), { recursive: true });
+      return factoryArm(
+        scratchEnv({
+          repo,
+          remote: values['scratch-remote'] ?? `git@github.com:${repo}.git`,
+          send: cliTransport('gh'),
+          log: fileLog(`${values.out}.api.jsonl`),
+          workers: () => ({ [AUTHOR]: runtime, [REVIEWER]: runtime }),
+          workRoot: join(values.cache, 'scratch'),
+          keep: values['keep-scratch'] === true,
+        }),
+      );
+    },
+    (worker) => (worker === REVIEWER ? reviewHome : LOGIN_WORKER),
+  );
 };
 
 const main = async (argv: string[]): Promise<number> => {
@@ -222,6 +281,11 @@ const main = async (argv: string[]): Promise<number> => {
       home: { type: 'string' },
       bin: { type: 'string' },
       model: { type: 'string' },
+      'scratch-repo': { type: 'string' },
+      'scratch-remote': { type: 'string' },
+      'review-home-worker': { type: 'string' },
+      'timeout-ms': { type: 'string' },
+      'keep-scratch': { type: 'boolean', default: false },
     },
     allowPositionals: true,
   });
@@ -295,10 +359,7 @@ const main = async (argv: string[]): Promise<number> => {
   if (command === 'run') {
     const task = pick(values.task);
     if (task.set !== 'A') throw new TaskRefused(`task ${task.id} is a Set B task: use merge-state`);
-    if (values.arm === 'factory')
-      throw new TaskRefused(
-        'the live factory arm needs a scratch host repo seeded with the task base, an operator step, so it is not wired in the command line',
-      );
+    if (values.arm === 'factory') return runFactory(task, values, { repoUrl, runner, scratch });
     if (values.arm === 'baseline') return runBaseline(task, values, { repoUrl, runner, scratch });
     if (values.arm !== 'scripted') throw new TaskRefused(`unknown arm ${values.arm}`);
     if (values.scripts === undefined) throw new TaskRefused('--arm scripted needs --scripts <file.json>');

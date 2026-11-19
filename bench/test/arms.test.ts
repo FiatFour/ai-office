@@ -172,6 +172,7 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')('factory arm', () =>
         repo: 'acme/app',
         base: 'main',
         home: tempDir('bench-hq'),
+        reviewer: 'vega',
         removed: async () => removed,
         mode: cagesMode({
           host,

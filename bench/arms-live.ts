@@ -4,12 +4,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { CageShell } from '../server/agents/claude-code.ts';
 import { claudeCode } from '../server/agents/claude-code.ts';
 import { AgentFailed, type Ticket, type Usage } from '../server/agents/runtime.ts';
-import type { GitHost } from '../server/githost/host.ts';
+import { allPages, type ChangeSnapshot, type GitHost, type Transport } from '../server/githost/host.ts';
 import { type RunningHq, startHq } from '../server/hq.ts';
-import type { ModeFactory } from '../server/modes/cages.ts';
-import { runBinary } from '../server/sandbox/engine.ts';
+import { type ModeFactory, REVIEW_MARK } from '../server/modes/cages.ts';
 import { type Arm, ArmFailed, type ArmRun } from './arms.ts';
 import type { TaskA, Tokens } from './model.ts';
+import type { Prepared } from './workspace.ts';
 
 const LINK = /\b(?:https?:\/\/)?(?:[\w-]+\.)*(?:github\.com|githubusercontent\.com|npmjs\.com|npmjs\.org)\S*/gi;
 
@@ -96,13 +96,15 @@ export interface FactoryHandle {
   readonly repo: string;
   readonly base: string;
   readonly home: string;
+  readonly reviewer: string;
+  readonly failure?: () => string | null;
   readonly removed: (change: { readonly number: number; readonly headSha: string }) => Promise<string[]>;
   readonly close?: () => Promise<void>;
 }
 
 export interface FactoryEnv {
-  open(task: TaskA, ticket: Ticket): Promise<FactoryHandle>;
-  readonly settleMs?: number;
+  open(task: TaskA, ticket: Ticket, prepared: Prepared): Promise<FactoryHandle>;
+  readonly reviewPollMs?: number;
 }
 
 const STOPS = new Set(['ready_to_merge', 'round_limit', 'job_failed']);
@@ -115,30 +117,37 @@ export const removedPaths = (pullFiles: readonly unknown[]): string[] =>
     return [];
   });
 
-export const ghRemovedPaths = async (repo: string, number: number): Promise<string[]> => {
-  const ran = await runBinary('gh', ['api', '--paginate', '--slurp', `repos/${repo}/pulls/${number}/files`], {
-    timeoutMs: 60_000,
-  });
-  if (ran.code !== 0)
-    throw new ArmFailed(`gh could not list the files of ${repo}#${number}: ${ran.err.trim().slice(-200)}`);
-  return removedPaths((JSON.parse(ran.out) as unknown[][]).flat());
+export const removedVia = async (send: Transport, repo: string, number: number): Promise<string[]> => {
+  const get = async (path: string) => {
+    const response = await send({ method: 'GET', path });
+    if (response.status >= 400)
+      throw new ArmFailed(`the host could not list the files of ${repo}#${number}: status ${response.status}`);
+    return response.body;
+  };
+  return removedPaths(await allPages(get, `/repos/${repo}/pulls/${number}/files`));
 };
+
+export const reviewSettled = (snapshot: ChangeSnapshot, reviewer: string): boolean =>
+  snapshot.reviews.some((r) => {
+    const mark = REVIEW_MARK.exec(r.body);
+    return r.commitId === snapshot.change.headSha && mark?.[1] === reviewer && mark[2] !== 'changes';
+  });
 
 export const factoryArm = (env: FactoryEnv): Arm => ({
   name: 'factory',
   scripted: false,
-  async run(task, _prepared, signal): Promise<ArmRun> {
+  async run(task, prepared, signal): Promise<ArmRun> {
     const ticket = ticketOf(task);
-    const handle = await env.open(task, ticket);
+    const handle = await env.open(task, ticket, prepared);
     let hq: RunningHq | undefined;
     try {
       hq = await startHq({ home: handle.home, port: 0, makeDriver: async () => null, mode: handle.mode });
       const posted = await fetch(`${hq.url}/api/tickets`, { method: 'POST', body: JSON.stringify({ id: ticket.id }) });
       if (!posted.ok) throw new ArmFailed(`HQ refused the ticket: ${await posted.text()}`);
-      const stop = await until(hq, signal);
-      if (stop.kind !== 'ready_to_merge')
-        throw new ArmFailed(stop.kind === 'job_failed' ? `job failed: ${stop.error}` : `stopped at ${stop.kind}`);
       const branch = `aw/${ticket.id}`;
+      const stop = await until(hq, handle, branch, env.reviewPollMs ?? 15_000, signal);
+      if (stop.kind === 'job_failed') throw new ArmFailed(`job failed: ${stop.error}`);
+      if (stop.kind === 'round_limit') throw new ArmFailed('the reviewer still asked for changes at the round limit');
       const change = await handle.host.findChange(handle.repo, branch);
       if (change === null) throw new ArmFailed(`no PR on ${branch}`);
       const files = await handle.host.files(handle.repo, change.number, change.headSha);
@@ -151,7 +160,7 @@ export const factoryArm = (env: FactoryEnv): Arm => ({
         webRequests: webRequestsOf(view?.usage[ticket.id] ?? []),
         quotaWindows: null,
         humanMinutes: null,
-        note: `PR #${change.number} at ready_to_merge`,
+        note: `PR #${change.number} ${stop.kind === 'ready_to_merge' ? 'at ready_to_merge' : 'head reviewed with no change requested'}`,
       };
     } finally {
       await hq?.close();
@@ -160,12 +169,34 @@ export const factoryArm = (env: FactoryEnv): Arm => ({
   },
 });
 
-const until = async (hq: RunningHq, signal: AbortSignal) => {
+const reviewSettledOnHost = async (handle: FactoryHandle, branch: string): Promise<boolean> => {
+  try {
+    const change = await handle.host.findChange(handle.repo, branch);
+    return change !== null && reviewSettled(await handle.host.snapshot(handle.repo, change.number), handle.reviewer);
+  } catch {
+    return false;
+  }
+};
+
+const until = async (
+  hq: RunningHq,
+  handle: FactoryHandle,
+  branch: string,
+  reviewPollMs: number,
+  signal: AbortSignal,
+): Promise<{ kind: string; error?: string }> => {
   const started = performance.now();
+  let lastReviewCheck = Number.NEGATIVE_INFINITY;
   for (;;) {
     signal.throwIfAborted();
+    const failed = handle.failure?.() ?? null;
+    if (failed !== null) throw new ArmFailed(`a session failed, no retry: ${failed}`);
     const stop = hq.snapshot().actions.find((a) => STOPS.has(a.kind));
     if (stop !== undefined) return stop as { kind: string; error?: string };
+    if (performance.now() - lastReviewCheck >= reviewPollMs) {
+      lastReviewCheck = performance.now();
+      if (await reviewSettledOnHost(handle, branch)) return { kind: 'review_settled' };
+    }
     if (performance.now() - started > 24 * 3_600_000) throw new AgentFailed('no stop after a day');
     await sleep(25, undefined, { signal });
   }

@@ -57,6 +57,26 @@ jobs:
           pnpm test:bench-live
           if ($LASTEXITCODE -ne 0) { throw "the benchmark live tests failed" }
 
+  bench-mutants:
+    name: bench mutants (the whole suite, every mutant caught)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Break each guard in turn and require a test to fail
+        run: |
+          $env:MUTANT_OUT = Join-Path $env:RUNNER_TEMP 'mutants.txt'
+          node bench/test/mutants.mjs
+          $status = $LASTEXITCODE
+          Get-Content $env:MUTANT_OUT | Select-Object -Last 1 | Add-Content $env:GITHUB_STEP_SUMMARY
+          if ($status -ne 0) { throw "a bench mutant survived or could not be applied" }
+
   perf:
     name: perf (cold and warm install, lint, typecheck, light test suite)
     runs-on: ubuntu-latest

@@ -110,10 +110,8 @@ const MUTANTS = [
   {
     name: 'pr-file-escapes-workspace',
     claim: 'a PR file that leaves the workspace is refused',
-    edits: [
-      ['bench/workspace.ts', 'if (full !== resolve(root) && !full.startsWith(resolve(root) + sep))', 'if (false)'],
-    ],
-    tests: [SETUP],
+    edits: [['bench/protected.ts', "rel === '..' || rel.startsWith('../') || ", '']],
+    tests: [CLOSURE],
   },
   {
     name: 'no-hidden-commit-accepted',
@@ -328,33 +326,21 @@ const MUTANTS = [
     tests: [CLOSURE],
   },
   {
-    name: 'graded-spec-editable',
-    claim: 'a PR cannot edit or delete a spec file the grader runs',
-    edits: [['bench/grade.ts', 'if (graded.has(normal(path))) return', 'if (false) return']],
-    tests: [CLOSURE],
-  },
-  {
     name: 'symlink-write-allowed',
     claim: 'a PR path through a symbolic link in the tree is refused',
-    edits: [['bench/grade.ts', 'if (throughLink(work, edit.path))', 'if (false)']],
+    edits: [['bench/grade.ts', 'if (throughLink(work, linkCheck))', 'if (false)']],
     tests: [CLOSURE],
   },
   {
     name: 'symlink-delete-allowed',
     claim: 'a PR deletion through a symbolic link in the tree is refused',
-    edits: [['bench/grade.ts', 'if (throughLink(work, dirname(rel)))', 'if (false)']],
+    edits: [['bench/grade.ts', 'act(rel, dirname(rel), ', "act(rel, '.', "]],
     tests: [CLOSURE],
   },
   {
     name: 'deletions-not-applied',
     claim: 'a PR deletion or the old side of a rename is applied before grading',
-    edits: [
-      [
-        'bench/grade.ts',
-        'for (const rel of change.deleted) {\n    let target',
-        'for (const rel of [] as string[]) {\n    let target',
-      ],
-    ],
+    edits: [['bench/grade.ts', 'for (const rel of change.deleted) {', 'for (const rel of [] as string[]) {']],
     tests: [CLOSURE],
   },
   {
@@ -536,8 +522,8 @@ const MUTANTS = [
     edits: [
       [
         'bench/grade.ts',
-        'const { kept, dropped } = dropTestSide(task, change, side);',
-        "const { kept, dropped } = dropTestSide(task, change, side);\n  if (dropped.length > 0) return { outcome: 'fail', note: 'the PR is refused', specs: null, suspect: [], dropped: [] };",
+        'const { kept, dropped } = dropTestSide(change, side);',
+        "const { kept, dropped } = dropTestSide(change, side);\n  if (dropped.length > 0) return { outcome: 'fail', note: 'the PR is refused', specs: null, suspect: [], dropped: [] };",
       ],
     ],
     tests: [CLOSURE],
@@ -563,7 +549,7 @@ const MUTANTS = [
   {
     name: 'shadow-stem-allowed',
     claim: 'a PR file with the stem of a test-side file, such as cases.spec.js over cases.spec.ts, is refused',
-    edits: [['bench/testside.ts', 'side.files.has(rel) || side.stems.has(stemOf(rel))', 'side.files.has(rel)']],
+    edits: [['bench/testside.ts', 'side.files.has(key) || side.stems.has(stemOf(key))', 'side.files.has(key)']],
     tests: [CLOSURE],
   },
   {
@@ -596,7 +582,7 @@ const MUTANTS = [
     edits: [
       [
         'bench/testside.ts',
-        'new Set([...readTree(hidden).map(normal), ...treeRels.filter(isTestSide)])',
+        'new Set([...readTree(hidden).map(canonical), ...treeRels.filter(isTestSide)])',
         'new Set(treeRels.filter(isTestSide))',
       ],
     ],
@@ -700,6 +686,66 @@ const MUTANTS = [
     edits: [['bench/report.ts', "typeof parsed.scripted !== 'boolean' ||", 'false ||']],
     tests: [REPORT],
   },
+  {
+    name: 'trailing-slash-kept',
+    claim: 'one canonical path drops trailing slashes, so a path is matched and acted on in the same form',
+    edits: [['bench/protected.ts', ".replace(/\\/+$/, '')", '']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'path-case-matched-exactly',
+    claim: 'the test-side match folds case, so a case variant of a test-side path is dropped, not written',
+    edits: [['bench/protected.ts', ".normalize('NFC').toLowerCase()", '']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'change-not-canonical-at-boundary',
+    claim: 'the PR change is canonicalised once before it is matched, refused or applied',
+    edits: [['bench/grade.ts', 'change = canonicalChange(asked);', 'change = asked;']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'workspace-path-uncanonical',
+    claim: 'insideOf resolves the canonical path, the form the matcher sees',
+    edits: [['bench/workspace.ts', 'const clean = canonical(rel);', 'const clean = rel;']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'git-dir-case-allowed',
+    claim: 'a path inside .git is protected whatever its case',
+    edits: [['bench/protected.ts', '  /(^|\\/)\\.git(\\/|$)/i,\n', '']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'directory-path-applied',
+    claim: 'a PR path that names a directory is refused with a note, not thrown from the grader',
+    edits: [['bench/grade.ts', 'lstatSync(target, { throwIfNoEntry: false })?.isDirectory() === true', 'false']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'apply-error-aborts-grade',
+    claim: 'a filesystem error applying a PR path grades the PR fail instead of aborting the run',
+    edits: [
+      [
+        'bench/grade.ts',
+        'return `${rel} cannot be applied: ${error instanceof Error ? error.message : String(error)}`;',
+        'throw error;',
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'base-text-throws-on-directory',
+    claim: 'reading the base text of a PR path that is a directory or under a file does not abort grading',
+    edits: [
+      [
+        'bench/grade.ts',
+        "  } catch {\n    return '';\n  }\n};\n\nconst throughLink",
+        '  } catch (error) {\n    throw error;\n  }\n};\n\nconst throughLink',
+      ],
+    ],
+    tests: [CLOSURE],
+  },
 ];
 
 /** @param {string[]} tests */
@@ -712,28 +758,36 @@ const vitest = (tests) =>
   });
 
 const only = process.argv.slice(2);
+const selected = MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name));
+for (const name of only)
+  if (!MUTANTS.some((mutant) => mutant.name === name)) throw new Error(`no mutant is named ${name}`);
 const lines = [];
-let bad = 0;
-for (const mutant of MUTANTS) {
-  if (only.length > 0 && !only.includes(mutant.name)) continue;
+let caught = 0;
+for (const mutant of selected) {
   const originals = new Map();
+  let line;
   try {
     for (const [file, find, replace] of mutant.edits) {
       const path = `${ROOT}/${file}`;
       const current = readFileSync(path, 'utf8');
       if (!originals.has(path)) originals.set(path, current);
-      if (!current.includes(find)) throw new Error(`${mutant.name}: pattern not found in ${file}`);
+      if (!current.includes(find)) throw new Error(`pattern not found in ${file}: ${find}`);
       writeFileSync(path, current.replace(find, replace));
     }
-    const caught = vitest(mutant.tests).status !== 0;
-    if (!caught) bad += 1;
-    lines.push(`${caught ? 'OK  ' : 'BAD '} ${mutant.name}: ${caught ? 'caught' : 'survived'}. Claim: ${mutant.claim}`);
-    console.log(lines.at(-1));
+    const survived = vitest(mutant.tests).status === 0;
+    if (!survived) caught += 1;
+    line = `${survived ? 'BAD ' : 'OK  '} ${mutant.name}: ${survived ? 'survived' : 'caught'}. Claim: ${mutant.claim}`;
+  } catch (error) {
+    line = `ERR  ${mutant.name}: ${error instanceof Error ? error.message : String(error)}`;
   } finally {
     for (const [path, text] of originals) writeFileSync(path, text);
   }
+  lines.push(line);
+  console.log(line);
 }
+lines.push(`caught ${caught}/${selected.length}`);
+console.log(lines.at(-1));
 const out = process.env.MUTANT_OUT ?? join(mkdtempSync(join(tmpdir(), 'bench-mutants-')), 'mutants.txt');
 writeFileSync(out, `${lines.join('\n')}\n`);
 console.log(`wrote ${out}`);
-process.exit(bad === 0 ? 0 : 1);
+process.exit(caught === selected.length ? 0 : 1);

@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import type { FileEdit } from '../server/githost/host.ts';
 import { type RunResult, runBinary } from '../server/sandbox/engine.ts';
 import { type Change, type TaskA, TaskRefused } from './model.ts';
-import { isTestSide, normal, protectedReason } from './protected.ts';
+import { canonical, isTestSide, protectedReason } from './protected.ts';
 import type { Runner } from './runner.ts';
 
 const INSTALL_TIMEOUT_MS = 900_000;
@@ -37,10 +37,9 @@ const must = async (cwd: string, args: readonly string[]): Promise<string> => {
 };
 
 export const insideOf = (root: string, rel: string): string => {
-  const full = resolve(root, rel);
-  if (full !== resolve(root) && !full.startsWith(resolve(root) + sep))
-    throw new TaskRefused(`${rel} leaves the workspace`);
-  if (rel.split(/[\\/]/).includes('.git')) throw new TaskRefused(`${rel} is inside .git`);
+  const clean = canonical(rel);
+  const full = resolve(root, clean);
+  if (clean.split('/').includes('.git')) throw new TaskRefused(`${rel} is inside .git`);
   return full;
 };
 
@@ -117,10 +116,12 @@ const contentProblems = (
   for (const rel of readTree(copy)) {
     const mine = digest(join(copy, rel));
     const planted = hiddenDigests.get(mine);
-    if (planted !== undefined) problems.push(`${where}/${normal(rel)} is a copy of the hidden test ${planted}`);
+    if (planted !== undefined) problems.push(`${where}/${canonical(rel)} is a copy of the hidden test ${planted}`);
     const own = join(installed, rel);
     if (sameVersion && SOURCE_FILE.test(rel) && existsSync(own) && digest(own) !== mine)
-      problems.push(`${where}/${normal(rel)} differs from the same file in the base tree, so the copy is not the base`);
+      problems.push(
+        `${where}/${canonical(rel)} differs from the same file in the base tree, so the copy is not the base`,
+      );
   }
   return problems;
 };

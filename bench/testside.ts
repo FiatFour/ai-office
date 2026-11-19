@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
-import { isTestSide, normal, RUNNER_CONFIG } from './protected.ts';
+import { canonical, isTestSide, keyOf, RUNNER_CONFIG } from './protected.ts';
 import { readTree } from './workspace.ts';
 
 const CODE = /\.[cm]?[jt]sx?$/i;
@@ -34,9 +34,9 @@ const candidates = (from: string, specifier: string): string[] => {
 };
 
 export const testSideOf = (tree: string, hidden: string): TestSide => {
-  const treeRels = readTree(tree).map(normal);
+  const treeRels = readTree(tree).map(canonical);
   const present = new Set(treeRels);
-  const files = new Set([...readTree(hidden).map(normal), ...treeRels.filter(isTestSide)]);
+  const files = new Set([...readTree(hidden).map(canonical), ...treeRels.filter(isTestSide)]);
   const queue = treeRels.filter((rel) => RUNNER_CONFIG.test(rel));
   const seen = new Set<string>();
   for (let rel = queue.shift(); rel !== undefined; rel = queue.shift()) {
@@ -48,12 +48,12 @@ export const testSideOf = (tree: string, hidden: string): TestSide => {
     if (RUNNER_CONFIG.test(rel)) specifiers.push(...[...text.matchAll(LITERAL)].map((m) => m[1] ?? ''));
     for (const specifier of specifiers) queue.push(...candidates(rel, specifier).filter((c) => present.has(c)));
   }
-  return { files, stems: new Set([...files].map(stemOf)) };
+  return { files: new Set([...files].map(keyOf)), stems: new Set([...files].map((f) => keyOf(stemOf(f)))) };
 };
 
 export const refusesTestSide = (side: TestSide, path: string): boolean => {
-  const rel = normal(path);
-  return side.files.has(rel) || side.stems.has(stemOf(rel));
+  const key = keyOf(path);
+  return side.files.has(key) || side.stems.has(stemOf(key));
 };
 
 export const isNewTestFile = (side: TestSide, path: string): boolean =>

@@ -1,17 +1,18 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { tempDir } from '../../server/test/helpers.ts';
 import { type Script, scriptedArm } from '../arms.ts';
 import { grade, NO_CHANGE, parseSpecs } from '../grade.ts';
-import type { Change } from '../model.ts';
-import { normal } from '../protected.ts';
+import { type Change, TaskRefused } from '../model.ts';
+import { canonical } from '../protected.ts';
 import { runTask } from '../run.ts';
 import { localRunner, type Runner } from '../runner.ts';
 import { suspectReasons } from '../testside.ts';
-import { installedProblems, neutralisePackage } from '../workspace.ts';
+import { insideOf, installedProblems, neutralisePackage } from '../workspace.ts';
 import { FIXED, GUARDED, prepareFixture } from './fixture.ts';
 
 const POSIX_ONLY = process.platform === 'win32';
@@ -375,7 +376,7 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
         scratch,
       );
       expect(g.outcome).toBe('pass');
-      expect(g.dropped).toEqual([normal(path)]);
+      expect(g.dropped).toEqual([canonical(path)]);
     }
     const gone = await grade(
       fx.task,
@@ -470,6 +471,107 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
       expect(g.outcome).toBe('pass');
       expect(g.dropped).toEqual([path]);
     }
+  });
+
+  const FORMS = (rel: string): string[] => {
+    const [dir = '', name = rel] = [rel.slice(0, rel.lastIndexOf('/')), rel.slice(rel.lastIndexOf('/') + 1)];
+    return [
+      `${rel}/`,
+      `${rel}//`,
+      `${rel}/.`,
+      `./${rel}`,
+      `${dir}//${name}`,
+      `${dir}/./${name}`,
+      `${dir}/x/../${name}`,
+      rel.replace(/\//g, '\\'),
+      rel.toUpperCase(),
+    ];
+  };
+
+  it.each(['src/cases.spec.ts', 'src/oddname.js'])(
+    'acts on the same path it matched: every spelling of %s is dropped and the base file stays',
+    async (rel) => {
+      const { fx, prepared, scratch } = await prepareFixture();
+      plant(prepared.installed, { 'src/cases.spec.ts': 'export const cases = [1];\n' });
+      mkdirSync(join(prepared.hidden, 'src'), { recursive: true });
+      writeFileSync(join(prepared.hidden, 'src/oddname.js'), 'export {};\n');
+      plant(prepared.installed, { 'src/oddname.js': 'export {};\n' });
+      const before = readFileSync(join(prepared.installed, rel), 'utf8');
+      const seen: string[] = [];
+      const spy: Runner = {
+        async run(opts) {
+          const file = join(opts.cwd, rel);
+          seen.push(existsSync(file) ? readFileSync(file, 'utf8') : 'missing');
+          return localRunner.run(opts);
+        },
+      };
+      for (const form of FORMS(rel)) {
+        for (const change of [
+          { files: [fixed, { path: form, content: '// gutted\n' }], deleted: [] },
+          { files: [fixed], deleted: [form] },
+        ]) {
+          const g = await grade(fx.task, prepared, change, spy, scratch);
+          expect(g, form).toMatchObject({ outcome: 'pass', dropped: [canonical(form)] });
+        }
+      }
+      expect(new Set(seen)).toEqual(new Set([before]));
+      expect(seen).toHaveLength(FORMS(rel).length * 2);
+    },
+  );
+
+  it.each([
+    ['src'],
+    ['src/'],
+    ['test'],
+    ['test/fixture'],
+    ['.'],
+    ['./'],
+    [''],
+    ['src/..'],
+    ['../outside.js'],
+    ['/etc/passwd'],
+    ['C:/x.js'],
+    ['.git/config'],
+    ['.GIT/config'],
+    ['package.json/'],
+    ['node_modules/./x/'],
+  ])('grades fail with a note, and does not throw, for a PR that deletes %j', async (path) => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    mkdirSync(join(prepared.installed, 'test/fixture'), { recursive: true });
+    writeFileSync(join(prepared.installed, 'test/fixture/a.json'), '{}\n');
+    const g = await grade(fx.task, prepared, { files: [fixed], deleted: [path] }, localRunner, scratch);
+    expect(g.outcome).toBe('fail');
+    expect(g.note).toMatch(/refused|nothing to grade/);
+    if (path === 'src' || path === 'src/') expect(g.note).toContain('src is a directory');
+  });
+
+  it('grades fail with a note for a PR that writes over a directory or under a file', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    for (const path of ['src', 'src/', 'src/slug.js/inner.js']) {
+      const g = await grade(
+        fx.task,
+        prepared,
+        { files: [{ path, content: 'x\n' }], deleted: [] },
+        localRunner,
+        scratch,
+      );
+      expect(g, path).toMatchObject({ outcome: 'fail', note: expect.stringMatching(/refused/) });
+    }
+    const inner = await grade(
+      fx.task,
+      prepared,
+      { files: [{ path: 'src/slug.js/inner.js', content: 'x\n' }], deleted: [] },
+      localRunner,
+      scratch,
+    );
+    expect(inner.note).toContain('cannot be applied');
+  });
+
+  it('resolves a workspace path the way it canonicalises it', () => {
+    const root = join(tmpdir(), 'aw-inside');
+    expect(insideOf(root, 'a/b/')).toBe(join(root, 'a/b'));
+    expect(insideOf(root, 'a\\b/./c')).toBe(join(root, 'a/b/c'));
+    for (const bad of ['.', './', 'a/..', '../x', '/x']) expect(() => insideOf(root, bad), bad).toThrow(TaskRefused);
   });
 
   it('drops a PR that empties a spec the hidden spec imports, the path-to-regexp-433 scenario', async () => {

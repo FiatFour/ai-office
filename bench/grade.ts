@@ -1,9 +1,9 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Change, TaskA } from './model.ts';
 import { TaskRefused } from './model.ts';
-import { isTestSide, normal, protectedReason } from './protected.ts';
+import { canonical, isTestSide, protectedReason } from './protected.ts';
 import type { Runner } from './runner.ts';
 import { isNewTestFile, refusesTestSide, suspectReasons, type TestSide, testSideOf } from './testside.ts';
 import { insideOf, type Prepared, readTree } from './workspace.ts';
@@ -98,12 +98,10 @@ const refusal = (change: Change): string | null => {
 };
 
 const dropTestSide = (
-  task: TaskA,
   change: Change,
   side: TestSide,
 ): { readonly kept: Change; readonly dropped: readonly string[] } => {
-  const graded = new Set([...task.specs, ...task.hiddenPaths].map(normal));
-  const isDropped = (path: string): boolean => graded.has(normal(path)) || refusesTestSide(side, path);
+  const isDropped = (path: string): boolean => refusesTestSide(side, path);
   const droppedFiles = change.files.filter((f) => isDropped(f.path)).map((f) => f.path);
   const droppedDeleted = change.deleted.filter(isDropped);
   return {
@@ -111,15 +109,18 @@ const dropTestSide = (
       files: change.files.filter((f) => !isDropped(f.path)),
       deleted: change.deleted.filter((p) => !isDropped(p)),
     },
-    dropped: [...new Set([...droppedFiles, ...droppedDeleted].map(normal))],
+    dropped: [...new Set([...droppedFiles, ...droppedDeleted])],
   };
 };
 
 export const totalPassed = (specs: readonly SpecCount[]): number => specs.reduce((n, s) => n + s.passed, 0);
 
 const baseText = (root: string, rel: string): string => {
-  const file = join(root, rel);
-  return existsSync(file) ? readFileSync(file, 'utf8') : '';
+  try {
+    return readFileSync(join(root, rel), 'utf8');
+  } catch {
+    return '';
+  }
 };
 
 const throughLink = (root: string, rel: string): boolean => {
@@ -134,29 +135,29 @@ const throughLink = (root: string, rel: string): boolean => {
 };
 
 const apply = (work: string, change: Change, skipped: ReadonlySet<string>): string | null => {
+  const act = (rel: string, linkCheck: string, step: (target: string) => void): string | null => {
+    try {
+      const target = insideOf(work, rel);
+      if (throughLink(work, linkCheck)) return `${rel} goes through a symbolic link`;
+      if (lstatSync(target, { throwIfNoEntry: false })?.isDirectory() === true) return `${rel} is a directory`;
+      step(target);
+      return null;
+    } catch (error) {
+      if (error instanceof TaskRefused) return error.message;
+      return `${rel} cannot be applied: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  };
   for (const edit of change.files) {
     if (skipped.has(edit.path)) continue;
-    let target: string;
-    try {
-      target = insideOf(work, edit.path);
-    } catch (error) {
-      if (error instanceof TaskRefused) return error.message;
-      throw error;
-    }
-    if (throughLink(work, edit.path)) return `${edit.path} goes through a symbolic link`;
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, edit.content);
+    const problem = act(edit.path, edit.path, (target) => {
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, edit.content);
+    });
+    if (problem !== null) return problem;
   }
   for (const rel of change.deleted) {
-    let target: string;
-    try {
-      target = insideOf(work, rel);
-    } catch (error) {
-      if (error instanceof TaskRefused) return error.message;
-      throw error;
-    }
-    if (throughLink(work, dirname(rel))) return `${rel} goes through a symbolic link`;
-    rmSync(target, { force: true });
+    const problem = act(rel, dirname(rel), (target) => rmSync(target, { force: true }));
+    if (problem !== null) return problem;
   }
   return null;
 };
@@ -225,19 +226,31 @@ const runGraded = async (
   }
 };
 
+const canonicalChange = (change: Change): Change => ({
+  files: change.files.map((f) => ({ ...f, path: canonical(f.path) })),
+  deleted: change.deleted.map(canonical),
+});
+
 export const grade = async (
   task: TaskA,
   prepared: Prepared,
-  change: Change,
+  asked: Change,
   runner: Runner,
   scratch: string,
   minPassed = 0,
 ): Promise<Grade> => {
   const side = testSideOf(prepared.installed, prepared.hidden);
+  let change: Change;
+  try {
+    change = canonicalChange(asked);
+  } catch (error) {
+    if (!(error instanceof TaskRefused)) throw error;
+    return { outcome: 'fail', note: `the PR is refused: ${error.message}`, specs: null, suspect: [], dropped: [] };
+  }
   const refused = refusal(change);
   if (refused !== null)
     return { outcome: 'fail', note: `the PR is refused: ${refused}`, specs: null, suspect: [], dropped: [] };
-  const { kept, dropped } = dropTestSide(task, change, side);
+  const { kept, dropped } = dropTestSide(change, side);
   const ignored = new Set(kept.files.filter((f) => isNewTestFile(side, f.path)).map((f) => f.path));
   if (dropped.length > 0 && kept.files.every((f) => ignored.has(f.path)) && kept.deleted.length === 0)
     return {

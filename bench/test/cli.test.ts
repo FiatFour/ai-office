@@ -117,6 +117,45 @@ describe.skipIf(!canSpawnTs)('the harness command line', () => {
     expect(wrong.stderr).toContain('is not a scratch repo');
   });
 
+  it('refuses a --timeout-ms or --runs that is not a whole number of milliseconds a timer can hold, before any push', () => {
+    const dir = withTasks({ ...GOOD, confirmed: true });
+    const env = { AW_BENCH_LOGIN_CONFIRMED: '1' };
+    for (const arm of ['baseline', 'factory'])
+      for (const [flag, value] of [
+        ['--timeout-ms', 'abc'],
+        ['--timeout-ms', '0'],
+        ['--timeout-ms', '-1'],
+        ['--timeout-ms', '1.5'],
+        ['--timeout-ms', '99999999999'],
+        ['--runs', '0'],
+        ['--runs', 'x'],
+      ] as const) {
+        const ran = cli(['run', '--task', 'a-1', '--arm', arm, `${flag}=${value}`, '--tasks', dir], env);
+        expect(ran.status, `${arm} ${flag} ${value}`).toBe(3);
+        expect(ran.stderr, `${arm} ${flag} ${value}`).toContain(`${flag} must be a whole number`);
+      }
+  });
+
+  it('refuses a scratch remote that is not the scratch repo, before any push', () => {
+    const dir = withTasks({ ...GOOD, confirmed: true });
+    const ran = cli(
+      [
+        'run',
+        '--task',
+        'a-1',
+        '--arm',
+        'factory',
+        '--scratch-remote',
+        'git@github.com:FiatFour/ai-office.git',
+        '--tasks',
+        dir,
+      ],
+      { AW_BENCH_LOGIN_CONFIRMED: '1' },
+    );
+    expect(ran.status).toBe(3);
+    expect(ran.stderr).toContain('the remote names FiatFour/ai-office, not FiatFour/agent-works-scratch');
+  });
+
   it('needs a scripted file for the scripted arm and an unknown task id names the directory', () => {
     const dir = withTasks(GOOD);
     expect(cli(['run', '--task', 'a-1', '--tasks', dir]).stderr).toContain('needs --scripts');

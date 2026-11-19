@@ -18,7 +18,7 @@ import { readMergeState } from './merge-state.ts';
 import { type Flag, parseTask, type Row, type Task, type TaskA, TaskRefused } from './model.ts';
 import { readRows } from './report.ts';
 import { dockerRunner, localRunner, type Runner } from './runner.ts';
-import { AUTHOR, REVIEWER, SCRATCH_REPO, scratchEnv, scratchRepoProblem } from './scratch.ts';
+import { AUTHOR, REVIEWER, SCRATCH_REPO, ScratchTarget, scratchEnv } from './scratch.ts';
 import { fixChange, mirrorPath, type Prepared, prepareTask } from './workspace.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +33,42 @@ export interface RunContext {
   readonly runner: Runner;
   readonly scratch: string;
   readonly clock?: Clock;
+  readonly settleMs?: number;
 }
+
+const MAX_TIMER_MS = 2 ** 31 - 1;
+const FACTORY_TIMEOUT_FACTOR = 4;
+const SETTLE_MS = 120_000;
+
+const within = async (pending: Promise<unknown>, ms: number): Promise<boolean> => {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([pending.then(() => true as const), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+export const countOf = (name: string, raw: string | undefined, fallback: number, max: number): number => {
+  const value = raw === undefined ? fallback : Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > max)
+    throw new TaskRefused(`${name} must be a whole number from 1 to ${max}, got ${JSON.stringify(raw)}`);
+  return value;
+};
+
+export const timeoutOf = (task: TaskA, raw: string | undefined, factor: number): number =>
+  raw === undefined ? task.timeoutMs * factor : countOf('--timeout-ms', raw, 0, MAX_TIMER_MS);
+
+export const killOnAbort = (arm: Arm, kill: () => Promise<unknown>): Arm => ({
+  ...arm,
+  run(task, prepared, signal, run) {
+    signal.addEventListener('abort', () => void kill().catch(() => {}), { once: true });
+    return arm.run(task, prepared, signal, run);
+  },
+});
 
 const failure = (message: string): string => message.replace(/\s+/g, ' ').slice(0, 300);
 
@@ -59,6 +94,7 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
   };
   if (typeof fixPassed !== 'number')
     throw new TaskRefused(`task ${task.id} was verified by an older harness: rerun prepare to record the test count`);
+  countOf('the task timeout', String(task.timeoutMs), 1, MAX_TIMER_MS);
   const clock = ctx.clock ?? performance;
   const wallStart = clock.now();
   const abort = new AbortController();
@@ -71,18 +107,17 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
   });
   const base = { task: task.id, set: 'A', arm: ctx.arm.name, scripted: ctx.arm.scripted, run } as const;
   const agentStart = clock.now();
-  const outcome = await Promise.race([
-    ctx.arm.run(task, prepared, abort.signal).then(
-      (done) => ({ done }) as const,
-      (error: unknown) => ({ error }) as const,
-    ),
-    timeout,
-  ]);
+  const settled = ctx.arm.run(task, prepared, abort.signal, run).then(
+    (done) => ({ done }) as const,
+    (error: unknown) => ({ error }) as const,
+  );
+  const outcome = await Promise.race([settled, timeout]);
   clearTimeout(timer);
   const agentMs = Math.round(clock.now() - agentStart);
   const empty = { reviewRounds: null, tokens: null, flag: null, quotaWindows: null, humanMinutes: null };
   const wall = () => Math.round(clock.now() - wallStart);
-  if (outcome === 'timeout')
+  if (outcome === 'timeout') {
+    const stopped = await within(settled, ctx.settleMs ?? SETTLE_MS);
     return {
       ...base,
       ...empty,
@@ -90,8 +125,9 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
       outcome: 'timeout',
       wallMs: wall(),
       agentMs,
-      note: `the agent ran past ${task.timeoutMs} ms`,
+      note: `the agent ran past ${task.timeoutMs} ms${stopped ? '' : `; it had not stopped ${ctx.settleMs ?? SETTLE_MS} ms after the abort and is abandoned`}`,
     };
+  }
   if ('error' in outcome)
     return {
       ...base,
@@ -185,8 +221,11 @@ const runLive = async (
   values: LiveValues,
   wiring: Wiring,
   armFor: (prepared: Prepared, driver: BenchCage) => Arm,
+  timeoutFactor: number,
   homeWorker: (worker: string) => string = () => LOGIN_WORKER,
 ): Promise<number> => {
+  const runs = countOf('--runs', values.runs, 1, 1000);
+  const timeoutMs = timeoutOf(task, values['timeout-ms'], timeoutFactor);
   if (!task.confirmed) throw new TaskRefused(`task ${task.id} is not confirmed by the operator: no model run`);
   if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1') throw new TaskRefused(NEEDS_LOGIN);
   if (values.home === undefined)
@@ -205,11 +244,11 @@ const runLive = async (
     homeWorker,
   });
   try {
-    const arm = armFor(prepared, driver);
-    const timeout = values['timeout-ms'];
-    const graded = timeout === undefined ? task : { ...task, timeoutMs: Number(timeout) };
-    for (let run = 1; run <= Number(values.runs); run += 1) {
+    const graded = { ...task, timeoutMs };
+    for (let run = 1; run <= runs; run += 1) {
+      const arm = killOnAbort(armFor(prepared, driver), () => driver.removeAll());
       const row = await runTask(graded, run, prepared, { arm, runner: wiring.runner, scratch: wiring.scratch });
+      await driver.removeAll();
       appendRow(values.out, row);
       console.log(JSON.stringify(row));
     }
@@ -225,15 +264,19 @@ const agentOptions = (values: LiveValues) => ({
 });
 
 const runBaseline = (task: TaskA, values: LiveValues, wiring: Wiring): Promise<number> =>
-  runLive(task, values, wiring, (prepared, driver) => {
-    const shells = cageShells(async () => driver, prepared.source);
-    return baselineArm(() => shells('baseline', ticketOf(task).id), agentOptions(values));
-  });
+  runLive(
+    task,
+    values,
+    wiring,
+    (prepared, driver) => {
+      const shells = cageShells(async () => driver, prepared.source);
+      return baselineArm((t, run) => shells('baseline', ticketOf(t, run).id), agentOptions(values));
+    },
+    1,
+  );
 
 const runFactory = (task: TaskA, values: LiveValues, wiring: Wiring): Promise<number> => {
-  const repo = values['scratch-repo'] ?? SCRATCH_REPO;
-  const problem = scratchRepoProblem(repo);
-  if (problem !== null) throw new TaskRefused(problem);
+  const target = ScratchTarget.of(values['scratch-repo'] ?? SCRATCH_REPO, values['scratch-remote']);
   const reviewHome = values['review-home-worker'] ?? LOGIN_WORKER;
   return runLive(
     task,
@@ -247,8 +290,8 @@ const runFactory = (task: TaskA, values: LiveValues, wiring: Wiring): Promise<nu
       mkdirSync(dirname(values.out), { recursive: true });
       return factoryArm(
         scratchEnv({
-          repo,
-          remote: values['scratch-remote'] ?? `git@github.com:${repo}.git`,
+          repo: target.repo,
+          remote: target.remote,
           send: cliTransport('gh'),
           log: fileLog(`${values.out}.api.jsonl`),
           workers: () => ({ [AUTHOR]: runtime, [REVIEWER]: runtime }),
@@ -257,6 +300,7 @@ const runFactory = (task: TaskA, values: LiveValues, wiring: Wiring): Promise<nu
         }),
       );
     },
+    FACTORY_TIMEOUT_FACTOR,
     (worker) => (worker === REVIEWER ? reviewHome : LOGIN_WORKER),
   );
 };

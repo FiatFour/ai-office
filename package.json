@@ -15,7 +15,7 @@
     "lint": "biome check .",
     "typecheck": "tsc -p tsconfig.base.json",
     "test": "vitest run",
-    "test:bench-live": "vitest run bench/test/task-setup.test.ts bench/test/closure.test.ts bench/test/cage-mount.test.ts bench/test/arms.test.ts bench/test/cli.test.ts bench/test/factory.test.ts",
+    "test:bench-live": "vitest run bench/test/task-setup.test.ts bench/test/closure.test.ts bench/test/cage-mount.test.ts bench/test/arms.test.ts bench/test/cli.test.ts bench/test/factory.test.ts bench/test/once.test.ts",
     "check:sources": "node scripts/check-sources.mjs"
   },
   "devDependencies": {

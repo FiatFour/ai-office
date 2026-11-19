@@ -13,10 +13,10 @@ import type { Prepared } from './workspace.ts';
 
 const LINK = /\b(?:https?:\/\/)?(?:[\w-]+\.)*(?:github\.com|githubusercontent\.com|npmjs\.com|npmjs\.org)\S*/gi;
 
-export const ticketOf = (task: TaskA): Ticket => {
+export const ticketOf = (task: TaskA, run: number): Ticket => {
   const body = task.body.replace(LINK, '[link removed]');
   return {
-    id: `bench/t-${createHash('sha256').update(task.id).digest('hex').slice(0, 8)}`,
+    id: `bench/t-${createHash('sha256').update(task.id).digest('hex').slice(0, 8)}-r${run}`,
     kind: 'defect',
     title: task.title,
     body: body === '' ? task.title : body,
@@ -54,11 +54,11 @@ const deletedSince = async (shell: CageShell, since: string): Promise<string[]> 
   return ran.out.split('\0').filter(Boolean);
 };
 
-export const baselineArm = (shellFor: (task: TaskA) => CageShell, options: BaselineOptions = {}): Arm => ({
+export const baselineArm = (shellFor: (task: TaskA, run: number) => CageShell, options: BaselineOptions = {}): Arm => ({
   name: 'baseline',
   scripted: false,
-  async run(task, _prepared, signal) {
-    const shell = shellFor(task);
+  async run(task, _prepared, signal, run) {
+    const shell = shellFor(task, run);
     const before = await shell.exec([...GIT, 'rev-parse', 'HEAD']);
     if (before.code !== 0) throw new ArmFailed(`the cage repo has no HEAD: ${before.err.trim()}`);
     const runtime = claudeCode({
@@ -66,7 +66,7 @@ export const baselineArm = (shellFor: (task: TaskA) => CageShell, options: Basel
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.bin === undefined ? {} : { bin: options.bin }),
     });
-    const ticket = ticketOf(task);
+    const ticket = ticketOf(task, run);
     const result = await runtime.run({
       role: 'author',
       task: ticket.id,
@@ -90,6 +90,11 @@ export const baselineArm = (shellFor: (task: TaskA) => CageShell, options: Basel
   },
 });
 
+export interface Failure {
+  readonly message: string;
+  readonly refused: boolean;
+}
+
 export interface FactoryHandle {
   readonly mode: ModeFactory;
   readonly host: GitHost;
@@ -97,7 +102,7 @@ export interface FactoryHandle {
   readonly base: string;
   readonly home: string;
   readonly reviewer: string;
-  readonly failure?: () => string | null;
+  readonly failure?: () => Failure | null;
   readonly removed: (change: { readonly number: number; readonly headSha: string }) => Promise<string[]>;
   readonly close?: () => Promise<void>;
 }
@@ -136,8 +141,8 @@ export const reviewSettled = (snapshot: ChangeSnapshot, reviewer: string): boole
 export const factoryArm = (env: FactoryEnv): Arm => ({
   name: 'factory',
   scripted: false,
-  async run(task, prepared, signal): Promise<ArmRun> {
-    const ticket = ticketOf(task);
+  async run(task, prepared, signal, run): Promise<ArmRun> {
+    const ticket = ticketOf(task, run);
     const handle = await env.open(task, ticket, prepared);
     let hq: RunningHq | undefined;
     try {
@@ -146,12 +151,24 @@ export const factoryArm = (env: FactoryEnv): Arm => ({
       if (!posted.ok) throw new ArmFailed(`HQ refused the ticket: ${await posted.text()}`);
       const branch = `aw/${ticket.id}`;
       const stop = await until(hq, handle, branch, env.reviewPollMs ?? 15_000, signal);
+      const view = hq.snapshot().mode;
+      if (stop.kind === 'refused')
+        return {
+          files: [],
+          deleted: [],
+          reviewRounds: view?.rounds[ticket.id] ?? 0,
+          tokens: tokensOf(view?.usage[ticket.id] ?? []),
+          webRequests: webRequestsOf(view?.usage[ticket.id] ?? []),
+          quotaWindows: null,
+          humanMinutes: null,
+          note: `the host refused what the crew pushed, so nothing is graded: ${stop.error}`,
+        };
+      if (stop.kind === 'failed') throw new ArmFailed(`no retry after the first failure: ${stop.error}`);
       if (stop.kind === 'job_failed') throw new ArmFailed(`job failed: ${stop.error}`);
       if (stop.kind === 'round_limit') throw new ArmFailed('the reviewer still asked for changes at the round limit');
       const change = await handle.host.findChange(handle.repo, branch);
       if (change === null) throw new ArmFailed(`no PR on ${branch}`);
       const files = await handle.host.files(handle.repo, change.number, change.headSha);
-      const view = hq.snapshot().mode;
       return {
         files: files.flatMap((f) => (f.content === null ? [] : [{ path: f.path, content: f.content }])),
         deleted: await handle.removed(change),
@@ -190,7 +207,7 @@ const until = async (
   for (;;) {
     signal.throwIfAborted();
     const failed = handle.failure?.() ?? null;
-    if (failed !== null) throw new ArmFailed(`a session failed, no retry: ${failed}`);
+    if (failed !== null) return { kind: failed.refused ? 'refused' : 'failed', error: failed.message };
     const stop = hq.snapshot().actions.find((a) => STOPS.has(a.kind));
     if (stop !== undefined) return stop as { kind: string; error?: string };
     if (performance.now() - lastReviewCheck >= reviewPollMs) {

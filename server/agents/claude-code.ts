@@ -3,7 +3,10 @@ import type { RunResult } from '../sandbox/engine.ts';
 import { AgentFailed, type AgentJob, type AgentResult, type AgentRuntime, parseReview, type Usage } from './runtime.ts';
 
 export interface CageShell {
-  exec(argv: readonly string[], options?: { input?: string; timeoutMs?: number }): Promise<RunResult>;
+  exec(
+    argv: readonly string[],
+    options?: { input?: string; timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<RunResult>;
 }
 
 export interface ClaudeOptions {
@@ -129,10 +132,16 @@ const changedFiles = async (shell: CageShell, since: string): Promise<FileEdit[]
 export const claudeCode = (options: ClaudeOptions): AgentRuntime => ({
   id: 'claude-code',
   async run(job): Promise<AgentResult> {
+    job.signal.throwIfAborted();
     const shell = options.shell(job.worker, job.task);
     const before = job.role === 'author' ? await head(shell) : '';
     const argv = claudeArgv(options.bin ?? 'claude', options.model ?? 'sonnet', options.maxTurns ?? 40);
-    const ran = await shell.exec(argv, { input: promptFor(job), timeoutMs: options.timeoutMs ?? 30 * 60_000 });
+    const ran = await shell.exec(argv, {
+      input: promptFor(job),
+      timeoutMs: options.timeoutMs ?? 30 * 60_000,
+      signal: job.signal,
+    });
+    if (job.signal.aborted) throw new AgentFailed('the run was aborted');
     if (ran.timedOut) throw new AgentFailed('claude ran past its time limit');
     const { text, usage } = parseStream(ran.out);
     if (job.role === 'reviewer') return { role: 'reviewer', ...parseReview(text), usage };

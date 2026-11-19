@@ -20,6 +20,7 @@ export interface RunOptions {
   readonly input?: string;
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
 }
 
 const MAX_BUFFER = 64 * 1024 * 1024;
@@ -33,6 +34,7 @@ export const runBinary = (bin: string, args: readonly string[], options: RunOpti
         encoding: 'utf8',
         maxBuffer: MAX_BUFFER,
         ...(options.env === undefined ? {} : { env: options.env }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs, killSignal: 'SIGKILL' }),
       },
       (error, out, err) => {

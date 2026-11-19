@@ -75,10 +75,10 @@ describe.skipIf(docker === undefined)('the cage mount of a prepared task, on a r
     });
     await verifyTask(fx.task, prepared, localRunner, scratch);
     const shells = cageShells(async () => driver, prepared.source);
-    const arm = baselineArm(() => shells('baseline', ticketOf(fx.task).id), { bin: '/home/agent/bin/claude' });
+    const arm = baselineArm(() => shells('baseline', ticketOf(fx.task, 1).id), { bin: '/home/agent/bin/claude' });
     const row = await runTask(fx.task, 1, prepared, { arm, runner: localRunner, scratch });
     expect(row).toMatchObject({ outcome: 'pass', tokens: { input: 7, output: 9 } });
-    const shell = shells('baseline', ticketOf(fx.task).id);
+    const shell = shells('baseline', ticketOf(fx.task, 1).id);
     const sh = async (script: string) => (await shell.exec(['sh', '-c', script])).out.trim();
     expect(await sh("find / -xdev -name 'slug-hidden*' -not -path '/proc/*' 2>/dev/null | wc -l")).toBe('0');
     expect(await sh('grep -rl "collapses runs of spaces" /work /home 2>/dev/null | wc -l')).toBe('0');

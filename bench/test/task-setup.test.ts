@@ -300,9 +300,13 @@ describe.skipIf(POSIX_ONLY)('rows', () => {
     const hang = scriptedArm('factory', { 'slug-1': { files: [], hang: true } });
     const stubborn: Arm = { name: 'baseline', scripted: false, run: () => new Promise(() => {}) };
     for (const arm of [hang, stubborn]) {
-      const row = await runTask(fx.task, 1, prepared, { arm, runner: localRunner, scratch });
-      expect(row.outcome).toBe('timeout');
-      expect(row.wallMs).toBeLessThan(5000);
+      const row = await Promise.race([
+        runTask(fx.task, 1, prepared, { arm, runner: localRunner, scratch, settleMs: 200 }),
+        new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 3000)),
+      ]);
+      expect(row).not.toBe('hung');
+      expect(row).toMatchObject({ outcome: 'timeout' });
+      expect((row as { wallMs: number }).wallMs).toBeLessThan(2500);
     }
   });
 

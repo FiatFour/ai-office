@@ -1,11 +1,19 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { AgentRuntime } from '../server/agents/runtime.ts';
 import { github } from '../server/githost/github.ts';
-import type { ApiCall, GitHost, HttpRequest, HttpResponse, Transport } from '../server/githost/host.ts';
+import {
+  type ApiCall,
+  type GitHost,
+  type HttpRequest,
+  type HttpResponse,
+  type Transport,
+  WriteRefused,
+} from '../server/githost/host.ts';
 import { cagesMode } from '../server/modes/cages.ts';
 import { runBinary } from '../server/sandbox/engine.ts';
-import { type FactoryEnv, removedVia } from './arms-live.ts';
+import { type FactoryEnv, type Failure, removedVia } from './arms-live.ts';
 import { TaskRefused } from './model.ts';
 import type { Prepared } from './workspace.ts';
 
@@ -13,9 +21,11 @@ export const SCRATCH_REPO = 'FiatFour/agent-works-scratch';
 export const AUTHOR = 'nova';
 export const REVIEWER = 'vega';
 
-const BASE_REF = /^bench-base\/t-[0-9a-f]{8}$/;
-const WORK_REF = /^aw\/bench\/t-[0-9a-f]{8}$/;
+const BASE_REF = /^bench-base\/t-[0-9a-f]{8}-r[1-9]\d{0,2}$/;
+const WORK_REF = /^aw\/bench\/t-[0-9a-f]{8}-r[1-9]\d{0,2}$/;
 const SCRATCH_NAME = /^[\w-][\w.-]*\/[\w.-]*-scratch$/;
+const GITHUB_REMOTE =
+  /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([\w-]+\/[\w.-]+?)(?:\.git)?$/;
 
 export interface ScratchNames {
   readonly base: string;
@@ -30,16 +40,45 @@ export const namesOf = (ticketId: string): ScratchNames => ({
 export const scratchRepoProblem = (repo: string): string | null =>
   SCRATCH_NAME.test(repo) ? null : `${repo} is not a scratch repo: its name must end in -scratch`;
 
-const GIT_ENV: NodeJS.ProcessEnv = {
+const isBareRepo = (path: string): boolean =>
+  existsSync(join(path, 'HEAD')) && existsSync(join(path, 'objects')) && !existsSync(join(path, '.git'));
+
+export const remoteProblem = (repo: string, remote: string): string | null => {
+  if (remote.startsWith('/'))
+    return isBareRepo(remote) ? null : `${remote} is a local path, and a local remote must be a bare repository`;
+  const named = GITHUB_REMOTE.exec(remote)?.[1];
+  if (named === undefined) return `${remote} is neither a github.com URL of ${repo} nor a bare repository path`;
+  return named.toLowerCase() === repo.toLowerCase() ? null : `the remote names ${named}, not ${repo}`;
+};
+
+export class ScratchTarget {
+  readonly repo: string;
+  readonly remote: string;
+
+  private constructor(repo: string, remote: string) {
+    this.repo = repo;
+    this.remote = remote;
+  }
+
+  static of(repo: string, remote: string = `git@github.com:${repo}.git`): ScratchTarget {
+    const problem = scratchRepoProblem(repo) ?? remoteProblem(repo, remote);
+    if (problem !== null) throw new TaskRefused(problem);
+    return new ScratchTarget(repo, remote);
+  }
+}
+
+export const gitEnv = (): NodeJS.ProcessEnv => ({
   PATH: process.env.PATH ?? '',
   HOME: process.env.HOME ?? '',
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
   GIT_TERMINAL_PROMPT: '0',
   ...(process.env.SSH_AUTH_SOCK === undefined ? {} : { SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK }),
   ...(process.env.GIT_SSH_COMMAND === undefined ? {} : { GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND }),
-};
+});
 
 const git = (cwd: string, args: readonly string[]) =>
-  runBinary('git', ['-C', cwd, ...args], { env: GIT_ENV, timeoutMs: 180_000 });
+  runBinary('git', ['-C', cwd, ...args], { env: gitEnv(), timeoutMs: 180_000 });
 
 const must = async (cwd: string, args: readonly string[]): Promise<string> => {
   const ran = await git(cwd, args);
@@ -57,18 +96,37 @@ export interface Seed {
   readonly files: number;
 }
 
-export const seedBase = async (source: string, remote: string, branch: string, workRoot: string): Promise<Seed> => {
+const treeOf = async (dir: string): Promise<Map<string, string>> => {
+  const listed = (await must(dir, ['ls-tree', '-r', '-z', 'HEAD'])).split('\0').filter(Boolean);
+  return new Map(
+    listed.map((entry) => {
+      const [meta = '', path = ''] = entry.split('\t');
+      return [path, meta];
+    }),
+  );
+};
+
+const underGithub = (path: string): boolean => path === '.github' || path.startsWith('.github/');
+
+export const seedBase = async (
+  source: string,
+  target: ScratchTarget,
+  branch: string,
+  workRoot: string,
+): Promise<Seed> => {
   refProblem(BASE_REF, branch);
   mkdirSync(workRoot, { recursive: true });
   const dir = mkdtempSync(join(workRoot, 'seed-'));
   try {
-    const tar = await runBinary('sh', ['-c', 'git -C "$0" archive --format=tar HEAD | tar -x -C "$1"', source, dir]);
+    const tar = await runBinary('sh', ['-c', 'git -C "$0" archive --format=tar HEAD | tar -x -C "$1"', source, dir], {
+      env: gitEnv(),
+    });
     if (tar.code !== 0) throw new TaskRefused(`archive of ${source} failed: ${tar.err.trim()}`);
     rmSync(join(dir, '.github'), { recursive: true, force: true });
     await must(dir, ['init', '--quiet', '-b', 'main']);
     await must(dir, ['add', '-A']);
     const tracked = (await must(dir, ['ls-files', '-z'])).split('\0').filter(Boolean);
-    if (tracked.some((path) => path === '.github' || path.startsWith('.github/')))
+    if (tracked.some(underGithub))
       throw new TaskRefused('the seeded tree still holds .github, which could start Actions on the scratch repo');
     await must(dir, [
       '-c',
@@ -82,9 +140,18 @@ export const seedBase = async (source: string, remote: string, branch: string, w
       '-m',
       'task base',
     ]);
+    const sealed = await treeOf(source);
+    const seeded = await treeOf(dir);
+    const drift = [...new Set([...sealed.keys(), ...seeded.keys()])]
+      .filter((path) => !underGithub(path) && sealed.get(path) !== seeded.get(path))
+      .sort();
+    if (drift.length > 0)
+      throw new TaskRefused(
+        `the seeded tree differs from the sealed tree at ${drift.slice(0, 5).join(', ')}: export-ignore or export-subst in a .gitattributes would make git archive drop or rewrite it`,
+      );
     const sha = (await must(dir, ['rev-parse', 'HEAD'])).trim();
-    await must(dir, ['push', '--quiet', '--force', remote, `HEAD:refs/heads/${branch}`]);
-    const seen = (await must(dir, ['ls-remote', remote, `refs/heads/${branch}`])).split('\t')[0];
+    await must(dir, ['push', '--quiet', '--force', target.remote, `HEAD:refs/heads/${branch}`]);
+    const seen = (await must(dir, ['ls-remote', target.remote, `refs/heads/${branch}`])).split('\t')[0];
     if (seen !== sha) throw new TaskRefused(`the scratch host holds ${seen ?? 'nothing'} on ${branch}, not ${sha}`);
     return { branch, sha, files: tracked.length };
   } finally {
@@ -92,14 +159,14 @@ export const seedBase = async (source: string, remote: string, branch: string, w
   }
 };
 
-export const dropBase = async (remote: string, branch: string, workRoot: string): Promise<void> => {
+export const dropBase = async (target: ScratchTarget, branch: string, workRoot: string): Promise<void> => {
   refProblem(BASE_REF, branch);
   mkdirSync(workRoot, { recursive: true });
   const dir = mkdtempSync(join(workRoot, 'drop-'));
   try {
     await must(dir, ['init', '--quiet']);
-    const present = (await must(dir, ['ls-remote', remote, `refs/heads/${branch}`])).trim() !== '';
-    if (present) await must(dir, ['push', '--quiet', remote, '--delete', `refs/heads/${branch}`]);
+    const present = (await must(dir, ['ls-remote', target.remote, `refs/heads/${branch}`])).trim() !== '';
+    if (present) await must(dir, ['push', '--quiet', target.remote, '--delete', `refs/heads/${branch}`]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -131,8 +198,14 @@ const expect2xx = (what: string, response: HttpResponse, tolerated: readonly num
     throw new TaskRefused(`${what} failed with status ${response.status}`);
 };
 
-export const dropWork = async (host: GitHost, send: Transport, repo: string, branch: string): Promise<number> => {
+export const dropWork = async (
+  host: GitHost,
+  send: Transport,
+  target: ScratchTarget,
+  branch: string,
+): Promise<number> => {
   refProblem(WORK_REF, branch);
+  const { repo } = target;
   const sender = guardedCleanup(send, repo);
   let closed = 0;
   for (
@@ -155,18 +228,36 @@ export const dropWork = async (host: GitHost, send: Transport, repo: string, bra
   return closed;
 };
 
-export const failFast = (
-  runtimes: Readonly<Record<string, AgentRuntime>>,
-): { workers: Record<string, AgentRuntime>; failure: () => string | null } => {
-  let failure: string | null = null;
+export interface Crew {
+  readonly workers: Record<string, AgentRuntime>;
+  failure(): Failure | null;
+  fail(error: unknown): void;
+}
+
+export const oneSessionEach = (runtimes: Readonly<Record<string, AgentRuntime>>): Crew => {
+  let failure: Failure | null = null;
+  const started = new Set<string>();
+  const fail = (error: unknown) => {
+    failure ??= {
+      message: error instanceof Error ? error.message : String(error),
+      refused: error instanceof WriteRefused,
+    };
+  };
   const watch = (runtime: AgentRuntime): AgentRuntime => ({
     ...runtime,
     async run(job) {
-      if (failure !== null) throw new Error(`an earlier session failed: ${failure}`);
+      if (failure !== null) throw new Error(`no session starts after a failure: ${failure.message}`);
+      const turn = `${job.task} ${job.role} ${job.round}`;
+      if (started.has(turn)) {
+        const again = new Error(`a session for ${turn} was already started, and none is ever started twice`);
+        fail(again);
+        throw again;
+      }
+      started.add(turn);
       try {
         return await runtime.run(job);
       } catch (error) {
-        failure ??= error instanceof Error ? error.message : String(error);
+        fail(error);
         throw error;
       }
     },
@@ -174,12 +265,36 @@ export const failFast = (
   return {
     workers: Object.fromEntries(Object.entries(runtimes).map(([name, runtime]) => [name, watch(runtime)])),
     failure: () => failure,
+    fail,
   };
 };
 
+export const logged =
+  (send: Transport, log: (call: ApiCall) => void): Transport =>
+  async (request) => {
+    const started = performance.now();
+    const note = (status: number) =>
+      log({
+        ts: new Date().toISOString(),
+        host: 'github',
+        method: request.method,
+        path: request.path,
+        status,
+        ms: Math.round(performance.now() - started),
+      });
+    try {
+      const response = await send(request);
+      note(response.status);
+      return response;
+    } catch (error) {
+      note(0);
+      throw error;
+    }
+  };
+
 export interface ScratchOptions {
   readonly repo: string;
-  readonly remote: string;
+  readonly remote?: string;
   readonly send: Transport;
   readonly log: (call: ApiCall) => void;
   readonly workers: (prepared: Prepared) => Readonly<Record<string, AgentRuntime>>;
@@ -191,40 +306,41 @@ export interface ScratchOptions {
 }
 
 export const scratchEnv = (o: ScratchOptions): FactoryEnv => {
-  const problem = scratchRepoProblem(o.repo);
-  if (problem !== null) throw new TaskRefused(problem);
+  const target = ScratchTarget.of(o.repo, o.remote);
+  const send = logged(o.send, o.log);
   return {
     ...(o.reviewPollMs === undefined ? {} : { reviewPollMs: o.reviewPollMs }),
     async open(_task, ticket, prepared) {
       const names = namesOf(ticket.id);
-      const host = github({ repo: o.repo, base: names.base, send: o.send, log: o.log });
+      const host = github({ repo: target.repo, base: names.base, send: o.send, log: o.log });
       const clear = async () => {
-        await dropWork(host, o.send, o.repo, names.work);
-        await dropBase(o.remote, names.base, o.workRoot);
+        await dropWork(host, send, target, names.work);
+        await dropBase(target, names.base, o.workRoot);
       };
       await clear();
-      await seedBase(prepared.source, o.remote, names.base, o.workRoot);
+      await seedBase(prepared.source, target, names.base, o.workRoot);
       const home = mkdtempSync(join(o.workRoot, 'hq-'));
-      const crew = failFast(o.workers(prepared));
+      const crew = oneSessionEach(o.workers(prepared));
       return {
         failure: crew.failure,
         host,
-        repo: o.repo,
+        repo: target.repo,
         base: names.base,
         home,
         reviewer: REVIEWER,
         mode: cagesMode({
           host,
-          repo: o.repo,
+          repo: target.repo,
           base: names.base,
           tickets: { [ticket.id]: ticket },
           author: AUTHOR,
           reviewer: REVIEWER,
           workers: crew.workers,
+          onJobFailed: (_task, error) => crew.fail(error),
           pollMs: o.pollMs ?? 10_000,
           ...(o.settleMs === undefined ? {} : { settleMs: o.settleMs }),
         }),
-        removed: (change) => removedVia(o.send, o.repo, change.number),
+        removed: (change) => removedVia(send, target.repo, change.number),
         close: async () => {
           rmSync(home, { recursive: true, force: true });
           if (o.keep !== true) await clear();

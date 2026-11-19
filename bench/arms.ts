@@ -17,7 +17,7 @@ export interface ArmRun {
 export interface Arm {
   readonly name: ArmName;
   readonly scripted: boolean;
-  run(task: TaskA, prepared: Prepared, signal: AbortSignal): Promise<ArmRun>;
+  run(task: TaskA, prepared: Prepared, signal: AbortSignal, run: number): Promise<ArmRun>;
 }
 
 export class ArmFailed extends Error {}

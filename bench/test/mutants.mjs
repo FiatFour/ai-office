@@ -13,6 +13,7 @@ const ARMS = 'bench/test/arms.test.ts';
 const CLI = 'bench/test/cli.test.ts';
 const CLOSURE = 'bench/test/closure.test.ts';
 const FACTORY = 'bench/test/factory.test.ts';
+const ONCE = 'bench/test/once.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -87,7 +88,7 @@ const MUTANTS = [
   {
     name: 'no-timeout-race',
     claim: 'a run past the time limit ends as a timeout row even when the arm ignores the abort signal',
-    edits: [['bench/run.ts', '    timeout,\n  ]);', '  ]);']],
+    edits: [['bench/run.ts', 'Promise.race([settled, timeout])', 'Promise.race([settled])']],
     tests: [SETUP],
   },
   {
@@ -278,8 +279,8 @@ const MUTANTS = [
     edits: [
       [
         'bench/arms-live.ts',
-        "id: `bench/t-${createHash('sha256').update(task.id).digest('hex').slice(0, 8)}`,",
-        'id: `bench/${task.id}`,',
+        "id: `bench/t-${createHash('sha256').update(task.id).digest('hex').slice(0, 8)}-r${run}`,",
+        'id: `bench/${task.id}-r${run}`,',
       ],
     ],
     tests: [ARMS],
@@ -752,11 +753,7 @@ const MUTANTS = [
     claim: 'the seeded tree has no .github, so a push cannot start Actions on the scratch repo',
     edits: [
       ['bench/scratch.ts', "rmSync(join(dir, '.github'), { recursive: true, force: true });", 'void 0;'],
-      [
-        'bench/scratch.ts',
-        "if (tracked.some((path) => path === '.github' || path.startsWith('.github/')))",
-        'if (false)',
-      ],
+      ['bench/scratch.ts', 'if (tracked.some(underGithub))', 'if (false)'],
     ],
     tests: [FACTORY],
   },
@@ -764,11 +761,7 @@ const MUTANTS = [
     name: 'seed-strip-unchecked',
     claim: 'a .github left in the seeded tree is refused before the push',
     edits: [
-      [
-        'bench/scratch.ts',
-        "if (tracked.some((path) => path === '.github' || path.startsWith('.github/')))",
-        'if (false)',
-      ],
+      ['bench/scratch.ts', 'if (tracked.some(underGithub))', 'if (false)'],
       ['bench/scratch.ts', "rmSync(join(dir, '.github'), { recursive: true, force: true });", 'void 0;'],
     ],
     tests: [FACTORY],
@@ -776,19 +769,31 @@ const MUTANTS = [
   {
     name: 'seed-no-force',
     claim: 'a branch a crashed run left behind is replaced by the new seed',
-    edits: [['bench/scratch.ts', "'push', '--quiet', '--force', remote", "'push', '--quiet', remote"]],
+    edits: [['bench/scratch.ts', "'push', '--quiet', '--force', target.remote", "'push', '--quiet', target.remote"]],
     tests: [FACTORY],
   },
   {
     name: 'base-ref-any',
     claim: 'the bench writes and deletes only bench-base refs on the scratch host, never main',
-    edits: [['bench/scratch.ts', 'const BASE_REF = /^bench-base\\/t-[0-9a-f]{8}$/;', 'const BASE_REF = /^.*$/;']],
+    edits: [
+      [
+        'bench/scratch.ts',
+        'const BASE_REF = /^bench-base\\/t-[0-9a-f]{8}-r[1-9]\\d{0,2}$/;',
+        'const BASE_REF = /^.*$/;',
+      ],
+    ],
     tests: [FACTORY],
   },
   {
     name: 'work-ref-any',
     claim: 'the bench deletes only aw/bench work branches',
-    edits: [['bench/scratch.ts', 'const WORK_REF = /^aw\\/bench\\/t-[0-9a-f]{8}$/;', 'const WORK_REF = /^.*$/;']],
+    edits: [
+      [
+        'bench/scratch.ts',
+        'const WORK_REF = /^aw\\/bench\\/t-[0-9a-f]{8}-r[1-9]\\d{0,2}$/;',
+        'const WORK_REF = /^.*$/;',
+      ],
+    ],
     tests: [FACTORY],
   },
   {
@@ -844,13 +849,13 @@ const MUTANTS = [
   {
     name: 'failure-not-recorded',
     claim: 'the first failed session is remembered so the arm stops without retries',
-    edits: [['bench/scratch.ts', 'failure ??= error instanceof Error ? error.message : String(error);', 'void error;']],
+    edits: [['bench/scratch.ts', 'failure ??= {', 'void {']],
     tests: [FACTORY],
   },
   {
     name: 'failure-ignored-by-arm',
     claim: 'the arm ends a run at the first failed session',
-    edits: [['bench/arms-live.ts', 'if (failed !== null) throw new ArmFailed', 'if (false) throw new ArmFailed']],
+    edits: [['bench/arms-live.ts', 'if (failed !== null) return {', 'if (false) return {']],
     tests: [FACTORY],
   },
   {
@@ -859,7 +864,7 @@ const MUTANTS = [
     edits: [
       [
         'bench/scratch.ts',
-        'if (failure !== null) throw new Error(`an earlier session failed: ${failure}`);',
+        'if (failure !== null) throw new Error(`no session starts after a failure: ${failure.message}`);',
         'void 0;',
       ],
     ],
@@ -900,6 +905,150 @@ const MUTANTS = [
     name: 'removed-ignores-status',
     claim: 'a failed host listing of PR files is an error, not an empty list of deletions',
     edits: [['bench/arms-live.ts', 'if (response.status >= 400)', 'if (false)']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'duplicate-session-allowed',
+    claim: 'a session starts at most once per task, role and round, whatever fails after it and whoever retries',
+    edits: [['bench/scratch.ts', 'if (started.has(turn)) {', 'if (false) {']],
+    tests: [ONCE, FACTORY],
+  },
+  {
+    name: 'host-failure-unseen-by-arm',
+    claim:
+      'a failure after the session (push refused, no file changed, review rejected) ends the row with its own cause',
+    edits: [['bench/scratch.ts', 'onJobFailed: (_task, error) => crew.fail(error),', 'onJobFailed: () => {},']],
+    tests: [ONCE],
+  },
+  {
+    name: 'refusal-graded-as-error',
+    claim: 'a change the host write guard refuses is a failed task, not a broken run',
+    edits: [['bench/scratch.ts', 'refused: error instanceof WriteRefused,', 'refused: false,']],
+    tests: [ONCE, FACTORY],
+  },
+  {
+    name: 'cage-exec-ignores-abort',
+    claim: 'the abort signal reaches the cage exec, so a timed-out session is killed',
+    edits: [['server/agents/claude-code.ts', '      signal: job.signal,\n', '']],
+    tests: [ONCE],
+  },
+  {
+    name: 'session-starts-after-abort',
+    claim: 'no session starts once the run was aborted',
+    edits: [['server/agents/claude-code.ts', '    job.signal.throwIfAborted();\n    const shell', '    const shell']],
+    tests: [ONCE],
+  },
+  {
+    name: 'push-after-abort',
+    claim: 'a session that ends after the mode was closed pushes nothing',
+    edits: [
+      [
+        'server/modes/cages.ts',
+        '      abort.signal.throwIfAborted();\n      return host.pushFiles(',
+        '      return host.pushFiles(',
+      ],
+    ],
+    tests: [ONCE],
+  },
+  {
+    name: 'timeout-row-before-arm-settles',
+    claim: 'a timed-out run returns only after the arm has stopped and cleaned up, so the next run starts clean',
+    edits: [
+      ['bench/run.ts', 'const stopped = await within(settled, ctx.settleMs ?? SETTLE_MS);', 'const stopped = true;'],
+    ],
+    tests: [ONCE],
+  },
+  {
+    name: 'stuck-arm-waited-for-forever',
+    claim:
+      'an arm that never stops is abandoned after the grace, with a note on the row, so one stuck run cannot hang the batch',
+    edits: [['bench/run.ts', 'timer = setTimeout(() => resolve(false), ms);', 'void ms;']],
+    tests: [ONCE],
+  },
+  {
+    name: 'cages-not-killed-on-abort',
+    claim: 'aborting a run removes the cages of its driver',
+    edits: [
+      [
+        'bench/run.ts',
+        "signal.addEventListener('abort', () => void kill().catch(() => {}), { once: true });",
+        'void 0;',
+      ],
+    ],
+    tests: [ONCE],
+  },
+  {
+    name: 'run-number-not-in-names',
+    claim: 'the ticket, branch and PR of each run carry the run number, so a zombie of run 1 cannot touch run 2',
+    edits: [['bench/arms-live.ts', '-r${run}`,', '`,']],
+    tests: [ONCE, FACTORY],
+  },
+  {
+    name: 'timeout-unchecked',
+    claim: 'a timeout that is not a whole number a timer can hold is refused before the arm starts',
+    edits: [['bench/run.ts', 'if (!Number.isInteger(value) || value < 1 || value > max)', 'if (false)']],
+    tests: [ONCE, 'bench/test/cli.test.ts'],
+  },
+  {
+    name: 'factory-timeout-not-scaled',
+    claim: 'the factory arm gets a multiple of the single-session limit by default',
+    edits: [['bench/run.ts', 'task.timeoutMs * factor', 'task.timeoutMs']],
+    tests: [ONCE],
+  },
+  {
+    name: 'remote-not-tied-to-repo',
+    claim: 'the scratch remote must name the same -scratch repo as --scratch-repo',
+    edits: [
+      ['bench/scratch.ts', 'scratchRepoProblem(repo) ?? remoteProblem(repo, remote)', 'scratchRepoProblem(repo)'],
+    ],
+    tests: [FACTORY, 'bench/test/cli.test.ts'],
+  },
+  {
+    name: 'local-remote-any-directory',
+    claim: 'a local remote must be a bare repository',
+    edits: [['bench/scratch.ts', 'return isBareRepo(remote) ? null :', 'return true ? null :']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'cleanup-calls-unlogged',
+    claim: 'the cleanup requests go through the API log',
+    edits: [
+      [
+        'bench/scratch.ts',
+        'await dropWork(host, send, target, names.work);',
+        'await dropWork(host, o.send, target, names.work);',
+      ],
+    ],
+    tests: [FACTORY],
+  },
+  {
+    name: 'removed-listing-unlogged',
+    claim: 'the listing of removed files goes through the API log',
+    edits: [
+      [
+        'bench/scratch.ts',
+        'removedVia(send, target.repo, change.number)',
+        'removedVia(o.send, target.repo, change.number)',
+      ],
+    ],
+    tests: [FACTORY],
+  },
+  {
+    name: 'seed-reads-global-git-config',
+    claim: 'the seed push reads no global git configuration of the operator',
+    edits: [['bench/scratch.ts', "  GIT_CONFIG_GLOBAL: '/dev/null',\n", '']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'seed-reads-system-git-config',
+    claim: 'the seed push reads no system git configuration',
+    edits: [['bench/scratch.ts', "  GIT_CONFIG_NOSYSTEM: '1',\n", '']],
+    tests: [FACTORY],
+  },
+  {
+    name: 'seed-drift-unchecked',
+    claim: 'the seeded tree is compared with the sealed tree, so git archive attributes cannot change it unseen',
+    edits: [['bench/scratch.ts', 'if (drift.length > 0)', 'if (false)']],
     tests: [FACTORY],
   },
   {

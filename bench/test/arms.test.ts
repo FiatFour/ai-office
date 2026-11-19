@@ -71,7 +71,7 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
         return { code: 0, out: FIXED, err: '', timedOut: false };
       },
     }));
-    expect((await arm.run(fx.task, prepared, new AbortController().signal)).webRequests).toBe(2);
+    expect((await arm.run(fx.task, prepared, new AbortController().signal, 1)).webRequests).toBe(2);
   });
 
   it('carries the files the session deleted, renames included, into the graded change', async () => {
@@ -99,7 +99,7 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
         return { code: ran.status ?? 1, out: ran.stdout, err: ran.stderr, timedOut: false };
       },
     }));
-    const run = await arm.run(fx.task, prepared, new AbortController().signal);
+    const run = await arm.run(fx.task, prepared, new AbortController().signal, 1);
     expect(run.deleted).toEqual(['old.txt']);
     expect(run.files.map((f) => f.path)).toEqual(['new.txt']);
   });
@@ -111,12 +111,12 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
       issue: 214,
       body: 'broken, see https://github.com/nuxt/nuxt/issues/25998 and github.com/unjs/ufo/blob/main/x.ts#L3 or https://www.npmjs.com/package/ufo ok',
     };
-    const ticket = ticketOf(task);
+    const ticket = ticketOf(task, 1);
     expect(ticket).toMatchObject({ kind: 'defect', title: task.title, url: null });
     expect(ticket.body).toBe('broken, see [link removed] and [link removed] or [link removed] ok');
     expect(JSON.stringify(ticket)).not.toMatch(/ufo|214|github|npm/i);
-    expect(ticketOf({ ...task, body: '' }).body).toBe(task.title);
-    expect(ticketOf({ ...task, id: 'ufo-221' }).id).not.toBe(ticket.id);
+    expect(ticketOf({ ...task, body: '' }, 1).body).toBe(task.title);
+    expect(ticketOf({ ...task, id: 'ufo-221' }, 1).id).not.toBe(ticket.id);
   });
 
   it('adds up every token column of every session, cache reads included', () => {

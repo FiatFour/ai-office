@@ -90,6 +90,7 @@ export interface CagesOptions {
   readonly roundLimit?: number;
   readonly maxFailures?: number;
   readonly settleMs?: number;
+  readonly onJobFailed?: (task: TaskId, error: unknown) => void;
 }
 
 const ROUND_LIMIT = 3;
@@ -251,6 +252,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       });
       if (result.role !== 'author') throw new Error('the author runtime returned a review');
       spend(task, result.usage);
+      abort.signal.throwIfAborted();
       return host.pushFiles(repo, {
         branch: branchOf(task),
         base: options.base,
@@ -266,6 +268,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       if (existing !== null) return void (await poll(existing.number));
       const ticket = ticketOf(task);
       const head = await runAuthor(task, job.box.worker ?? options.author, 0, []);
+      abort.signal.throwIfAborted();
       const opened =
         (await host.findChange(repo, branch)) ??
         (await host.openChange(repo, {
@@ -327,6 +330,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       });
       if (result.role !== 'reviewer') throw new Error('the reviewer runtime returned a change');
       spend(task, result.usage);
+      abort.signal.throwIfAborted();
       const posted = await reviewHost.postReview(repo, job.change.number, reviewDraft(head, job.reviewer, result));
       ingest(reviewFact(posted, job.change, job.reviewer, result.verdict));
     };
@@ -401,6 +405,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
           failures.delete(key);
         } catch (error) {
           if (abort.signal.aborted) return;
+          options.onJobFailed?.(task, error);
           const count = (failures.get(key)?.count ?? 0) + 1;
           failures.set(key, { count, error: (error as Error).message });
           if (count >= maxFailures && job.kind === 'author' && job.box.worker !== null)

@@ -13,7 +13,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "test/trailing-slash.test.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -30,7 +30,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "test/join.test.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -47,7 +47,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "test/utilities.test.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -64,7 +64,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "test/query.test.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -81,7 +81,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "test/parse.test.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -98,7 +98,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "test/trailing-slash.test.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -115,7 +115,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "src/index.spec.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -132,7 +132,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "src/index.spec.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -149,7 +149,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "src/index.spec.ts", "src/redos.spec.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   },
   {
@@ -166,7 +166,7 @@
     "testCommand": ["node_modules/.bin/vitest", "run", "src/index.spec.ts"],
     "image": "node:24-bookworm-slim",
     "timeoutMs": 1800000,
-    "confirmed": false,
+    "confirmed": true,
     "reporter": "vitest"
   }
 ]

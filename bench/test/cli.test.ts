@@ -98,10 +98,10 @@ describe('the cage a model run gets', () => {
 describe('the committed tasks', () => {
   const tasks = loadTasks(TASKS);
 
-  it('hold 10 Set A tasks from 2 repos, all waiting for the operator to confirm', () => {
+  it('hold 10 Set A tasks from 2 repos, all confirmed by the operator', () => {
     expect(tasks).toHaveLength(10);
     expect(new Set(tasks.map((t) => t.repo)).size).toBe(2);
-    expect(tasks.every((t) => t.set === 'A' && !t.confirmed)).toBe(true);
+    expect(tasks.every((t) => t.set === 'A' && t.confirmed)).toBe(true);
     expect(new Set(tasks.map((t) => t.id)).size).toBe(10);
   });
 

@@ -7,6 +7,7 @@ import { tempDir } from '../../server/test/helpers.ts';
 import { type Script, scriptedArm } from '../arms.ts';
 import { grade, NO_CHANGE, parseSpecs } from '../grade.ts';
 import type { Change } from '../model.ts';
+import { normal } from '../protected.ts';
 import { runTask } from '../run.ts';
 import { localRunner, type Runner } from '../runner.ts';
 import { suspectReasons } from '../testside.ts';
@@ -112,22 +113,6 @@ describe.skipIf(POSIX_ONLY)('the answer stays out of the grader, channel by chan
       expect(g).toMatchObject({ outcome: 'fail', specs: null });
       expect(g.note).toMatch(/the PR is refused/);
     }
-  });
-
-  it('refuses a PR edit of a spec file the grader runs, hidden or not', async () => {
-    const { fx, prepared, scratch } = await prepareFixture({ specs: ['test/visible.test.js'] });
-    for (const path of ['test/visible.test.js', 'test/slug-hidden.test.js', './test\\basic.test.js']) {
-      const g = await grade(
-        fx.task,
-        prepared,
-        { files: [{ path, content: '// weakened\n' }], deleted: [] },
-        localRunner,
-        scratch,
-      );
-      expect(g.note).toMatch(/is a graded test file/);
-    }
-    const gone = await grade(fx.task, prepared, { files: [], deleted: ['test/visible.test.js'] }, localRunner, scratch);
-    expect(gone.note).toMatch(/is a graded test file/);
   });
 
   it('lets an ordinary source, test and doc path through', async () => {
@@ -376,7 +361,78 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
       writeFileSync(join(installed, rel), text);
     }
   };
+  const PASSING = "import { test } from 'node:test';\ntest('x', () => {});\n";
   const fixed: Change['files'][number] = { path: 'src/slug.js', content: FIXED };
+
+  it('drops a PR edit of a spec file the grader runs, hidden or not, and grades the rest', async () => {
+    const { fx, prepared, scratch } = await prepareFixture({ specs: ['test/visible.test.js'] });
+    for (const path of ['test/visible.test.js', 'test/slug-hidden.test.js', './test\\basic.test.js']) {
+      const g = await grade(
+        fx.task,
+        prepared,
+        { files: [fixed, { path, content: '// weakened\n' }], deleted: [] },
+        localRunner,
+        scratch,
+      );
+      expect(g.outcome).toBe('pass');
+      expect(g.dropped).toEqual([normal(path)]);
+    }
+    const gone = await grade(
+      fx.task,
+      prepared,
+      { files: [fixed], deleted: ['test/visible.test.js'] },
+      localRunner,
+      scratch,
+    );
+    expect(gone).toMatchObject({ outcome: 'pass', dropped: ['test/visible.test.js'] });
+  });
+
+  it('grades fail with a note when the PR touches only test-side files', async () => {
+    const { fx, prepared, scratch } = await prepareFixture({ specs: ['test/visible.test.js'] });
+    const g = await grade(
+      fx.task,
+      prepared,
+      { files: [{ path: 'test/visible.test.js', content: '// weakened\n' }], deleted: ['test/slug-hidden.test.js'] },
+      localRunner,
+      scratch,
+    );
+    expect(g).toMatchObject({
+      outcome: 'fail',
+      specs: null,
+      dropped: ['test/visible.test.js', 'test/slug-hidden.test.js'],
+    });
+    expect(g.note).toMatch(/nothing to grade: .*only test-side files, dropped test\/visible\.test\.js/);
+  });
+
+  it('never lets a dropped test-side edit reach the graded tree', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    plant(prepared.installed, { 'src/cases.spec.ts': 'export const cases = [1];\n' });
+    const seen: string[] = [];
+    const spy: Runner = {
+      async run({ cwd }) {
+        seen.push(
+          readFileSync(join(cwd, 'src/cases.spec.ts'), 'utf8'),
+          existsSync(join(cwd, 'src/new.test.ts')) ? 'new' : 'no-new',
+        );
+        return localRunner.run({ argv: ['true'], cwd, image: '', network: false, timeoutMs: 1000 });
+      },
+    };
+    await grade(
+      fx.task,
+      prepared,
+      {
+        files: [
+          fixed,
+          { path: 'src/cases.spec.ts', content: 'export const cases = [];\n' },
+          { path: 'src/new.test.ts', content: 'x\n' },
+        ],
+        deleted: [],
+      },
+      spy,
+      scratch,
+    );
+    expect(seen).toEqual(['export const cases = [1];\n', 'no-new']);
+  });
 
   it.each([
     'test/helpers/util.js',
@@ -391,17 +447,17 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
     'scripts/global.ts',
     'scripts/global.js',
     'packages/a/tests/x.js',
-  ])('refuses a PR that writes or deletes %s, which the base tree owns', async (path) => {
+  ])('drops a PR that writes or deletes %s, which the base tree owns, and grades the rest', async (path) => {
     const { fx, prepared, scratch } = await prepareFixture();
     plant(prepared.installed, {
-      'test/helpers/util.js': 'export {};\n',
+      'test/helpers/util.js': PASSING,
       'test/fixtures/data.json': '{}\n',
       'test/__snapshots__/a.test.js.snap': 'x\n',
       'src/cases.spec.ts': 'export const cases = [1, 2, 3];\n',
       'src/__snapshots__/x.snap': 'x\n',
-      'src/a.test.mjs': 'export {};\n',
-      'src/a_test.js': 'export {};\n',
-      'packages/a/tests/x.js': 'export {};\n',
+      'src/a.test.mjs': PASSING,
+      'src/a_test.js': PASSING,
+      'packages/a/tests/x.js': PASSING,
       'vitest.config.ts': `import setup from './scripts/setup.ts';\nexport default { test: { globalSetup: ['./scripts/global.ts'] }, setup };\n`,
       'scripts/setup.ts': 'export default 1;\n',
       'scripts/global.ts': 'export default 1;\n',
@@ -411,12 +467,12 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
       { files: [fixed], deleted: [path] },
     ]) {
       const g = await grade(fx.task, prepared, change, localRunner, scratch);
-      expect(g).toMatchObject({ outcome: 'fail', specs: null });
-      expect(g.note).toMatch(/the PR is refused: .* is a test-side file the grader restores from the base tree/);
+      expect(g.outcome).toBe('pass');
+      expect(g.dropped).toEqual([path]);
     }
   });
 
-  it('refuses a PR that empties a spec the hidden spec imports, the path-to-regexp-433 scenario', async () => {
+  it('drops a PR that empties a spec the hidden spec imports, the path-to-regexp-433 scenario', async () => {
     const { fx, prepared, scratch } = await prepareFixture();
     plant(prepared.installed, { 'src/cases.spec.js': `export const cases = ['a', 'b'];\n` });
     const hidden = join(prepared.hidden, 'test/slug-hidden.test.js');
@@ -426,13 +482,10 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
     );
     const emptied = { path: 'src/cases.spec.js', content: 'export const cases = [];\n' };
     const g = await grade(fx.task, prepared, { files: [fixed, emptied], deleted: [] }, localRunner, scratch);
-    expect(g.note).toMatch(/src\/cases\.spec\.js is a test-side file/);
-    expect((await grade(fx.task, prepared, { files: [fixed], deleted: [] }, localRunner, scratch)).outcome).toBe(
-      'pass',
-    );
+    expect(g).toMatchObject({ outcome: 'pass', dropped: ['src/cases.spec.js'] });
   });
 
-  it('refuses a same-stem file over a hidden test whose name matches no test pattern', async () => {
+  it('drops a same-stem file over a hidden test whose name matches no test pattern', async () => {
     const { fx, prepared, scratch } = await prepareFixture();
     mkdirSync(join(prepared.hidden, 'src'), { recursive: true });
     writeFileSync(join(prepared.hidden, 'src/oddname.js'), 'export {};\n');
@@ -443,7 +496,7 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
       localRunner,
       scratch,
     );
-    expect(g.note).toMatch(/src\/oddname\.ts is a test-side file/);
+    expect(g).toMatchObject({ outcome: 'pass', dropped: ['src/oddname.ts'] });
   });
 
   it('grades a run against the passing-test count recorded for the upstream fix', async () => {
@@ -550,5 +603,21 @@ describe.skipIf(POSIX_ONLY)('the row flags', () => {
     expect(await run({ files, webRequests: 2 })).toMatchObject({ flag: 'contaminated', outcome: 'pass' });
     expect((await run({ files, webRequests: 2 })).note).toMatch(/^2 server-side web requests;/);
     expect(await run({ files, webRequests: 0 })).toMatchObject({ flag: null });
+  });
+
+  it('records the dropped test-side paths in the row note and still grades the code fix', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    await writeVerified(prepared.dir, 0);
+    const files = [
+      { path: 'src/slug.js', content: FIXED },
+      { path: 'test/slug-hidden.test.js', content: '// weakened\n' },
+    ];
+    const row = await runTask(fx.task, 1, prepared, {
+      arm: scriptedArm('baseline', { [fx.task.id]: { files } }),
+      runner: localRunner,
+      scratch,
+    });
+    expect(row).toMatchObject({ outcome: 'pass', flag: null });
+    expect(row.note).toMatch(/dropped test-side edits test\/slug-hidden\.test\.js;/);
   });
 });

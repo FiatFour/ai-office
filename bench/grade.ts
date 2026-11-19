@@ -19,6 +19,7 @@ export interface Grade {
   readonly note: string;
   readonly specs: readonly SpecCount[] | null;
   readonly suspect: readonly string[];
+  readonly dropped: readonly string[];
 }
 
 export const NO_CHANGE: Change = { files: [], deleted: [] };
@@ -88,15 +89,30 @@ const readResult = (work: string): string => {
   }
 };
 
-const refusal = (task: TaskA, change: Change, side: TestSide): string | null => {
-  const graded = new Set([...task.specs, ...task.hiddenPaths].map(normal));
+const refusal = (change: Change): string | null => {
   for (const path of [...change.files.map((f) => f.path), ...change.deleted]) {
     const reason = protectedReason(path);
     if (reason !== null) return reason;
-    if (graded.has(normal(path))) return `${path} is a graded test file`;
-    if (refusesTestSide(side, path)) return `${path} is a test-side file the grader restores from the base tree`;
   }
   return null;
+};
+
+const dropTestSide = (
+  task: TaskA,
+  change: Change,
+  side: TestSide,
+): { readonly kept: Change; readonly dropped: readonly string[] } => {
+  const graded = new Set([...task.specs, ...task.hiddenPaths].map(normal));
+  const isDropped = (path: string): boolean => graded.has(normal(path)) || refusesTestSide(side, path);
+  const droppedFiles = change.files.filter((f) => isDropped(f.path)).map((f) => f.path);
+  const droppedDeleted = change.deleted.filter(isDropped);
+  return {
+    kept: {
+      files: change.files.filter((f) => !isDropped(f.path)),
+      deleted: change.deleted.filter((p) => !isDropped(p)),
+    },
+    dropped: [...new Set([...droppedFiles, ...droppedDeleted].map(normal))],
+  };
 };
 
 export const totalPassed = (specs: readonly SpecCount[]): number => specs.reduce((n, s) => n + s.passed, 0);
@@ -153,7 +169,7 @@ const runGraded = async (
   runner: Runner,
   scratch: string,
   minPassed: number,
-): Promise<Omit<Grade, 'suspect'>> => {
+): Promise<Omit<Grade, 'suspect' | 'dropped'>> => {
   mkdirSync(scratch, { recursive: true });
   const work = mkdtempSync(join(scratch, `${task.id}-`));
   try {
@@ -218,13 +234,23 @@ export const grade = async (
   minPassed = 0,
 ): Promise<Grade> => {
   const side = testSideOf(prepared.installed, prepared.hidden);
-  const refused = refusal(task, change, side);
-  if (refused !== null) return { outcome: 'fail', note: `the PR is refused: ${refused}`, specs: null, suspect: [] };
-  const ignored = new Set(change.files.filter((f) => isNewTestFile(side, f.path)).map((f) => f.path));
-  const suspect = change.files
+  const refused = refusal(change);
+  if (refused !== null)
+    return { outcome: 'fail', note: `the PR is refused: ${refused}`, specs: null, suspect: [], dropped: [] };
+  const { kept, dropped } = dropTestSide(task, change, side);
+  const ignored = new Set(kept.files.filter((f) => isNewTestFile(side, f.path)).map((f) => f.path));
+  if (dropped.length > 0 && kept.files.every((f) => ignored.has(f.path)) && kept.deleted.length === 0)
+    return {
+      outcome: 'fail',
+      note: `nothing to grade: the PR touches only test-side files, dropped ${dropped.join(', ')}`,
+      specs: null,
+      suspect: [],
+      dropped,
+    };
+  const suspect = kept.files
     .filter((f) => !ignored.has(f.path) && !isTestSide(f.path))
     .flatMap((f) => suspectReasons(f.path, baseText(prepared.installed, f.path), f.content));
-  return { ...(await runGraded(task, prepared, change, ignored, runner, scratch, minPassed)), suspect };
+  return { ...(await runGraded(task, prepared, kept, ignored, runner, scratch, minPassed)), suspect, dropped };
 };
 
 export const revertSanity = async (

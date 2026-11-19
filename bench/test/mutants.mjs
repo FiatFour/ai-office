@@ -522,9 +522,42 @@ const MUTANTS = [
     tests: [CLOSURE],
   },
   {
-    name: 'test-side-edit-allowed',
-    claim: 'a PR cannot write or delete a test-side file of the base tree',
-    edits: [['bench/grade.ts', 'if (refusesTestSide(side, path))', 'if (false)']],
+    name: 'test-side-edit-leaks',
+    claim: 'a dropped test-side edit never reaches the graded tree, even when it is not a hidden file',
+    edits: [
+      ['bench/grade.ts', 'files: change.files.filter((f) => !isDropped(f.path)),', 'files: change.files,'],
+      ['bench/grade.ts', 'deleted: change.deleted.filter((p) => !isDropped(p)),', 'deleted: change.deleted,'],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'test-side-drop-not-applied',
+    claim: 'a PR that edits a test-side file is graded on the rest instead of being refused as a whole',
+    edits: [
+      [
+        'bench/grade.ts',
+        'const { kept, dropped } = dropTestSide(task, change, side);',
+        "const { kept, dropped } = dropTestSide(task, change, side);\n  if (dropped.length > 0) return { outcome: 'fail', note: 'the PR is refused', specs: null, suspect: [], dropped: [] };",
+      ],
+    ],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'dropped-paths-not-recorded',
+    claim: 'the paths dropped from the graded diff are recorded on the grade and in the row note',
+    edits: [['bench/run.ts', '? `dropped test-side edits ${dropped.join', '? `${dropped.length} ${[].join']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'dropped-set-empty',
+    claim: 'the grade names every dropped path',
+    edits: [['bench/grade.ts', 'minPassed)), suspect, dropped };', 'minPassed)), suspect, dropped: [] };']],
+    tests: [CLOSURE],
+  },
+  {
+    name: 'only-test-side-graded',
+    claim: 'a PR that touches only test-side files grades fail with a nothing-to-grade note',
+    edits: [['bench/grade.ts', 'if (dropped.length > 0 && kept.files.every', 'if (false && kept.files.every']],
     tests: [CLOSURE],
   },
   {

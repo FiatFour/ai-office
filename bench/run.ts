@@ -41,6 +41,9 @@ const flagOf = (webRequests: number | null, suspect: readonly string[]): [Flag |
       ? ['suspect', `${suspect.join(', ')}; `]
       : [null, ''];
 
+const dropNote = (dropped: readonly string[]): string =>
+  dropped.length > 0 ? `dropped test-side edits ${dropped.join(', ')}; ` : '';
+
 export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx: RunContext): Promise<Row> => {
   const verifiedFile = join(prepared.dir, 'verified.json');
   if (!existsSync(verifiedFile))
@@ -117,7 +120,7 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
     humanMinutes: done.humanMinutes,
     wallMs: wall(),
     agentMs,
-    note: failure(`${why}${done.note}; ${graded.note}`),
+    note: failure(`${why}${dropNote(graded.dropped)}${done.note}; ${graded.note}`),
   };
 };
 

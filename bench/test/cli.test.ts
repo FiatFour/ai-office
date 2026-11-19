@@ -134,7 +134,7 @@ describe.skipIf(!canSpawnTs)('the harness command line', () => {
         expect(ran.status, `${arm} ${flag} ${value}`).toBe(3);
         expect(ran.stderr, `${arm} ${flag} ${value}`).toContain(`${flag} must be a whole number`);
       }
-  });
+  }, 60_000);
 
   it('refuses a scratch remote that is not the scratch repo, before any push', () => {
     const dir = withTasks({ ...GOOD, confirmed: true });

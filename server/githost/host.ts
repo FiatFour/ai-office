@@ -98,6 +98,8 @@ export interface LineComment {
   readonly body: string;
 }
 
+export const DROPPED_MARK = '<!-- agent-works:comments-in-body -->';
+
 export interface ReviewDraft {
   readonly commitId: string;
   readonly verdict: Verdict;

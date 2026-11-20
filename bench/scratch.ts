@@ -303,6 +303,7 @@ export interface ScratchOptions {
   readonly keep?: boolean;
   readonly pollMs?: number;
   readonly settleMs?: number;
+  readonly reviewRetryMs?: number;
   readonly reviewPollMs?: number;
 }
 
@@ -347,6 +348,7 @@ export const scratchEnv = (o: ScratchOptions): FactoryEnv => {
           onJobFailed: (_task, error) => crew.fail(error),
           pollMs: o.pollMs ?? 10_000,
           ...(o.settleMs === undefined ? {} : { settleMs: o.settleMs }),
+          ...(o.reviewRetryMs === undefined ? {} : { reviewRetryMs: o.reviewRetryMs }),
         }),
         removed: (change) => removedVia(send, target.repo, change.number),
         close: async () => {

@@ -8,17 +8,19 @@ import { GITLAB_EVENTS, GITLAB_WRITES, gitlab, gitlabScope, parseGitlab } from '
 import {
   type ApiCall,
   allPages,
+  DROPPED_MARK,
   type GitHost,
   guard,
   type HostEvent,
   type HttpRequest,
+  type HttpResponse,
   PayloadError,
   signatureValid,
   toFact,
   toPoll,
   WriteRefused,
 } from '../githost/host.ts';
-import { FakeGithub } from './fakes/github-api.ts';
+import { FakeGithub, UNRESOLVED_LINE } from './fakes/github-api.ts';
 import { FakeGitlab } from './fakes/gitlab-api.ts';
 
 type Fixture = { host: 'github' | 'gitlab'; event: string; body: Record<string, unknown> };
@@ -708,6 +710,186 @@ describe('a review the host refuses on a PR the same account opened', () => {
     });
     expect(review).toMatchObject({ verdict: 'comment', reviewer: 'fiatfour', commitId: head });
     expect(fake.reviews.at(-1)?.body).toContain('"changes"');
+  });
+});
+
+describe('a GitHub review with inline comments the host cannot place', () => {
+  const OLD = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+  const lines = (edit?: string) => `${OLD.map((l) => (l === 'two' && edit !== undefined ? edit : l)).join('\n')}\n`;
+
+  const open = async (account: string, files: Array<{ path: string; content: string }>) => {
+    const fake = new FakeGithub();
+    fake.commitOn('main', { 'src/old.txt': 'gone\n', 'src/big.txt': lines() });
+    const author = github({ repo: 'acme/app', base: 'main', send: fake.transport('aw-bot'), log: () => {} });
+    const head = await author.pushFiles('acme/app', {
+      branch: 'aw/alpha/t1',
+      base: 'main',
+      files,
+      message: 'm',
+    });
+    fake.trees.get(head)?.delete('src/old.txt');
+    const pr = await author.openChange('acme/app', { branch: 'aw/alpha/t1', base: 'main', title: 't', body: 'b' });
+    const host = github({ repo: 'acme/app', base: 'main', send: fake.transport(account), log: () => {} });
+    return { fake, host, head, number: pr.number };
+  };
+
+  const changed = [{ path: 'src/big.txt', content: lines('TWO') }];
+
+  it('refuses a line outside the diff with the 422 shape the host gives', async () => {
+    const { fake, number, head } = await open('aw-reviewer', changed);
+    const send = fake.transport('aw-reviewer');
+    const response = await send({
+      method: 'POST',
+      path: `/repos/acme/app/pulls/${number}/reviews`,
+      body: {
+        commit_id: head,
+        event: 'COMMENT',
+        body: 'x',
+        comments: [{ path: 'src/big.txt', line: 12, side: 'RIGHT', body: 'far' }],
+      },
+    });
+    expect(response).toEqual({ status: 422, body: UNRESOLVED_LINE });
+    expect(fake.reviews).toEqual([]);
+  });
+
+  it('accepts a changed line and a context line, and refuses a far line, a deleted file and a file the PR left alone', async () => {
+    const { fake, number, head, host } = await open('aw-reviewer', [
+      ...changed,
+      { path: 'src/new.txt', content: 'n\n' },
+    ]);
+    const draft = (path: string, line: number) => ({
+      commitId: head,
+      verdict: 'comment' as const,
+      body: 'b',
+      comments: [{ path, line, body: 'c' }],
+    });
+    await host.postReview('acme/app', number, draft('src/big.txt', 2));
+    await host.postReview('acme/app', number, draft('src/big.txt', 5));
+    await host.postReview('acme/app', number, draft('src/new.txt', 1));
+    expect(fake.comments.map((c) => `${c.path}:${c.line}`)).toEqual([
+      'src/big.txt:2',
+      'src/big.txt:5',
+      'src/new.txt:1',
+    ]);
+    for (const [path, line] of [
+      ['src/big.txt', 6],
+      ['src/old.txt', 1],
+      ['README.md', 1],
+      ['src/new.txt', 2],
+    ] as const) {
+      fake.comments.length = 0;
+      await host.postReview('acme/app', number, draft(path, line));
+      expect(fake.comments).toEqual([]);
+    }
+  });
+
+  it('reposts without the inline comments and carries each one, path:line and body, into the review body', async () => {
+    const { fake, number, head, host } = await open('aw-reviewer', changed);
+    const before = fake.reviews.length;
+    const posted = await host.postReview('acme/app', number, {
+      commitId: head,
+      verdict: 'changes',
+      body: 'needs work\n<!-- agent-works:review worker=vega verdict=changes -->',
+      comments: [
+        { path: 'src/big.txt', line: 2, body: 'inside' },
+        { path: 'src/big.txt', line: 12, body: 'outside' },
+        { path: 'src/old.txt', line: 1, body: 'deleted' },
+      ],
+    });
+    expect(posted).toMatchObject({ kind: 'review', verdict: 'changes', reviewer: 'aw-reviewer', commitId: head });
+    expect(fake.reviews.length).toBe(before + 1);
+    expect(fake.comments).toEqual([]);
+    const body = fake.reviews.at(-1)?.body ?? '';
+    expect(body).toContain('needs work\n<!-- agent-works:review worker=vega verdict=changes -->');
+    expect(body).toContain(DROPPED_MARK);
+    for (const finding of ['`src/big.txt:2`\ninside', '`src/big.txt:12`\noutside', '`src/old.txt:1`\ndeleted'])
+      expect(body).toContain(finding);
+  });
+
+  it('handles the own-pull-request refusal and the outside-the-diff refusal on one review', async () => {
+    const { fake, number, head, host } = await open('aw-bot', changed);
+    const posted = await host.postReview('acme/app', number, {
+      commitId: head,
+      verdict: 'approve',
+      body: 'ok',
+      comments: [{ path: 'src/big.txt', line: 12, body: 'outside' }],
+    });
+    expect(posted).toMatchObject({ verdict: 'comment', reviewer: 'aw-bot', commitId: head });
+    expect(fake.reviews).toHaveLength(1);
+    const body = fake.reviews[0]?.body ?? '';
+    expect(body).toContain('"approve"');
+    expect(body).toContain('`src/big.txt:12`\noutside');
+  });
+
+  it('copes with the two refusals arriving in the other order, and stops when the refusal is something else', async () => {
+    const refusals = [
+      { status: 422, body: UNRESOLVED_LINE },
+      { status: 422, body: { message: 'Review Can not approve your own pull request' } },
+    ];
+    const sent: unknown[] = [];
+    const send = async (request: HttpRequest): Promise<HttpResponse> => {
+      sent.push(request.body);
+      const refusal = refusals.shift();
+      if (refusal !== undefined) return refusal;
+      return {
+        status: 200,
+        body: {
+          id: 9,
+          user: { login: 'x' },
+          state: 'COMMENTED',
+          commit_id: 'c',
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: '',
+        },
+      };
+    };
+    const host = github({ repo: 'acme/app', base: 'main', send, log: () => {} });
+    await host.postReview('acme/app', 1, {
+      commitId: 'c'.repeat(40),
+      verdict: 'approve',
+      body: 'ok',
+      comments: [{ path: 'a', line: 1, body: 'b' }],
+    });
+    expect(sent.map((b) => (b as { event: string; comments: unknown[] }).comments.length)).toEqual([1, 0, 0]);
+    expect(sent.map((b) => (b as { event: string }).event)).toEqual(['APPROVE', 'APPROVE', 'COMMENT']);
+
+    const other = github({
+      repo: 'acme/app',
+      base: 'main',
+      send: async () => ({
+        status: 422,
+        body: { message: 'Unprocessable Entity', errors: ['commit_id is not part of the pull request'] },
+      }),
+      log: () => {},
+    });
+    await expect(
+      other.postReview('acme/app', 1, {
+        commitId: 'c'.repeat(40),
+        verdict: 'comment',
+        body: 'b',
+        comments: [{ path: 'a', line: 1, body: 'b' }],
+      }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('keeps the review body under the host limit and says how many findings it left out', async () => {
+    const { fake, number, head, host } = await open('aw-reviewer', changed);
+    const comments = Array.from({ length: 30 }, (_, i) => ({
+      path: 'src/big.txt',
+      line: 12,
+      body: `${i}`.padEnd(5000, 'x'),
+    }));
+    await host.postReview('acme/app', number, { commitId: head, verdict: 'comment', body: 'b', comments });
+    const body = fake.reviews.at(-1)?.body ?? '';
+    expect(body.length).toBeLessThan(65536);
+    expect(body).toMatch(/\d+ more comments do not fit/);
+  });
+
+  it('refuses a review for a commit the PR does not hold', async () => {
+    const { host, number } = await open('aw-reviewer', changed);
+    await expect(
+      host.postReview('acme/app', number, { commitId: 'f'.repeat(40), verdict: 'comment', body: 'b', comments: [] }),
+    ).rejects.toMatchObject({ status: 422 });
   });
 });
 

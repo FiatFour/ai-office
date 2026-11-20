@@ -5,7 +5,7 @@ import type { AgentRuntime } from '../agents/runtime.ts';
 import { scripted } from '../agents/scripted.ts';
 import { github } from '../githost/github.ts';
 import { gitlab } from '../githost/gitlab.ts';
-import type { ApiCall, GitHost } from '../githost/host.ts';
+import { type ApiCall, type GitHost, HostError } from '../githost/host.ts';
 import { bodyProblem } from '../githost/sanitize.ts';
 import { type RunningHq, startHq } from '../hq.ts';
 import { type ActionItem, cagesMode } from '../modes/cages.ts';
@@ -44,6 +44,7 @@ interface Setup {
   readonly proxy?: FakeProxy;
   readonly runtime?: AgentRuntime;
   readonly pollMs?: number;
+  readonly reviewRetryMs?: number;
 }
 
 const boot = async ({
@@ -53,6 +54,7 @@ const boot = async ({
   proxy = new FakeProxy(),
   runtime,
   pollMs = 30,
+  reviewRetryMs = 5,
 }: Setup) => {
   const agent = runtime ?? scripted({ scripts: SCRIPTS, egress: proxy, retryMs: 10 });
   const hq = await startHq({
@@ -73,6 +75,7 @@ const boot = async ({
       workers: { nova: agent, vega: agent },
       egress: proxy,
       pollMs,
+      reviewRetryMs,
     }),
   });
   running.push(hq);
@@ -495,6 +498,120 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
     const fixes = rec.runs.filter((r) => r.role === 'author' && r.round > 0);
     expect(fixes.map((r) => r.round)).toEqual([1, 2, 3]);
     expect(fixes.map((r) => r.comments)).toEqual([1, 1, 1]);
+  });
+
+  it('files a review whose inline comment is outside the diff, and gives the fix round the finding from the review body', async () => {
+    const { fake, hosts } = twoAccounts();
+    const scripts = {
+      ...SCRIPTS,
+      'alpha/t2': {
+        ...SCRIPTS['alpha/t2'],
+        reviews: [
+          {
+            verdict: 'changes',
+            body: 'Fix it.',
+            comments: [{ path: 'docs/note.md', line: 99, body: 'Say "second draft".' }],
+          },
+          { verdict: 'approve', body: 'Fine.', comments: [] },
+        ],
+      },
+    } as typeof SCRIPTS;
+    const inner = scripted({ scripts });
+    const asked: string[][] = [];
+    const runtime: AgentRuntime = {
+      id: 'scripted',
+      run: (job) => {
+        if (job.role === 'author' && job.round > 0)
+          asked.push(job.comments.map((c) => `${c.path}|${c.line}|${c.body}`));
+        return inner.run(job);
+      },
+    };
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    const ready = await until(hq, (s) => action('ready_to_merge')(s) !== undefined);
+    expect(fake.reviews.map((r) => [r.user, r.state])).toEqual([
+      ['vega', 'CHANGES_REQUESTED'],
+      ['vega', 'APPROVED'],
+    ]);
+    expect(fake.comments).toEqual([]);
+    expect(ready.mode?.rounds['alpha/t2']).toBe(1);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toHaveLength(1);
+    expect(asked[0]?.[0]).toMatch(/^null\|null\|[\s\S]*docs\/note\.md:99[\s\S]*second draft/);
+  });
+
+  it('does not end the task when the host refuses a review for a head that moved while the reviewer worked', async () => {
+    const { fake, hosts } = twoAccounts();
+    const hook = { current: (() => {}) as Hook };
+    let moved = false;
+    hook.current = (method) => {
+      if (method !== 'postReview' || moved) return;
+      moved = true;
+      fake.commitOn('aw/alpha/t1', { 'src/human.txt': 'pushed by a person\n' });
+      throw new HostError({ method: 'POST', path: '/repos/acme/app/pulls/1/reviews' }, 422, {
+        message: 'Unprocessable Entity',
+        errors: ['commit_id is not part of the pull request'],
+      });
+    };
+    const { hq } = await boot({ host: hosts.host, reviewHost: hooked(hosts.reviewHost, hook), pollMs: 60_000 });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, (s) => station('alpha/t1')(s) === 'merge');
+    expect(moved).toBe(true);
+    expect(fake.reviews.map((r) => r.commit)).toEqual([fake.refs.get('aw/alpha/t1')]);
+  });
+
+  it('posts the review again after a rate limit or a server error, without a second reviewer session', async () => {
+    const { fake, hosts } = twoAccounts();
+    const hook = { current: (() => {}) as Hook };
+    const statuses = [429, 403, 502];
+    hook.current = (method) => {
+      const status = statuses.shift();
+      if (method !== 'postReview' || status === undefined) return;
+      throw new HostError({ method: 'POST', path: '/repos/acme/app/pulls/1/reviews' }, status, {
+        message: 'slow down',
+      });
+    };
+    const rec = recording();
+    const { hq } = await boot({ host: hosts.host, reviewHost: hooked(hosts.reviewHost, hook), runtime: rec.runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, (s) => station('alpha/t1')(s) === 'merge');
+    expect(statuses).toEqual([]);
+    expect(fake.reviews).toHaveLength(1);
+    expect(rec.runs.filter((r) => r.role === 'reviewer')).toHaveLength(1);
+  });
+
+  it('gives up on a rate limit that does not clear and fails the job', async () => {
+    const { hosts } = twoAccounts();
+    const hook = { current: (() => {}) as Hook };
+    let refused = 0;
+    hook.current = (method) => {
+      if (method !== 'postReview') return;
+      refused += 1;
+      throw new HostError({ method: 'POST', path: '/repos/acme/app/pulls/1/reviews' }, 429, { message: 'slow down' });
+    };
+    const { hq } = await boot({ host: hosts.host, reviewHost: hooked(hosts.reviewHost, hook) });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, () => refused >= 12);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(refused).toBe(12);
+    expect(station('alpha/t1')(hq.snapshot())).toBe('qc');
+  });
+
+  it('still ends the task when a review fails and the head did not move', async () => {
+    const { hosts } = twoAccounts();
+    const hook = { current: (() => {}) as Hook };
+    let refused = 0;
+    hook.current = (method) => {
+      if (method !== 'postReview') return;
+      refused += 1;
+      throw new HostError({ method: 'POST', path: '/repos/acme/app/pulls/1/reviews' }, 400, { message: 'bad' });
+    };
+    const { hq } = await boot({ host: hosts.host, reviewHost: hooked(hosts.reviewHost, hook) });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, () => refused >= 3);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(refused).toBe(3);
+    expect(station('alpha/t1')(hq.snapshot())).toBe('qc');
   });
 
   it('posts no brief for a head that moved, and shows merge-ready only for the brief on the current head', async () => {

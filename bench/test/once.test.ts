@@ -185,6 +185,7 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
           workRoot: join(cache, 'scratch'),
           pollMs: 30,
           settleMs: 10,
+          reviewRetryMs: 5,
           reviewPollMs: 30,
         });
         const env: FactoryEnv = {
@@ -243,6 +244,7 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
               workers: crew.workers,
               pollMs: 30,
               settleMs: 10,
+              reviewRetryMs: 5,
             }),
           });
           running.push(hq);

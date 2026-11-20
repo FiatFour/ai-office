@@ -15,6 +15,8 @@ const CLOSURE = 'bench/test/closure.test.ts';
 const FACTORY = 'bench/test/factory.test.ts';
 const ONCE = 'bench/test/once.test.ts';
 const NOCI = 'bench/test/no-ci.test.ts';
+const CONTRACT = 'server/test/githost.contract.test.ts';
+const CAGES = 'server/test/cages.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -1154,6 +1156,75 @@ const MUTANTS = [
       ],
     ],
     tests: [FACTORY],
+  },
+  {
+    name: 'review-outside-diff-not-reposted',
+    claim: 'a review GitHub refuses for an inline comment outside the diff is reposted without it',
+    edits: [['server/githost/github.ts', 'comments.length > 0 && OUTSIDE_THE_DIFF.test(refusal)', 'false']],
+    tests: [CONTRACT, CAGES],
+  },
+  {
+    name: 'review-dropped-comments-lost',
+    claim: 'the inline comments a reposted review drops are carried into its body',
+    edits: [['server/githost/github.ts', 'text = withDropped(text, comments);', 'void withDropped;']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'review-dropped-last-comment-lost',
+    claim: 'every dropped comment is carried, the last one included',
+    edits: [
+      [
+        'server/githost/github.ts',
+        'for (const c of comments) {\n    const next',
+        'for (const c of comments.slice(0, -1)) {\n    const next',
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'review-body-unbounded',
+    claim: 'the carried comments stop before the review body passes the host limit',
+    edits: [['server/githost/github.ts', 'if (next.length > REVIEW_BODY_LIMIT) break;', '']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'review-own-pr-refusal-not-handled-with-comments',
+    claim: 'the same-account downgrade still works when the review also has comments the host cannot place',
+    edits: [
+      ['server/githost/github.ts', "if (event !== 'COMMENT' && OWN_PULL_REQUEST.test(refusal)) {", 'if (false) {'],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'fix-round-misses-dropped-comments',
+    claim: 'the author of a fix round is given the findings that were carried into the review body',
+    edits: [['server/modes/cages.ts', 'r.body.includes(DROPPED_MARK))', 'false)']],
+    tests: [CAGES],
+  },
+  {
+    name: 'review-refused-on-moved-head-ends-task',
+    claim: 'a review the host refuses for a head that moved is not an error, the new head is reviewed instead',
+    edits: [['server/modes/cages.ts', 'if (now.change.headSha === head) throw error;', 'throw error;']],
+    tests: [CAGES],
+  },
+  {
+    name: 'review-not-retried-on-rate-limit',
+    claim:
+      'a review the host refuses for a rate limit or a server error is posted again without a new reviewer session',
+    edits: [['server/modes/cages.ts', 'if (!busy || attempt >= REVIEW_POSTS) throw error;', 'throw error;']],
+    tests: [CAGES],
+  },
+  {
+    name: 'review-retried-forever',
+    claim: 'the review is posted again only a few times before the job fails',
+    edits: [['server/modes/cages.ts', 'if (!busy || attempt >= REVIEW_POSTS) throw error;', 'if (!busy) throw error;']],
+    tests: [CAGES],
+  },
+  {
+    name: 'review-refused-on-same-head-swallowed',
+    claim: 'a review the host refuses while the head did not move still fails the job',
+    edits: [['server/modes/cages.ts', 'if (now.change.headSha === head) throw error;', 'if (false) throw error;']],
+    tests: [CAGES],
   },
 ];
 

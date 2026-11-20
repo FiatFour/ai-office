@@ -1016,8 +1016,8 @@ const MUTANTS = [
     edits: [
       [
         'bench/scratch.ts',
-        'await dropWork(host, send, target, names.work);',
-        'await dropWork(host, o.send, target, names.work);',
+        'await dropWork(plain, send, target, names.work);',
+        'await dropWork(plain, o.send, target, names.work);',
       ],
     ],
     tests: [FACTORY],

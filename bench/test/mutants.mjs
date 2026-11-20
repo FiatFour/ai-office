@@ -14,6 +14,7 @@ const CLI = 'bench/test/cli.test.ts';
 const CLOSURE = 'bench/test/closure.test.ts';
 const FACTORY = 'bench/test/factory.test.ts';
 const ONCE = 'bench/test/once.test.ts';
+const NOCI = 'bench/test/no-ci.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -1056,6 +1057,103 @@ const MUTANTS = [
     claim: 'every factory worker mounts the home its mapping names',
     edits: [['server/sandbox/container.ts', 'homeName(this.homeWorker(spec.worker))', 'homeName(spec.worker)']],
     tests: [CAGE],
+  },
+  {
+    name: 'no-ci-status-never-posted',
+    claim: 'a head the crew pushed gets the harness status, so a host with no checks still reaches qc and a review',
+    edits: [['bench/no-ci.ts', 'await mark(head);\n      return inner.snapshot(repo, number);', 'return seen;']],
+    tests: [NOCI, FACTORY],
+  },
+  {
+    name: 'no-ci-status-on-any-head',
+    claim: 'the status goes only on a head the guarded push produced',
+    edits: [
+      [
+        'bench/no-ci.ts',
+        'if (!produced.has(head) || marked.has(head)) return seen;',
+        'if (marked.has(head)) return seen;',
+      ],
+    ],
+    tests: [NOCI],
+  },
+  {
+    name: 'no-ci-status-every-read',
+    claim: 'the status is posted once per head, however often the PR is read',
+    edits: [
+      [
+        'bench/no-ci.ts',
+        'if (!produced.has(head) || marked.has(head)) return seen;',
+        'if (!produced.has(head)) return seen;',
+      ],
+      ['bench/no-ci.ts', 'if (seen.checks.some(', 'if (false && seen.checks.some('],
+    ],
+    tests: [NOCI],
+  },
+  {
+    name: 'no-ci-status-first-head-only',
+    claim: 'a fix round head gets its own status',
+    edits: [
+      [
+        'bench/no-ci.ts',
+        'if (!produced.has(head) || marked.has(head)) return seen;',
+        'if (!produced.has(head) || marked.size > 0) return seen;',
+      ],
+    ],
+    tests: [NOCI, FACTORY],
+  },
+  {
+    name: 'no-ci-status-failure-retried',
+    claim: 'a status that failed is not posted again, so the row ends as an error without a retry',
+    edits: [['bench/no-ci.ts', '      failed = error;\n', '']],
+    tests: [NOCI, FACTORY],
+  },
+  {
+    name: 'no-ci-status-failure-unreported',
+    claim: 'a failed status is the failure of the crew at once, not only of the job that read the PR',
+    edits: [['bench/no-ci.ts', '      o.onFailure(error);\n', '']],
+    tests: [NOCI],
+  },
+  {
+    name: 'no-ci-guard-any-state',
+    claim: 'the status write rule allows only state success',
+    edits: [['bench/no-ci.ts', "b.state === 'success' && b.context", 'b.context']],
+    tests: [NOCI],
+  },
+  {
+    name: 'no-ci-guard-any-context',
+    claim: 'the status write rule allows only the harness context',
+    edits: [['bench/no-ci.ts', 'b.context === NO_CI_CONTEXT && ', '']],
+    tests: [NOCI],
+  },
+  {
+    name: 'no-ci-guard-any-ref',
+    claim: 'the status write rule names a full commit sha, not a branch',
+    edits: [['bench/no-ci.ts', '/^\\/statuses\\/[0-9a-f]{40}$/', '/^\\/statuses\\/[^/]+$/']],
+    tests: [NOCI],
+  },
+  {
+    name: 'no-ci-guard-extra-key',
+    claim: 'the status write rule allows no key besides state, context and description',
+    edits: [
+      [
+        'bench/no-ci.ts',
+        "keys: ['state', 'context', 'description']",
+        "keys: ['state', 'context', 'description', 'target_url']",
+      ],
+    ],
+    tests: [NOCI],
+  },
+  {
+    name: 'no-ci-status-not-wired',
+    claim: 'the factory arm wraps its host so every pushed head is marked',
+    edits: [
+      [
+        'bench/scratch.ts',
+        'const host = withNoCiStatus(plain, {',
+        'const host = ((h: typeof plain, _o: object) => h)(plain, {',
+      ],
+    ],
+    tests: [FACTORY],
   },
 ];
 

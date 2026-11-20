@@ -4,11 +4,18 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AgentRuntime } from '../../server/agents/runtime.ts';
 import { scripted } from '../../server/agents/scripted.ts';
-import { type ChangeSnapshot, type HttpRequest, type ReviewFact, WriteRefused } from '../../server/githost/host.ts';
+import {
+  type ChangeSnapshot,
+  type HttpRequest,
+  type ReviewFact,
+  type Transport,
+  WriteRefused,
+} from '../../server/githost/host.ts';
 import { FakeGithub } from '../../server/test/fakes/github-api.ts';
 import { hasSqlite, tempDir } from '../../server/test/helpers.ts';
 import { baselineArm, type FactoryEnv, factoryArm, removedVia, reviewSettled, ticketOf } from '../arms-live.ts';
 import { type TaskA, TaskRefused } from '../model.ts';
+import { NO_CI_CONTEXT } from '../no-ci.ts';
 import { checks, readRows, renderReport } from '../report.ts';
 import { appendRow, runTask, verifyTask } from '../run.ts';
 import { localRunner } from '../runner.ts';
@@ -360,11 +367,18 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
       },
     });
 
-    const setup = (over: { script?: 'changes-then-approve' | 'approve'; fail?: boolean; keep?: boolean } = {}) => {
-      const fake = new FakeGithub(REPO);
+    const setup = (
+      over: { script?: 'changes-then-approve' | 'approve'; fail?: boolean; keep?: boolean; statusStatus?: number } = {},
+    ) => {
+      const fake = new FakeGithub(REPO, null);
       const remote = bare();
       const log: string[] = [];
-      const send = fake.transport('aw-nova');
+      const plain = fake.transport('aw-nova');
+      const send: Transport = async (request) => {
+        if (over.statusStatus === undefined || !/\/statuses\//.test(request.path)) return plain(request);
+        fake.calls.push(request);
+        return { status: over.statusStatus, body: { message: 'Resource not accessible' } };
+      };
       const make = (ticketId: string): AgentRuntime =>
         usageOf(
           over.fail === true
@@ -449,6 +463,45 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
       expect(log.some((line) => /\/merge/.test(line))).toBe(false);
       expect([...log].sort()).toEqual(fake.calls.map((c) => `${c.method} ${c.path}`).sort());
       expect(fake.calls.some((c) => /\/merge/.test(c.path))).toBe(false);
+    });
+
+    it('reaches review on a host that reports no checks, with one harness status per head, fix round included', async () => {
+      const { fx, scratch, prepared, cache } = await verified();
+      const { fake, env } = setup();
+      const row = await runTask({ ...fx.task, timeoutMs: 8000 }, 1, prepared, {
+        arm: factoryArm(env(fx.task, join(cache, 'scratch'))),
+        runner: localRunner,
+        scratch,
+      });
+      expect(row).toMatchObject({ outcome: 'pass', reviewRounds: 1 });
+      expect(fake.reviews.map((r) => r.state)).toEqual(['COMMENTED', 'COMMENTED']);
+      const marks = fake.statuses.filter((s) => s.context === NO_CI_CONTEXT);
+      expect(marks).toHaveLength(2);
+      expect(new Set(marks.map((s) => s.sha)).size).toBe(2);
+      expect(fake.statuses.filter((s) => s.context !== NO_CI_CONTEXT)).toEqual([]);
+      const posts = fake.calls.filter((c) => c.method === 'POST' && c.path.includes('/statuses/'));
+      expect(posts.map((c) => c.path.split('/').at(-1))).toEqual(marks.map((s) => s.sha));
+      for (const mark of marks) {
+        const author = [...fake.parents.keys()].includes(mark.sha);
+        expect(author).toBe(true);
+        expect(fake.reviews.some((r) => r.commit === mark.sha)).toBe(true);
+      }
+    });
+
+    it('ends the row as an error without retry when the status cannot be posted', async () => {
+      const { fx, scratch, prepared, cache } = await verified();
+      const { fake, env } = setup({ statusStatus: 403 });
+      const row = await runTask({ ...fx.task, timeoutMs: 8000 }, 1, prepared, {
+        arm: factoryArm(env(fx.task, join(cache, 'scratch'))),
+        runner: localRunner,
+        scratch,
+      });
+      expect(row.outcome).toBe('error');
+      expect(row.note).toContain('no retry after the first failure');
+      expect(row.note).toContain('403');
+      expect(fake.calls.filter((c) => c.path.includes('/statuses/'))).toHaveLength(1);
+      expect(fake.calls.filter((c) => c.path.endsWith('/git/commits'))).toHaveLength(1);
+      expect(fake.reviews).toEqual([]);
     });
 
     it('leaves the PR and the branches for inspection when asked to keep them', async () => {

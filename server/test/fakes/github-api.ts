@@ -348,6 +348,13 @@ export class FakeGithub {
       this.issueComments.push(posted);
       return ok(shape(posted), 201);
     }
+    m = method === 'POST' ? /^\/statuses\/([0-9a-f]{40})$/.exec(rest) : null;
+    if (m) {
+      const head = m[1] ?? '';
+      if (!this.trees.has(head)) return fail(422, `No commit found for SHA: ${head}`);
+      this.setStatus(head, String(input.context), String(input.state));
+      return ok({ context: input.context, state: input.state, description: input.description ?? null }, 201);
+    }
     m = /^\/commits\/([0-9a-f]+)\/status$/.exec(rest);
     if (m) {
       const head = m[1];

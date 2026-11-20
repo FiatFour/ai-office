@@ -15,6 +15,7 @@ import { cagesMode } from '../server/modes/cages.ts';
 import { runBinary } from '../server/sandbox/engine.ts';
 import { type FactoryEnv, type Failure, removedVia } from './arms-live.ts';
 import { TaskRefused } from './model.ts';
+import { withNoCiStatus } from './no-ci.ts';
 import type { Prepared } from './workspace.ts';
 
 export const SCRATCH_REPO = 'FiatFour/agent-works-scratch';
@@ -312,15 +313,22 @@ export const scratchEnv = (o: ScratchOptions): FactoryEnv => {
     ...(o.reviewPollMs === undefined ? {} : { reviewPollMs: o.reviewPollMs }),
     async open(_task, ticket, prepared) {
       const names = namesOf(ticket.id);
-      const host = github({ repo: target.repo, base: names.base, send: o.send, log: o.log });
+      const plain = github({ repo: target.repo, base: names.base, send: o.send, log: o.log });
       const clear = async () => {
-        await dropWork(host, send, target, names.work);
+        await dropWork(plain, send, target, names.work);
         await dropBase(target, names.base, o.workRoot);
       };
       await clear();
       await seedBase(prepared.source, target, names.base, o.workRoot);
       const home = mkdtempSync(join(o.workRoot, 'hq-'));
       const crew = oneSessionEach(o.workers(prepared));
+      const host = withNoCiStatus(plain, {
+        repo: target.repo,
+        base: names.base,
+        send: o.send,
+        log: o.log,
+        onFailure: crew.fail,
+      });
       return {
         failure: crew.failure,
         host,

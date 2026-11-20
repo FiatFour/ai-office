@@ -10,6 +10,7 @@
       "actionItems": "Action items",
       "actionItemsCount": "Action items · {{count}}",
       "debug": "Debug",
+      "settings": "Settings",
       "menu": "HQ menu",
       "crew": "Crew",
       "crewCount": "Crew · {{count}}",
@@ -26,12 +27,11 @@
       "deliveredDetail": "{{task}} merged and shipped"
     },
     "station": {
-      "ORDER": "Order",
-      "CODE": "Code",
-      "TEST": "Test",
+      "ORDER": "ORDER",
+      "CODE": "CODE",
+      "TEST": "TEST",
       "QC": "QC",
-      "MERGE": "Merge",
-      "SHIPPING": "Shipping"
+      "SHIP": "SHIP"
     },
     "mood": {
       "working": "Working",
@@ -66,15 +66,19 @@
       },
       "open": "Open on the host"
     },
+    "settings": {
+      "title": "Settings",
+      "project": "Project",
+      "language": "Language"
+    },
     "debug": {
       "title": "Debug",
       "socket": "WebSocket",
       "socketOpen": "open",
       "socketClosed": "closed",
       "rev": "Snapshot rev",
-      "language": "Screen language",
       "mode": "Mode",
-      "modeDemo": "Demo replay",
+      "modeDemo": "Demo data",
       "modeLive": "Live HQ",
       "source": "Demo source",
       "events": "Events replayed",

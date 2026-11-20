@@ -3,6 +3,12 @@ import type { Box, State } from '@agent-works/core';
 export const STATIONS = ['ORDER', 'CODE', 'TEST', 'QC', 'MERGE', 'SHIPPING'] as const;
 export type StationLabel = (typeof STATIONS)[number];
 
+export const PANEL = ['ORDER', 'CODE', 'TEST', 'QC', 'SHIP'] as const;
+export type PanelLabel = (typeof PANEL)[number];
+
+export const panelOf = (station: StationLabel): PanelLabel =>
+  station === 'MERGE' || station === 'SHIPPING' ? 'SHIP' : station;
+
 export const STAMPS = ['SHIPPED', 'SCRAPPED', 'CHANGES'] as const;
 export type Stamp = (typeof STAMPS)[number];
 
@@ -63,7 +69,7 @@ export interface FloorView {
   readonly boxes: readonly BoxView[];
   readonly workers: readonly WorkerView[];
   readonly actions: readonly ActionView[];
-  readonly counts: Readonly<Record<StationLabel, number>>;
+  readonly counts: Readonly<Record<PanelLabel, number>>;
   readonly shipped: number;
 }
 
@@ -158,10 +164,10 @@ export const floorView = (snapshot: SnapshotLike): FloorView => {
   const actions = actionsOf(state, snapshot.actions ?? []);
   const names = new Set<string>(Object.keys(state.staff));
   for (const box of boxes) for (const owner of owners(box)) names.add(owner);
-  const counts = Object.fromEntries(STATIONS.map((station) => [station, 0])) as Record<StationLabel, number>;
+  const counts = Object.fromEntries(PANEL.map((station) => [station, 0])) as Record<PanelLabel, number>;
   const boxViews = boxes.map((box): BoxView => {
     const { station, stamp } = stationOf(box);
-    if (station !== null) counts[station] += 1;
+    if (station !== null) counts[panelOf(station)] += 1;
     return { id: box.id, code: codeOf(box.id), station, stamp, shipment: box.shipment };
   });
   const workers = [...names].sort().map((name): WorkerView => {

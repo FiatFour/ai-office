@@ -10,6 +10,7 @@
       "actionItems": "Action items",
       "actionItemsCount": "Action items · {{count}}",
       "debug": "Debug",
+      "settings": "ตั้งค่า",
       "menu": "เมนู HQ",
       "crew": "ทีมงาน",
       "crewCount": "ทีมงาน · {{count}}",
@@ -29,8 +30,7 @@
       "CODE": "เขียนโค้ด",
       "TEST": "ทดสอบ",
       "QC": "QC",
-      "MERGE": "Merge",
-      "SHIPPING": "ส่งของ"
+      "SHIP": "ส่งของ"
     },
     "mood": {
       "working": "กำลังทำงาน",
@@ -65,15 +65,19 @@
       },
       "open": "เปิดบน host"
     },
+    "settings": {
+      "title": "ตั้งค่า",
+      "project": "โปรเจกต์",
+      "language": "ภาษา"
+    },
     "debug": {
       "title": "Debug",
       "socket": "WebSocket",
       "socketOpen": "เปิด",
       "socketClosed": "ปิด",
       "rev": "Snapshot rev",
-      "language": "ภาษาหน้าจอ",
       "mode": "โหมด",
-      "modeDemo": "Demo replay",
+      "modeDemo": "Demo data",
       "modeLive": "HQ จริง",
       "source": "แหล่ง demo",
       "events": "events ที่เล่นแล้ว",

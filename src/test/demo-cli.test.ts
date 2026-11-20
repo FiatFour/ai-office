@@ -38,7 +38,7 @@ describe.skipIf(!canSpawnTs)('agent-works --demo', () => {
         .catch(() => false);
     }
     expect(shipped).toBe(true);
-    expect(out).toContain('Demo replay of fixtures/demo/events.jsonl');
+    expect(out).toContain('Demo data from fixtures/demo/events.jsonl');
     child.kill('SIGTERM');
     await exited(child);
     if (process.platform !== 'win32') expect(child.exitCode).toBe(0);
@@ -73,9 +73,9 @@ describe.skipIf(!canSpawnTs)('agent-works --demo', () => {
     child.stdout?.on('data', (chunk: Buffer) => {
       out += chunk.toString();
     });
-    for (let i = 0; i < 300 && !out.includes('Demo replay of'); i += 1)
+    for (let i = 0; i < 300 && !out.includes('Demo data from'); i += 1)
       await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(out).toContain('Demo replay of');
+    expect(out).toContain('Demo data from');
   };
 
   it('refuses every write with 403 while it replays', async () => {

@@ -326,7 +326,7 @@ const runDemo = async (port: number, env: NodeJS.ProcessEnv, noOpen: boolean, io
         );
       throw error;
     });
-    io.out(`Demo replay of ${source.label} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);
+    io.out(`Demo data from ${source.label} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);
     if (!noOpen) openBrowser(hq.url);
     const quit = () => void hq.close();
     for (const signal of DEMO_SIGNALS) process.on(signal, quit);

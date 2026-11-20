@@ -1,6 +1,6 @@
 ## What this adds
 
-The factory floor (480 by 270 pixel scene, one belt L1, boxes ORDER CODE TEST QC MERGE SHIPPING, four worker states, "!" for Action items, Action items drawer over a dimmed floor, keys 1 to 9 and D) and `agent-works --demo`, which replays `fixtures/demo/events.jsonl` through the same parser, reducer, ledger and snapshot path as `POST /api/events`. There is no separate mock data path. For the operator: `pnpm --filter @agent-works/floor build && node bin/agent-works.ts --demo` shows the recorded run from ticket to shipped. For the next engineer: a new snapshot state needs one row in `stationOf` or `moodOf` (`src/floor/model.ts`) and one case in `src/test/floor-state.test.ts`. ADR: `docs/decisions/0005-floor-view-and-demo-replay.md`.
+The factory floor (480 by 270 pixel scene, one belt L1, station cells ORDER CODE TEST QC SHIP, four worker states, "!" for Action items, Action items drawer over a dimmed floor, keys 1 to 9 and D) and `agent-works --demo`, which replays `fixtures/demo/events.jsonl` through the same parser, reducer, ledger and snapshot path as `POST /api/events`. There is no separate mock data path. For the operator: `pnpm --filter @agent-works/floor build && node bin/agent-works.ts --demo` shows the recorded run from ticket to shipped. For the next engineer: a new snapshot state needs one row in `stationOf` or `moodOf` (`src/floor/model.ts`) and one case in `src/test/floor-state.test.ts`. ADR: `docs/decisions/0005-floor-view-and-demo-replay.md`.
 
 **The recorded run is scripted, not a real Claude run.** The agent in the P1-2 export (`alpha/p12c`, scratch PR 6) was the scripted runtime, because the real run is parked on the operator's login. Neither P1-2 export reaches shipped (one account, the operator's merge is a parked gate), so lines 15 and 16 of the fixture are written by hand in the same shape. Lines 1 to 14 are the export unchanged.
 
@@ -132,7 +132,7 @@ Not killed on purpose: the verifier's `qc-mood-on-test-box` (a box in `test` has
 | 5 widths 1440 and 390 | PASS |
 | 3 sprite states | PASS |
 | 4 action drawer | PASS |
-| 7 axe-core | PASS: 0 violations, 188 incomplete nodes recorded, `docs/review/P1-3-review-axe.txt` |
+| 7 axe-core | PASS: 0 violations, 3 named-exception nodes (color-contrast on the Needs you chip), 188 incomplete nodes recorded, `docs/review/P1-3-review-axe.txt` |
 | 6 reduced motion | PASS |
 | 3.5 six cages, seven workers | PASS |
 | 9 canvas compare | PASS (73 entries, 513 inventory keys covered, 0 uncovered, 17 negative tests, see below) |
@@ -154,14 +154,14 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 <!-- differences:start -->
 | id | status | what differs |
 | --- | --- | --- |
-| D01 | fixed | The demo chip says "Demo data" as on the canvas (it said "Demo replay"). The Debug drawer still says "Demo replay" for the mode. |
+| D01 | fixed | The demo chip, the Debug drawer's mode line and the `--demo` start line say "Demo data" as on the canvas (they said "Demo replay"). Operator call 2026-11-21, follow the canvas. The demo shows the recorded run's own worker names (nova, vega); the canvas crew (Captain, Byte, Pixel, Echo) is not copied in, because the recorded export is the demo's provenance and the snapshot has no field the canvas names would honestly fill. |
 | D02 | not-built | Host chip (detected computer) in the run-mode button. The snapshot has no host or shell field. |
 | D03 | not-built | Factory switcher ("FACTORY my-app", "3 lines", "+2 elsewhere"). Needs the factory park screen. |
 | D04 | not-built | Order-board select (First active, Backlog). Needs boards. |
 | D05 | not-built | Line speed buttons 1x, 2x, 4x. |
 | D06 | not-built | Zoom out and zoom in buttons. |
 | D07 | not-built | Run-mode chip ("MODE Cages / Sandbox cages · 6 running", WIN · PWSH, blinking dot). The snapshot has no run mode. |
-| D08 | not-built | HQ menu: + New order, Setup, Preflight, Boards, Docs, PRs / MRs, Terminal, Settings. Built has Action items and Debug only. Each target is a later screen. |
+| D08 | not-built | HQ menu: + New order, Setup, Preflight, Boards, Docs, PRs / MRs, Terminal, Settings. Built has Action items, Debug and a Settings button (see D44). Each target is a later screen. |
 | D09 | not-built | Factory level 3 with a 340 / 500 XP bar. The snapshot has no level or XP. |
 | D10 | not-built | "+ Hire" button in the crew header. A button with no screen behind it would be dead. |
 | D11 | fixed | "N NEED YOU" in the crew header is #ffca28 as on the canvas (it was #ff8a80). Lane 9 reads the computed colour. |
@@ -169,7 +169,7 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 | D13 | not-built | Shift log feed (nine lines with icons and ages). The snapshot has no feed. |
 | D14 | not-built | Shift clock (SHIFT 2, 19:58, 4 shipped). |
 | D15 | not-built | Production order title "Sprint 1 — Auth + Billing" and the per-line list (L1 2 boxes, L2 1 blocked, L3 TEMP-1 on it). |
-| D16 | conflict | Station cells. The canvas has five (ORDER, CODE, TEST, QC, SHIP) in capitals. The plan and the sharpened prompt name six with MERGE. Built has six, written "Order Code Test QC Merge Shipping". |
+| D16 | fixed | Station cells. Five cells as on the canvas (ORDER, CODE, TEST, QC, SHIP) in capitals. Operator call 2026-11-21, follow the canvas over the plan and sharpened prompt (six, with MERGE). This is a display change only: `stationOf` and the lifecycle reducer keep six states, the scene still draws the MERGE gantry and the shipping dock where the canvas draws them, and a box in merge, shipping or shipped counts under SHIP (`panelOf` in `src/floor/model.ts`). |
 | D17 | not-built | Shipment status line "S-1 waits for L1 + L3 · 4 / 9 on the truck". |
 | D18 | not-built | Selected worker card: role and runtime line, EN and XP bars, TOOLS, a terminal, blocked sites with Allow and Dismiss, Worker file and Message buttons. Built has state, box, station and one line of text. |
 | D19 | not-built | Hotbar Q W E R T Y (Order, QC, Unlock, Stop, Term, Hire) with badges. |
@@ -195,9 +195,9 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 | D39 | changed | Belt: the canvas belt is 138 px wide and ends before the dock, built is 150 px and runs into the SHIPPING bay, so the box rests on the dock. Belt animation is a pattern shift (0.6 s) against the canvas 30 px slide (2.4 s). |
 | D40 | changed | Station labels. Built draws ORDER and CODE under the belt (the canvas has no such labels) and TEST, QC, MERGE in darker ink for contrast than the canvas (#8a3500, #6b4f00, #1b5e20 against #e65100, #c79a00, #2e7d32). |
 | D41 | changed | Worker movement. Canvas workers loop along the floor and a QC worker carries a labelled PR box on its head. Built places the worker at the cage, the break room or the QC gantry by mood and moves it between them with a stepped transition; the carried box is an unlabelled blue block. |
-| D42 | conflict | Mood chip colours. The canvas chip is cream text on #ef5350 (3.14 to 1). Built uses dark ink (5.1 to 1) so the text passes 4.5 to 1. |
-| D43 | conflict | Fonts. The canvas loads Silkscreen, Press Start 2P, Pixelify Sans and VT323 from Google Fonts. The spec says no network at runtime, so built serves the same four from @fontsource, plus Sarabun for Thai. |
-| D44 | conflict | Language switch. The spec puts it in Settings, Project, Language; the canvas floor has none. Settings is not built, so the switch sits in the Debug drawer. |
+| D42 | conflict | Mood chip colours. Operator call 2026-11-21, follow the canvas: the "Needs you" chip is cream #f5f3ec on #ef5350 as on the canvas, which is 3.14 to 1 against the 4.5 to 1 target. The other three chips already match the canvas. Named exception, narrow and not a pass: only axe rule `color-contrast` (lane 7 of `src/e2e/lanes.mjs`, `isNeedsChip` in `src/e2e/harness.mjs`) reports it, on nodes that are a `.chip[data-mood="needs"]` with exactly #f5f3ec on #ef5350 and a ratio of 3.14; any other colour, ratio or element is still a violation, the gate is not weakened for anything else, and `axe.txt` lists every excepted node. A person who needs 4.5 to 1 sees low contrast on this one chip; its text and the "!" button carry the same state. |
+| D43 | conflict | Fonts. Operator call 2026-11-21 was follow the canvas. The built floor already draws the canvas's four faces (Silkscreen, Press Start 2P, Pixelify Sans, VT323) at the canvas sizes; the only difference left is delivery. The canvas loads them from Google Fonts at runtime, which would break lane 7.5 (no request to a host other than HQ), the `font-src 'self'` policy pinned in `src/test/demo.test.ts`, and the spec rule of no network at runtime. Left as it is, for the operator to decide: built serves the same four from @fontsource, plus Sarabun for Thai glyphs the pixel faces lack. |
+| D44 | changed | Language switch. Operator call 2026-11-21, follow the canvas: the floor header has no language switch, and the canvas HQ menu has a Settings entry. Built now has the same Settings button in the HQ menu, which opens a Settings drawer with Project and Language, the place the spec names (Settings, Project, Language). The switch left the Debug drawer. The canvas Settings is a separate page (`Settings.dc.html`) that is not built; the drawer holds only the language. |
 | D45 | changed | HUD frame. The canvas HUD is a two-row header laid over the scene, 32 px controls and a 5 percent by 11 percent hit area per worker. Built is a one-row header above the scene, 28 to 32 px buttons, and a 44 px "!" target at 390 px. |
 | D46 | changed | Roster. The canvas draws Captain, Byte, Pixel, Nova, Echo and Temp-1 (their names, plates and cage plates); the built floor draws the workers HQ reports, with the hair, skin and shirt colours of its six slots. |
 | D47 | changed | Built-only header fields: "Snapshot rev N", the connection state "Live" or "Reconnecting", and "Replaying N of M events" in demo. The canvas header has none of them. |
@@ -231,7 +231,7 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 
 ## Spec versus canvas conflicts (the operator decides; the choice made in the code is stated)
 
-D16 stations (six, not five), D42 mood chip text colour (dark ink, 5.1 to 1, not cream, 3.14 to 1), D43 fonts (self-hosted, not Google Fonts), D44 language switch (Debug drawer, not Settings). `--demo` data: the spec says mock data, the sharpened prompt and the plan say to replay the recorded log; built the recorded log through the real reducer.
+Operator answered 2026-11-21: follow the canvas on all five. D16 stations are five cells (display only, the reducer keeps six states). D42 the Needs you chip is cream on #ef5350 as on the canvas, 3.14 to 1; the only exception is axe `color-contrast` on `.chip[data-mood="needs"]` with exactly those colours, listed in `axe.txt`, no gate weakened elsewhere. D43 fonts: the four faces already match; loading them from Google Fonts would break lane 7.5 and the CSP, so delivery stays @fontsource and the call is left to the operator. D44 the language switch is in a Settings drawer opened from the HQ menu entry the canvas has. `--demo` says "Demo data" in the chip, the Debug mode line and the start line; the data is the recorded log through the real reducer.
 
 ## Parked gates and gaps
 

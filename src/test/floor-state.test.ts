@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Event, initialState, reduce, type State } from '@agent-works/core';
 import { describe, expect, it } from 'vitest';
-import { floorView, STATIONS, stationOf } from '../floor/model.ts';
+import { floorView, PANEL, panelOf, STATIONS, stationOf } from '../floor/model.ts';
 
 const TASK = 'alpha/box-one';
 const REPO = 'acme/app';
@@ -123,7 +123,7 @@ describe('box station for each snapshot state', () => {
 
   it('counts boxes per station and the shipped total', () => {
     const counts = view(atShipped).counts;
-    expect(STATIONS.map((station) => counts[station])).toEqual([0, 0, 0, 0, 0, 1]);
+    expect(PANEL.map((station) => counts[station])).toEqual([0, 0, 0, 0, 1]);
     expect(view(atShipped).shipped).toBe(1);
     expect(view(atQc).shipped).toBe(0);
     expect(view(atQc).counts.QC).toBe(1);
@@ -308,6 +308,12 @@ describe('the floor view from the snapshot', () => {
     expect(STATIONS).toEqual(['ORDER', 'CODE', 'TEST', 'QC', 'MERGE', 'SHIPPING']);
   });
 
+  it('shows five cells as the canvas does, with MERGE and SHIPPING both under SHIP', () => {
+    expect(PANEL).toEqual(['ORDER', 'CODE', 'TEST', 'QC', 'SHIP']);
+    expect(STATIONS.map(panelOf)).toEqual(['ORDER', 'CODE', 'TEST', 'QC', 'SHIP', 'SHIP']);
+    expect(view(atMerge).counts).toEqual({ ORDER: 0, CODE: 0, TEST: 0, QC: 0, SHIP: 1 });
+  });
+
   it('carries the snapshot rev', () => {
     expect(floorView({ rev: 42, state: run(atQc) }).rev).toBe(42);
   });
@@ -319,7 +325,7 @@ describe('the floor view from the snapshot', () => {
   it('a box scrapped by a person is on no station, counts nowhere and asks nothing of its builder', () => {
     const scrapped = [...atCode, cancel];
     const found = view(scrapped);
-    expect(STATIONS.map((station) => found.counts[station])).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(PANEL.map((station) => found.counts[station])).toEqual([0, 0, 0, 0, 0]);
     expect(found.actions).toEqual([]);
     expect(mood(scrapped, 'nova')).toBe('break');
   });
@@ -335,7 +341,7 @@ describe('the floor view from the snapshot', () => {
     ];
     expect(run(events).boxes[TASK]?.state).toBe('shipping');
     expect(view(events).shipped).toBe(0);
-    expect(view(events).counts.SHIPPING).toBe(1);
+    expect(view(events).counts.SHIP).toBe(1);
   });
 
   describe('a box the reducer could not produce but the snapshot can carry', () => {

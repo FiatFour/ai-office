@@ -108,15 +108,39 @@ export const moods = (/** @type {import('playwright').Page} */ page) =>
 
 export const AXE = join(ROOT, 'src', 'node_modules', 'axe-core', 'axe.min.js');
 
+const NEEDS_CHIP = { fg: '#f5f3ec', bg: '#ef5350', ratio: 3.14 };
+
+/**
+ * The one named exception to the 4.5 to 1 contrast gate: the canvas "Needs you" chip
+ * (cream on #ef5350, 3.14 to 1). It matches only a color-contrast node that is a
+ * chip with data-mood="needs", with exactly those colours and that ratio.
+ * @param {string} rule @param {any} node
+ */
+export const isNeedsChip = (rule, node) => {
+  const data = node.any?.[0]?.data;
+  return (
+    rule === 'color-contrast' &&
+    /class="chip"/.test(node.html) &&
+    /data-mood="needs"/.test(node.html) &&
+    data?.fgColor === NEEDS_CHIP.fg &&
+    data?.bgColor === NEEDS_CHIP.bg &&
+    Math.abs(data?.contrastRatio - NEEDS_CHIP.ratio) < 0.01
+  );
+};
+
 /** @param {import('playwright').Page} page @param {string} label */
 export const runAxe = async (page, label) => {
   await page.evaluate(readFileSync(AXE, 'utf8'));
   const out = await page.evaluate(() => globalThis.axe.run(document, { resultTypes: ['violations', 'incomplete'] }));
-  const nodes = (/** @type {any[]} */ rules) =>
-    rules.flatMap((rule) =>
-      rule.nodes.map((node) => `${label} ${rule.id} (${rule.impact ?? 'n/a'}) ${node.target.join(' ')}`),
-    );
-  return { violations: nodes(out.violations), incomplete: nodes(out.incomplete) };
+  const line = (/** @type {any} */ rule, /** @type {any} */ node) =>
+    `${label} ${rule.id} (${rule.impact ?? 'n/a'}) ${node.target.join(' ')}`;
+  const nodes = (/** @type {any[]} */ rules, /** @type {(rule: string, node: any) => boolean} */ keep) =>
+    rules.flatMap((rule) => rule.nodes.filter((node) => keep(rule.id, node)).map((node) => line(rule, node)));
+  return {
+    violations: nodes(out.violations, (rule, node) => !isNeedsChip(rule, node)),
+    exceptions: nodes(out.violations, isNeedsChip),
+    incomplete: nodes(out.incomplete, () => true),
+  };
 };
 
 const luminance = (/** @type {number[]} */ [r, g, b]) => {

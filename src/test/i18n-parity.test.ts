@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { i18n, initI18n, langFromLocale, persistLang, pickLang, STORAGE_KEY } from '../floor/i18n.ts';
-import { ACTION_KINDS, MOODS, STATIONS } from '../floor/model.ts';
+import { ACTION_KINDS, MOODS, PANEL } from '../floor/model.ts';
 import en from '../locales/en.json' with { type: 'json' };
 import th from '../locales/th.json' with { type: 'json' };
 
@@ -138,7 +138,7 @@ describe('locale files', () => {
     const keys = Object.keys(withoutPlurals(flatten(en)));
     const wanted = [
       ...MOODS.flatMap((mood) => [`floor.mood.${mood}`, `floor.worker.says.${mood}`]),
-      ...STATIONS.map((station) => `floor.station.${station}`),
+      ...PANEL.map((station) => `floor.station.${station}`),
       ...ACTION_KINDS.map((kind) => `floor.actions.kind.${kind}`),
     ];
     expect(wanted.filter((key) => !keys.includes(key))).toEqual([]);
@@ -157,9 +157,14 @@ describe('locale files', () => {
     expect(asked.filter((key) => !(key in withoutPlurals(flatten(th))))).toEqual([]);
   });
 
+  it('says Demo data in the chip and the Debug mode line, as the canvas does', () => {
+    expect(en.floor.hud.demo).toBe('Demo data');
+    expect(en.floor.debug.modeDemo).toBe(en.floor.hud.demo);
+  });
+
   it('keeps technical terms in English inside Thai text', () => {
     const text = JSON.stringify(th);
-    for (const term of ['Action items', 'QC', 'Merge', 'sandbox', 'PR', 'worker', 'host']) expect(text).toContain(term);
+    for (const term of ['Action items', 'QC', 'merge', 'sandbox', 'PR', 'worker', 'host']) expect(text).toContain(term);
   });
 
   it('does not put the English floor stamps in the locale files', () => {

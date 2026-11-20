@@ -13,7 +13,7 @@ export const Drawer = ({
   onLang,
   onClose,
 }: {
-  kind: 'actions' | 'debug';
+  kind: 'actions' | 'debug' | 'settings';
   view: FloorView;
   hq: Hq;
   lang: Lang;
@@ -30,7 +30,7 @@ export const Drawer = ({
       if (opener instanceof HTMLElement) opener.focus();
     };
   }, []);
-  const title = kind === 'actions' ? t('floor.actions.title') : t('floor.debug.title');
+  const title = t(`floor.${kind}.title`);
   return (
     <div className="dim">
       <section
@@ -46,7 +46,33 @@ export const Drawer = ({
             ✕
           </button>
         </div>
-        {kind === 'actions' ? (
+        {kind === 'settings' ? (
+          <section aria-labelledby="settings-project">
+            <h3 id="settings-project" className="pixel small-title">
+              {t('floor.settings.project')}
+            </h3>
+            <dl className="debug">
+              <dt>{t('floor.settings.language')}</dt>
+              <dd>
+                <fieldset className="seg">
+                  <legend className="sr-only">{t('floor.settings.language')}</legend>
+                  {langs.map((code) => (
+                    <button
+                      key={code}
+                      type="button"
+                      className={`btn small${code === lang ? ' on' : ''}`}
+                      aria-pressed={code === lang}
+                      data-testid={`lang-${code}`}
+                      onClick={() => onLang(code)}
+                    >
+                      {code.toUpperCase()}
+                    </button>
+                  ))}
+                </fieldset>
+              </dd>
+            </dl>
+          </section>
+        ) : kind === 'actions' ? (
           view.actions.length === 0 ? (
             <p>{t('floor.actions.empty')}</p>
           ) : (
@@ -88,24 +114,6 @@ export const Drawer = ({
             )}
             <dt>{t('floor.debug.boxes')}</dt>
             <dd>{view.boxes.length}</dd>
-            <dt>{t('floor.debug.language')}</dt>
-            <dd>
-              <fieldset className="seg">
-                <legend className="sr-only">{t('floor.debug.language')}</legend>
-                {langs.map((code) => (
-                  <button
-                    key={code}
-                    type="button"
-                    className={`btn small${code === lang ? ' on' : ''}`}
-                    aria-pressed={code === lang}
-                    data-testid={`lang-${code}`}
-                    onClick={() => onLang(code)}
-                  >
-                    {code.toUpperCase()}
-                  </button>
-                ))}
-              </fieldset>
-            </dd>
           </dl>
         )}
       </section>

@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Drawer } from './Drawer.tsx';
 import { LANGS, type Lang } from './i18n.ts';
-import { floorView, type Mood, STATIONS, type WorkerView } from './model.ts';
+import { floorView, type Mood, PANEL, panelOf, type WorkerView } from './model.ts';
 import { Scene } from './Scene.tsx';
 import { useHq } from './useHq.ts';
 
 const MOOD_CHIP: Record<Mood, { bg: string; fg: string }> = {
   working: { bg: '#42a5f5', fg: '#15181c' },
-  needs: { bg: '#ef5350', fg: '#15181c' },
+  needs: { bg: '#ef5350', fg: '#f5f3ec' },
   qc: { bg: '#ffca28', fg: '#15181c' },
   break: { bg: '#9aa1ab', fg: '#15181c' },
 };
@@ -44,7 +44,7 @@ const Card = ({ worker, onClose }: { worker: WorkerView; onClose: () => void }) 
         <dt>{t('floor.worker.task')}</dt>
         <dd>{worker.task ?? t('floor.worker.none')}</dd>
         <dt>{t('floor.worker.station')}</dt>
-        <dd>{worker.station ?? t('floor.worker.none')}</dd>
+        <dd>{worker.station === null ? t('floor.worker.none') : t(`floor.station.${panelOf(worker.station)}`)}</dd>
       </dl>
       <p className="say">{t(`floor.worker.says.${worker.mood}`)}</p>
     </section>
@@ -55,7 +55,7 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
   const { t } = useTranslation();
   const hq = useHq();
   const view = useMemo(() => (hq.snapshot === null ? null : floorView(hq.snapshot)), [hq.snapshot]);
-  const [drawer, setDrawer] = useState<'actions' | 'debug' | null>(null);
+  const [drawer, setDrawer] = useState<'actions' | 'debug' | 'settings' | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const shippedBefore = useRef(0);
@@ -134,6 +134,15 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
           >
             {t('floor.hud.debug')}
           </button>
+          <button
+            type="button"
+            className="btn"
+            aria-haspopup="dialog"
+            data-testid="open-settings"
+            onClick={() => setDrawer('settings')}
+          >
+            {t('floor.hud.settings')}
+          </button>
         </nav>
       </header>
 
@@ -172,7 +181,7 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
         <section className="panel" aria-label={t('floor.hud.productionOrder')}>
           <h2 className="pixel small-title">{t('floor.hud.productionOrder')}</h2>
           <ul className="counts">
-            {STATIONS.map((station) => (
+            {PANEL.map((station) => (
               <li key={station} data-station={station}>
                 <span className="pixel big" data-testid={`count-${station}`}>
                   {view.counts[station]}

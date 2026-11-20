@@ -285,6 +285,36 @@ const MUTANTS = [
     ],
   },
   {
+    name: 'panel-merge-own-cell',
+    claim: 'a box at MERGE counts under SHIP, the canvas has five cells',
+    edits: [
+      [
+        MODEL,
+        "station === 'MERGE' || station === 'SHIPPING' ? 'SHIP' : station",
+        "station === 'SHIPPING' ? 'SHIP' : (station as PanelLabel)",
+      ],
+    ],
+  },
+  {
+    name: 'needs-chip-low-contrast',
+    claim: 'the named contrast exception covers only the canvas Needs you colours',
+    tier: 'e2e',
+    edits: [
+      ['src/floor/App.tsx', "needs: { bg: '#ef5350', fg: '#f5f3ec' }", "needs: { bg: '#ef5350', fg: '#c9cdd4' }"],
+    ],
+  },
+  {
+    name: 'settings-button-missing',
+    claim: 'the language switch is reachable from the HQ menu Settings button',
+    tier: 'e2e',
+    edits: [['src/floor/App.tsx', "onClick={() => setDrawer('settings')}", 'onClick={() => setDrawer(null)}']],
+  },
+  {
+    name: 'locale-demo-mode-wording',
+    claim: 'the Debug mode line says Demo data as on the canvas',
+    edits: [['src/locales/en.json', '"modeDemo": "Demo data"', '"modeDemo": "Demo replay"']],
+  },
+  {
     name: 'codeOf-no-upper',
     claim: 'the box code is upper case',
     edits: [[MODEL, "(id.split('/').pop() ?? id).toUpperCase()", "(id.split('/').pop() ?? id)"]],

@@ -36,10 +36,11 @@ const browser = await launch();
 const FIXTURE = join(ROOT, 'fixtures', 'demo', 'events.jsonl');
 
 let labels = [];
-const axe = { violations: [], incomplete: [], states: [] };
+const axe = { violations: [], exceptions: [], incomplete: [], states: [] };
 const audit = async (/** @type {import('playwright').Page} */ target, /** @type {string} */ label) => {
   const out = await runAxe(target, label);
   axe.violations.push(...out.violations);
+  axe.exceptions.push(...out.exceptions);
   axe.incomplete.push(...out.incomplete);
   axe.states.push(label);
 };
@@ -143,13 +144,13 @@ try {
   await page.click('[data-testid=open-actions]');
   await audit(page, 'demo EN Action items drawer (empty)');
   await page.keyboard.press('Escape');
-  await page.keyboard.press('d');
+  await page.click('[data-testid=open-settings]');
   await page.click('[data-testid=lang-th]');
-  await audit(page, 'demo TH Debug drawer');
+  await audit(page, 'demo TH Settings drawer');
   await page.keyboard.press('Escape');
   await audit(page, 'demo TH floor');
   labels = await sceneLabelContrast(page);
-  await page.click('[data-testid=open-debug]');
+  await page.click('[data-testid=open-settings]');
   await page.click('[data-testid=lang-en]');
   await page.keyboard.press('Escape');
 
@@ -162,7 +163,7 @@ try {
     globalThis.__marker = 1;
     return document.body.textContent;
   });
-  await page.keyboard.press('d');
+  await page.click('[data-testid=open-settings]');
   await page.click('[data-testid=lang-th]');
   await page.keyboard.press('Escape');
   const after = await page.evaluate(() => document.body.textContent);
@@ -218,7 +219,7 @@ try {
       navTh === 'เมนู HQ',
     `HUD changed with no reload (marker kept), html lang ${langTh}, toast re-rendered in Thai (title "${titleTh}", detail "${toastTh}", English title "${titleEn}"), Sarabun faces loaded with the network blocked: ${weights}, scene text has no Thai and keeps SHIPPED, Thai in .pixel drawn with ${families.join(' + ')}, Thai kept after a reload (lang ${keptTh.lang}), nav label "${navTh}"`,
   );
-  await page.keyboard.press('d');
+  await page.click('[data-testid=open-settings]');
   await page.click('[data-testid=lang-en]');
   const langEn = await htmlLang();
   lane(8.5, 'html lang follows the switch', langEn === 'en', `back to ${langEn}`);
@@ -394,11 +395,11 @@ try {
   await page.keyboard.press('1');
   await audit(page, 'live EN floor with the worker card open');
   await page.keyboard.press('Escape');
-  await page.click('[data-testid=open-debug]');
+  await page.click('[data-testid=open-settings]');
   await page.click('[data-testid=lang-th]');
   await page.keyboard.press('Escape');
   await audit(page, 'live TH floor (Needs you)');
-  await page.keyboard.press('d');
+  await page.click('[data-testid=open-settings]');
   await page.click('[data-testid=lang-en]');
   await page.keyboard.press('Escape');
 
@@ -412,6 +413,8 @@ try {
       ...axe.states.map((state) => `  ${state}`),
       `violations of any impact: ${axe.violations.length}`,
       ...axe.violations.map((line) => `  ${line}`),
+      `named exception, not a pass: axe rule color-contrast on the canvas "Needs you" chip (.chip[data-mood="needs"], #f5f3ec on #ef5350, 3.14 to 1 against 4.5 to 1), ${axe.exceptions.length} nodes over ${axe.states.length} states`,
+      ...axe.exceptions.map((line) => `  ${line}`),
       `incomplete (axe could not decide, NOT passes): ${axe.incomplete.length} nodes over ${axe.states.length} states, ${incompleteTargets.length} distinct rule/target pairs`,
       ...axe.incomplete.map((line) => `  ${line}`),
       '',
@@ -425,7 +428,7 @@ try {
     7,
     'axe-core',
     axe.violations.length === 0 && firewall !== undefined && firewall.ratio >= 4.5,
-    `${axe.violations.length} violations on ${axe.states.length} states, ${axe.incomplete.length} incomplete nodes recorded in axe.txt (undecided, not passed), FIREWALL art label ${firewall?.ratio}:1`,
+    `${axe.violations.length} violations on ${axe.states.length} states (plus ${axe.exceptions.length} named-exception nodes: color-contrast on the Needs you chip), ${axe.incomplete.length} incomplete nodes recorded in axe.txt (undecided, not passed), FIREWALL art label ${firewall?.ratio}:1`,
   );
 
   const motion = await ctx.newPage();

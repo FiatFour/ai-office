@@ -16,7 +16,7 @@ Each line below is `id | status | text on the canvas | text on the built floor |
 
 Status: `fixed` (built now equals the canvas), `changed` (both show something, different, or built adds something), `not-built` (the canvas shows it, built does not; a later unit or a snapshot field is needed), `conflict` (the spec and the canvas disagree, the choice made is stated). A text on the canvas is checked to be on the rendered artboard, and for `not-built` to be absent from the built floor. A `-` means there is no text to look up.
 
-D01 | fixed | Demo data | - | The demo chip says "Demo data" as on the canvas (it said "Demo replay"). The Debug drawer still says "Demo replay" for the mode.
+D01 | fixed | Demo data | - | The demo chip, the Debug drawer's mode line and the `--demo` start line say "Demo data" as on the canvas (they said "Demo replay"). Operator call 2026-11-21, follow the canvas. The demo shows the recorded run's own worker names (nova, vega); the canvas crew (Captain, Byte, Pixel, Echo) is not copied in, because the recorded export is the demo's provenance and the snapshot has no field the canvas names would honestly fill.
   covers: text:demo data
 D02 | not-built | WIN · PWSH | - | Host chip (detected computer) in the run-mode button. The snapshot has no host or shell field.
   covers: text:win · pwsh
@@ -32,9 +32,9 @@ D06 | not-built | Zoom in | - | Zoom out and zoom in buttons.
 D07 | not-built | Sandbox cages | - | Run-mode chip ("MODE Cages | Sandbox cages · 6 running", WIN · PWSH, blinking dot). The snapshot has no run mode.
   covers: text:cages ;; text:mode ;; text:sandbox cages · running
   covers: text:|
-D08 | not-built | Preflight | - | HQ menu: + New order, Setup, Preflight, Boards, Docs, PRs / MRs, Terminal, Settings. Built has Action items and Debug only. Each target is a later screen.
+D08 | not-built | Preflight | - | HQ menu: + New order, Setup, Preflight, Boards, Docs, PRs / MRs, Terminal, Settings. Built has Action items, Debug and a Settings button (see D44). Each target is a later screen.
   covers: text:+ new order ;; text:boards ;; text:docs · #
-  covers: text:preflight · # ✕ ;; text:prs / mrs · # ;; text:settings
+  covers: text:preflight · # ✕ ;; text:prs / mrs · #
   covers: text:setup · # ;; text:terminal
   regions: R1-1C1-12
 D09 | not-built | Factory level | - | Factory level 3 with a 340 / 500 XP bar. The snapshot has no level or XP.
@@ -62,7 +62,7 @@ D15 | not-built | Sprint 1 | - | Production order title "Sprint 1 — Auth + Bil
   covers: text:# blocked ;; text:# boxes ;; text:sprint # — auth + billing
   covers: text:temp-# on it
   regions: R2-3C11-12
-D16 | conflict | SHIP | Merge | Station cells. The canvas has five (ORDER, CODE, TEST, QC, SHIP) in capitals. The plan and the sharpened prompt name six with MERGE. Built has six, written "Order Code Test QC Merge Shipping".
+D16 | fixed | SHIP | SHIP | Station cells. Five cells as on the canvas (ORDER, CODE, TEST, QC, SHIP) in capitals. Operator call 2026-11-21, follow the canvas over the plan and sharpened prompt (six, with MERGE). This is a display change only: `stationOf` and the lifecycle reducer keep six states, the scene still draws the MERGE gantry and the shipping dock where the canvas draws them, and a box in merge, shipping or shipped counts under SHIP (`panelOf` in `src/floor/model.ts`).
   covers: text:ship
 D17 | not-built | S-1 waits | - | Shipment status line "S-1 waits for L1 + L3 · 4 / 9 on the truck".
   covers: text:s-# waits for l# + l# · # / # on the truck
@@ -175,9 +175,9 @@ D41 | changed | - | - | Worker movement. Canvas workers loop along the floor and
   covers: paint:stations:shape:fill:#e2557a ;; paint:stations:shape:fill:#f2c79b ;; paint:stations:shape:fill:#ff9f43
   covers: paint:stations:shape:stroke:#15181c ;; shape:stations:ellipse ;; shape:stations:rect
   covers: shape:stations:text
-D42 | conflict | - | - | Mood chip colours. The canvas chip is cream text on #ef5350 (3.14 to 1). Built uses dark ink (5.1 to 1) so the text passes 4.5 to 1.
-D43 | conflict | - | - | Fonts. The canvas loads Silkscreen, Press Start 2P, Pixelify Sans and VT323 from Google Fonts. The spec says no network at runtime, so built serves the same four from @fontsource, plus Sarabun for Thai.
-D44 | conflict | - | - | Language switch. The spec puts it in Settings, Project, Language; the canvas floor has none. Settings is not built, so the switch sits in the Debug drawer.
+D42 | conflict | - | - | Mood chip colours. Operator call 2026-11-21, follow the canvas: the "Needs you" chip is cream #f5f3ec on #ef5350 as on the canvas, which is 3.14 to 1 against the 4.5 to 1 target. The other three chips already match the canvas. Named exception, narrow and not a pass: only axe rule `color-contrast` (lane 7 of `src/e2e/lanes.mjs`, `isNeedsChip` in `src/e2e/harness.mjs`) reports it, on nodes that are a `.chip[data-mood="needs"]` with exactly #f5f3ec on #ef5350 and a ratio of 3.14; any other colour, ratio or element is still a violation, the gate is not weakened for anything else, and `axe.txt` lists every excepted node. A person who needs 4.5 to 1 sees low contrast on this one chip; its text and the "!" button carry the same state.
+D43 | conflict | - | - | Fonts. Operator call 2026-11-21 was follow the canvas. The built floor already draws the canvas's four faces (Silkscreen, Press Start 2P, Pixelify Sans, VT323) at the canvas sizes; the only difference left is delivery. The canvas loads them from Google Fonts at runtime, which would break lane 7.5 (no request to a host other than HQ), the `font-src 'self'` policy pinned in `src/test/demo.test.ts`, and the spec rule of no network at runtime. Left as it is, for the operator to decide: built serves the same four from @fontsource, plus Sarabun for Thai glyphs the pixel faces lack.
+D44 | changed | - | - | Language switch. Operator call 2026-11-21, follow the canvas: the floor header has no language switch, and the canvas HQ menu has a Settings entry. Built now has the same Settings button in the HQ menu, which opens a Settings drawer with Project and Language, the place the spec names (Settings, Project, Language). The switch left the Debug drawer. The canvas Settings is a separate page (`Settings.dc.html`) that is not built; the drawer holds only the language.
 D45 | changed | - | - | HUD frame. The canvas HUD is a two-row header laid over the scene, 32 px controls and a 5 percent by 11 percent hit area per worker. Built is a one-row header above the scene, 28 to 32 px buttons, and a 44 px "!" target at 390 px.
 D46 | changed | - | - | Roster. The canvas draws Captain, Byte, Pixel, Nova, Echo and Temp-1 (their names, plates and cage plates); the built floor draws the workers HQ reports, with the hair, skin and shirt colours of its six slots.
   covers: paint:break:shape:fill:#1b1730 ;; paint:break:shape:fill:#2fbf71 ;; paint:break:shape:fill:#4a2f27

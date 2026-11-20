@@ -423,8 +423,8 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
         });
         return {
           ...inner,
-          async open(t, ticket, prepared) {
-            const handle = await inner.open(t, ticket, prepared);
+          async open(t, ticket, prepared, signal) {
+            const handle = await inner.open(t, ticket, prepared, signal);
             const files = gitOf(remote, 'ls-tree', '-r', '--name-only', handle.base).split('\n');
             fake.commitOn(
               handle.base,

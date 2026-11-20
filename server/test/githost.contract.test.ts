@@ -885,6 +885,49 @@ describe('a GitHub review with inline comments the host cannot place', () => {
     expect(body).toMatch(/\d+ more comments do not fit/);
   });
 
+  it.each([
+    ['the outside-the-diff refusal first', true],
+    ['the own-pull-request refusal first', false],
+  ])('keeps the review body inside the write guard for every body size, with %s', async (_name, outsideFirst) => {
+    const own = { status: 422, body: { message: 'Review Can not approve your own pull request' } };
+    const outside = { status: 422, body: UNRESOLVED_LINE };
+    const comments = Array.from({ length: 20 }, (_, i) => ({ path: 'a', line: 99, body: `${i}`.padEnd(3900, 'x') }));
+    const tooLong: string[] = [];
+    for (let pad = 0; pad < 4000; pad += 7) {
+      const refusals = outsideFirst ? [outside, own] : [own, outside];
+      let sent = '';
+      const send = async (request: HttpRequest): Promise<HttpResponse> => {
+        const refusal = refusals.shift();
+        if (refusal !== undefined) return refusal;
+        sent = (request.body as { body: string }).body;
+        return {
+          status: 200,
+          body: {
+            id: 9,
+            user: { login: 'x' },
+            state: 'COMMENTED',
+            commit_id: 'c',
+            submitted_at: '2026-01-01T00:00:00Z',
+            body: sent,
+          },
+        };
+      };
+      const host = github({ repo: 'acme/app', base: 'main', send, log: () => {} });
+      const posted = host.postReview('acme/app', 1, {
+        commitId: 'c'.repeat(40),
+        verdict: 'approve',
+        body: 'y'.repeat(pad),
+        comments,
+      });
+      await expect(posted, `pad ${pad}`).resolves.toMatchObject({ verdict: 'comment' });
+      if (sent.length > 60_000) tooLong.push(`${pad}:${sent.length}`);
+      expect(sent.indexOf('GitHub refuses it'), `pad ${pad}`).toBeGreaterThan(-1);
+      expect(sent.indexOf('GitHub refuses it'), `pad ${pad}`).toBeLessThan(sent.indexOf(DROPPED_MARK));
+      expect(sent, `pad ${pad}`).toMatch(/\d+ more comments do not fit/);
+    }
+    expect(tooLong).toEqual([]);
+  });
+
   it('refuses a review for a commit the PR does not hold', async () => {
     const { host, number } = await open('aw-reviewer', changed);
     await expect(

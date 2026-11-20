@@ -190,8 +190,8 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
         });
         const env: FactoryEnv = {
           ...inner,
-          async open(t, ticket, p) {
-            const handle = await inner.open(t, ticket, p);
+          async open(t, ticket, p, signal) {
+            const handle = await inner.open(t, ticket, p, signal);
             const files = gitOf(remote, 'ls-tree', '-r', '--name-only', handle.base).split('\n');
             fake.commitOn(
               handle.base,
@@ -303,8 +303,8 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
       });
       const env: FactoryEnv = {
         ...inner,
-        async open(t, ticket, p) {
-          const handle = await inner.open(t, ticket, p);
+        async open(t, ticket, p, signal) {
+          const handle = await inner.open(t, ticket, p, signal);
           const files = gitOf(remote, 'ls-tree', '-r', '--name-only', handle.base).split('\n');
           fake.commitOn(
             handle.base,

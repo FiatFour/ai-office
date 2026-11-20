@@ -36,7 +36,7 @@ import {
   type WriteRule,
   ZERO_SHA,
 } from './host.ts';
-import { inlineCode, SEGMENT } from './sanitize.ts';
+import { inlineCode, MAX_BODY, SEGMENT } from './sanitize.ts';
 
 const CONCLUSION: Record<string, HostCheckState> = {
   success: 'success',
@@ -247,21 +247,23 @@ const segments = (path: string): string => path.split('/').map(encodeURIComponen
 
 const OWN_PULL_REQUEST = /own pull request/i;
 const OUTSIDE_THE_DIFF = /could not be resolved|must be part of the diff/i;
-const REVIEW_BODY_LIMIT = 60000;
 
-const withDropped = (text: string, comments: readonly LineComment[]): string => {
-  const head = `${text}\n\n${DROPPED_MARK}\nGitHub refused these inline comments because their lines are not in the diff, so they are listed here:`;
+const ownPullRequestNote = (verdict: string) =>
+  `\n\n(The reviewer's verdict was "${verdict}". GitHub refuses it on a PR the same account opened, so it is posted as a comment.)`;
+
+const droppedList = (prefix: string, comments: readonly LineComment[]): string => {
+  const head = `${prefix}\n\n${DROPPED_MARK}\nGitHub refused these inline comments because their lines are not in the diff, so they are listed here:`;
+  const tail = (left: number) => `\n\n(${left} more comments do not fit in a review body and are left out.)`;
+  const room = MAX_BODY - tail(comments.length).length;
   let out = head;
   let kept = 0;
   for (const c of comments) {
     const next = `${out}\n\n${inlineCode(`${c.path}:${c.line}`)}\n${c.body}`;
-    if (next.length > REVIEW_BODY_LIMIT) break;
+    if (next.length > room) break;
     out = next;
     kept += 1;
   }
-  return kept === comments.length
-    ? out
-    : `${out}\n\n(${comments.length - kept} more comments do not fit in a review body and are left out.)`;
+  return kept === comments.length ? out : `${out}${tail(comments.length - kept)}`;
 };
 
 export interface GithubOptions {
@@ -370,14 +372,19 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
 
     async postReview(repo, number, draft) {
       let event: string = EVENT[draft.verdict];
-      let text = draft.body;
+      let own = false;
       let comments = draft.comments;
+      let dropped = false;
+      const compose = () => {
+        const base = own ? `${draft.body}${ownPullRequestNote(draft.verdict)}` : draft.body;
+        return dropped ? droppedList(base, draft.comments) : base;
+      };
       for (;;) {
         try {
           const posted = await call('POST', `/repos/${repo}/pulls/${number}/reviews`, {
             commit_id: draft.commitId,
             event,
-            body: text,
+            body: compose(),
             comments: comments.map((c) => ({ path: c.path, line: c.line, side: 'RIGHT', body: c.body })),
           });
           return review(repo, number, posted);
@@ -386,9 +393,9 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
           const refusal = JSON.stringify(error.body);
           if (event !== 'COMMENT' && OWN_PULL_REQUEST.test(refusal)) {
             event = 'COMMENT';
-            text = `${text}\n\n(The reviewer's verdict was "${draft.verdict}". GitHub refuses it on a PR the same account opened, so it is posted as a comment.)`;
+            own = true;
           } else if (comments.length > 0 && OUTSIDE_THE_DIFF.test(refusal)) {
-            text = withDropped(text, comments);
+            dropped = true;
             comments = [];
           } else throw error;
         }

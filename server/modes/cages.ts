@@ -334,7 +334,13 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       };
     };
 
-    const postWithRetry = async (number: number, draft: ReviewDraft) => {
+    const reviewOf = (reviews: readonly ReviewFact[], head: string, worker: string, self: string) =>
+      reviews
+        .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === self)
+        .map((r) => ({ r, mark: REVIEW_MARK.exec(r.body) }))
+        .find(({ mark }) => mark?.[1] === worker);
+
+    const postWithRetry = async (number: number, draft: ReviewDraft, worker: string) => {
       for (let attempt = 1; ; attempt += 1) {
         try {
           return await reviewHost.postReview(repo, number, draft);
@@ -343,6 +349,13 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
             error instanceof HostError && (error.status === 429 || error.status === 403 || error.status >= 500);
           if (!busy || attempt >= REVIEW_POSTS) throw error;
           await sleep(attempt * (options.reviewRetryMs ?? 30_000), undefined, { signal: abort.signal });
+          const created = reviewOf(
+            (await host.snapshot(repo, number)).reviews,
+            draft.commitId,
+            worker,
+            await reviewHost.login(),
+          );
+          if (created !== undefined) return created.r;
         }
       }
     };
@@ -353,10 +366,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       const snapshot = await host.snapshot(repo, job.change.number);
       if (snapshot.change.headSha !== head) return void take(snapshot);
       const self = await reviewHost.login();
-      const mine = snapshot.reviews
-        .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === self)
-        .map((r) => ({ r, mark: REVIEW_MARK.exec(r.body) }))
-        .find(({ mark }) => mark?.[1] === job.reviewer);
+      const mine = reviewOf(snapshot.reviews, head, job.reviewer, self);
       if (mine !== undefined)
         return ingest(reviewFact(mine.r, job.change, job.reviewer, (mine.mark?.[2] ?? 'comment') as Verdict));
       const result = await runtimeOf(job.reviewer).run({
@@ -372,14 +382,16 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       if (result.role !== 'reviewer') throw new Error('the reviewer runtime returned a change');
       spend(task, result.usage);
       abort.signal.throwIfAborted();
-      const posted = await postWithRetry(job.change.number, reviewDraft(head, job.reviewer, result)).catch(
-        async (error: unknown) => {
-          const now = await host.snapshot(repo, job.change.number);
-          if (now.change.headSha === head) throw error;
-          take(now);
-          return null;
-        },
-      );
+      const posted = await postWithRetry(
+        job.change.number,
+        reviewDraft(head, job.reviewer, result),
+        job.reviewer,
+      ).catch(async (error: unknown) => {
+        const now = await host.snapshot(repo, job.change.number);
+        if (now.change.headSha === head) throw error;
+        take(now);
+        return null;
+      });
       if (posted === null) return;
       ingest(reviewFact(posted, job.change, job.reviewer, result.verdict));
     };

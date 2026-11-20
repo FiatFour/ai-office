@@ -5,7 +5,7 @@ import type { AgentRuntime } from '../agents/runtime.ts';
 import { scripted } from '../agents/scripted.ts';
 import { github } from '../githost/github.ts';
 import { gitlab } from '../githost/gitlab.ts';
-import { type ApiCall, type GitHost, HostError } from '../githost/host.ts';
+import { type ApiCall, type GitHost, HostError, type HttpRequest, type HttpResponse } from '../githost/host.ts';
 import { bodyProblem } from '../githost/sanitize.ts';
 import { type RunningHq, startHq } from '../hq.ts';
 import { type ActionItem, cagesMode } from '../modes/cages.ts';
@@ -578,6 +578,59 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
     expect(statuses).toEqual([]);
     expect(fake.reviews).toHaveLength(1);
     expect(rec.runs.filter((r) => r.role === 'reviewer')).toHaveLength(1);
+  });
+
+  it('never double-posts when the host answers 502 after it created the review', async () => {
+    const { fake, hosts } = twoAccounts();
+    let failed = false;
+    const reviewHost: GitHost = {
+      ...hosts.reviewHost,
+      async postReview(repo, number, draft) {
+        const posted = await hosts.reviewHost.postReview(repo, number, draft);
+        if (failed) return posted;
+        failed = true;
+        throw new HostError({ method: 'POST', path: `/repos/${repo}/pulls/${number}/reviews` }, 502, {
+          message: 'bad gateway',
+        });
+      },
+    };
+    const rec = recording();
+    const { hq } = await boot({ host: hosts.host, reviewHost, runtime: rec.runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, (s) => station('alpha/t1')(s) === 'merge');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(failed).toBe(true);
+    expect(fake.reviews).toHaveLength(1);
+    expect(rec.runs.filter((r) => r.role === 'reviewer')).toHaveLength(1);
+  });
+
+  it('never double-posts when the inline comments are refused with 422 and the repost is answered 502 after it was created', async () => {
+    const fake = new FakeGithub();
+    const real = fake.transport('vega');
+    let reposts = 0;
+    const send = async (request: HttpRequest): Promise<HttpResponse> => {
+      if (request.method !== 'POST' || !request.path.endsWith('/reviews')) return real(request);
+      const comments = (request.body as { comments: unknown[] }).comments;
+      if (comments.length > 0)
+        return { status: 422, body: { message: 'Unprocessable Entity', errors: ['Line could not be resolved'] } };
+      const created = await real(request);
+      reposts += 1;
+      return reposts === 1 ? { status: 502, body: { message: 'bad gateway' } } : created;
+    };
+    const rec = recording();
+    const { hq } = await boot({
+      host: github({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} }),
+      reviewHost: github({ repo: 'acme/app', base: 'main', send, log: () => {} }),
+      runtime: rec.runtime,
+    });
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    await until(hq, (s) => station('alpha/t2')(s) === 'merge');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const heads = fake.reviews.map((r) => r.commit);
+    expect(reposts).toBe(2);
+    expect(heads).toHaveLength(2);
+    expect(new Set(heads).size).toBe(2);
+    expect(rec.runs.filter((r) => r.role === 'reviewer')).toHaveLength(2);
   });
 
   it('gives up on a rate limit that does not clear and fails the job', async () => {

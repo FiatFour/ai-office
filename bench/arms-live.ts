@@ -108,7 +108,7 @@ export interface FactoryHandle {
 }
 
 export interface FactoryEnv {
-  open(task: TaskA, ticket: Ticket, prepared: Prepared): Promise<FactoryHandle>;
+  open(task: TaskA, ticket: Ticket, prepared: Prepared, signal: AbortSignal): Promise<FactoryHandle>;
   readonly reviewPollMs?: number;
 }
 
@@ -143,7 +143,7 @@ export const factoryArm = (env: FactoryEnv): Arm => ({
   scripted: false,
   async run(task, prepared, signal, run): Promise<ArmRun> {
     const ticket = ticketOf(task, run);
-    const handle = await env.open(task, ticket, prepared);
+    const handle = await env.open(task, ticket, prepared, signal);
     let hq: RunningHq | undefined;
     try {
       hq = await startHq({ home: handle.home, port: 0, makeDriver: async () => null, mode: handle.mode });

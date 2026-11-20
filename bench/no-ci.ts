@@ -22,6 +22,7 @@ export interface NoCiOptions {
   readonly send: Transport;
   readonly log: (call: ApiCall) => void;
   readonly onFailure: (error: unknown) => void;
+  readonly signal: AbortSignal;
 }
 
 export const withNoCiStatus = (inner: GitHost, o: NoCiOptions): GitHost => {
@@ -31,6 +32,7 @@ export const withNoCiStatus = (inner: GitHost, o: NoCiOptions): GitHost => {
   let failed: unknown = null;
 
   const mark = async (head: string): Promise<void> => {
+    o.signal.throwIfAborted();
     marked.add(head);
     try {
       await api({

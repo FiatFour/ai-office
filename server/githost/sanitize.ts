@@ -1,4 +1,4 @@
-const MAX_BODY = 60_000;
+export const MAX_BODY = 60_000;
 const MAX_QUOTE = 4_000;
 const MAX_INLINE = 200;
 

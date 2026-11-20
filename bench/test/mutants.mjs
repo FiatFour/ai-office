@@ -1166,7 +1166,7 @@ const MUTANTS = [
   {
     name: 'review-dropped-comments-lost',
     claim: 'the inline comments a reposted review drops are carried into its body',
-    edits: [['server/githost/github.ts', 'text = withDropped(text, comments);', 'void withDropped;']],
+    edits: [['server/githost/github.ts', 'dropped = true;', 'void droppedList;']],
     tests: [CONTRACT],
   },
   {
@@ -1184,7 +1184,7 @@ const MUTANTS = [
   {
     name: 'review-body-unbounded',
     claim: 'the carried comments stop before the review body passes the host limit',
-    edits: [['server/githost/github.ts', 'if (next.length > REVIEW_BODY_LIMIT) break;', '']],
+    edits: [['server/githost/github.ts', 'if (next.length > room) break;', '']],
     tests: [CONTRACT],
   },
   {
@@ -1225,6 +1225,68 @@ const MUTANTS = [
     claim: 'a review the host refuses while the head did not move still fails the job',
     edits: [['server/modes/cages.ts', 'if (now.change.headSha === head) throw error;', 'if (false) throw error;']],
     tests: [CAGES],
+  },
+  {
+    name: 'r10-retry-reposts-without-lookup',
+    claim: 'a review post retried after a 5xx first looks for the review the first attempt may have created',
+    edits: [['server/modes/cages.ts', 'if (created !== undefined) return created.r;', 'if (false) return created.r;']],
+    tests: [CAGES],
+  },
+  {
+    name: 'r10-retry-lookup-any-reviewer',
+    claim: 'the lookup before a retry matches this reviewer login on this head, not any review',
+    edits: [
+      [
+        'server/modes/cages.ts',
+        'draft.commitId,\n            worker,\n            await reviewHost.login(),',
+        'draft.commitId,\n            worker,\n            "nobody",',
+      ],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'r10-dropped-list-no-tail-room',
+    claim: 'the list of refused inline comments leaves room for its own tail under the body cap',
+    edits: [
+      ['server/githost/github.ts', 'const room = MAX_BODY - tail(comments.length).length;', 'const room = MAX_BODY;'],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r10-dropped-list-over-the-cap',
+    claim: 'the list of refused inline comments stops below the write guard cap',
+    edits: [['server/githost/github.ts', 'const room = MAX_BODY - tail', 'const room = 2 * MAX_BODY - tail']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r10-own-note-after-list',
+    claim: 'the own-pull-request note comes before the carried list of refused comments',
+    edits: [
+      [
+        'server/githost/github.ts',
+        'const base = own ? `${draft.body}${ownPullRequestNote(draft.verdict)}` : draft.body;\n        return dropped ? droppedList(base, draft.comments) : base;',
+        'const list = dropped ? droppedList(draft.body, draft.comments) : draft.body;\n        return own ? `${list}${ownPullRequestNote(draft.verdict)}` : list;',
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r10-own-note-dropped',
+    claim: 'a body reposted as a comment still says what verdict GitHub refused',
+    edits: [
+      [
+        'server/githost/github.ts',
+        'const base = own ? `${draft.body}${ownPullRequestNote(draft.verdict)}` : draft.body;',
+        'const base = draft.body;',
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'r10-no-ci-posts-after-abort',
+    claim: 'the harness status is not posted once the run was aborted',
+    edits: [['bench/no-ci.ts', '    o.signal.throwIfAborted();\n', '']],
+    tests: [NOCI],
   },
 ];
 

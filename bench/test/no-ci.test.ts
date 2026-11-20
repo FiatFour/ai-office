@@ -41,15 +41,17 @@ describe('the no-ci status on a host that reports no checks', () => {
     const send = fake.transport('aw-nova');
     const failures: unknown[] = [];
     const inner = github({ repo: REPO, base: 'main', send, log: () => {} });
+    const aborted = new AbortController();
     const host = withNoCiStatus(inner, {
       repo: REPO,
       base: 'main',
       send,
       log: () => {},
       onFailure: (error) => failures.push(error),
+      signal: aborted.signal,
     });
     const statusPosts = () => fake.calls.filter((c) => c.path.includes('/statuses/')).length;
-    return { fake, inner, host, failures, statusPosts };
+    return { fake, inner, host, failures, statusPosts, aborted };
   };
   const files = (content: string) => [{ path: 'src/a.js', content }];
   const spec = (content: string) => ({ branch: BRANCH, base: 'main', files: files(content), message: 'work' });
@@ -67,6 +69,16 @@ describe('the no-ci status on a host that reports no checks', () => {
     const later = await host.snapshot(REPO, opened.number);
     expect(later.checks.map((c) => c.headSha)).toEqual([second]);
     expect(statusPosts()).toBe(2);
+  });
+
+  it('posts no status once the run is aborted and reports no failure', async () => {
+    const { host, failures, statusPosts, aborted } = setup();
+    await host.pushFiles(REPO, spec('one\n'));
+    const opened = await host.openChange(REPO, { branch: BRANCH, base: 'main', title: 't', body: 'b' });
+    aborted.abort();
+    await expect(host.snapshot(REPO, opened.number)).rejects.toThrow();
+    expect(statusPosts()).toBe(0);
+    expect(failures).toEqual([]);
   });
 
   it('does not mark a head the guarded push did not produce', async () => {
@@ -99,6 +111,7 @@ describe('the no-ci status on a host that reports no checks', () => {
       send,
       log: () => {},
       onFailure: (error) => failures.push(error),
+      signal: new AbortController().signal,
     });
     await host.pushFiles(REPO, spec('one\n'));
     const opened = await host.openChange(REPO, { branch: BRANCH, base: 'main', title: 't', body: 'b' });

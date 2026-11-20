@@ -712,8 +712,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/claude-code.ts',
-        'const ran = await shell.exec(argv, { input: promptFor(job), timeoutMs:',
-        'const ran = await shell.exec([...argv, promptFor(job)], { timeoutMs:',
+        'const ran = await shell.exec(argv, {\n      input: promptFor(job),',
+        'const ran = await shell.exec([...argv, promptFor(job)], {',
       ],
     ],
     tests: [AGENTS],

@@ -312,7 +312,7 @@ export const scratchEnv = (o: ScratchOptions): FactoryEnv => {
   const send = logged(o.send, o.log);
   return {
     ...(o.reviewPollMs === undefined ? {} : { reviewPollMs: o.reviewPollMs }),
-    async open(_task, ticket, prepared) {
+    async open(_task, ticket, prepared, signal) {
       const names = namesOf(ticket.id);
       const plain = github({ repo: target.repo, base: names.base, send: o.send, log: o.log });
       const clear = async () => {
@@ -329,6 +329,7 @@ export const scratchEnv = (o: ScratchOptions): FactoryEnv => {
         send: o.send,
         log: o.log,
         onFailure: crew.fail,
+        signal,
       });
       return {
         failure: crew.failure,

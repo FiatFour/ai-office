@@ -1,0 +1,10 @@
+FROM docker.io/library/node:24-bookworm-slim
+ARG CLAUDE_CODE_VERSION=2.1.325
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends tmux git ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+LABEL agent-works.project=agent-works
+USER node
+WORKDIR /home/node
+CMD ["sleep", "infinity"]

@@ -4,10 +4,14 @@
   "type": "module",
   "license": "MIT",
   "packageManager": "pnpm@12.21.0",
+  "bin": {
+    "agent-works": "bin/agent-works.ts"
+  },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
   },
   "scripts": {
+    "agent-works": "node bin/agent-works.ts",
     "lint": "biome check .",
     "typecheck": "tsc -p tsconfig.base.json",
     "test": "vitest run",

@@ -1,0 +1,23 @@
+{
+  "name": "@agent-works/server",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "agent-works": "../bin/agent-works.ts"
+  },
+  "scripts": {
+    "agent-works": "node ../bin/agent-works.ts"
+  },
+  "dependencies": {
+    "@agent-works/core": "workspace:*",
+    "ws": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2",
+    "playwright": "1.65.1"
+  }
+}

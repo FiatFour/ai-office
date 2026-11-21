@@ -13,7 +13,8 @@
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["scripts/**/*", "spikes/**/*", "packages/**/*"]
+  "include": ["scripts/**/*", "spikes/**/*", "packages/**/*", "server/**/*", "bin/**/*"]
 }

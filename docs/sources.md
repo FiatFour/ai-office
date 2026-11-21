@@ -77,6 +77,11 @@ Versions come from the page itself when it states one. When it does not, the ver
 | S-45 | krun | krun is crun in a mode that runs the container workload in a libkrun KVM microVM. crun still sets up the namespaces and cgroups first. | [krun(1)](https://github.com/containers/crun/blob/1.31/krun.1.md) | crun 1.31 | 2026-11-16 | P0-2, P0-3 |
 | S-46 | krun | The default network mode is TSI. libkrun proxies guest sockets in the VMM's network context, with no guest network interface, and listening on guest UDP sockets is not supported. | [krun(1)](https://github.com/containers/crun/blob/1.31/krun.1.md) | crun 1.31 | 2026-11-16 | P0-2 |
 | S-47 | krun | `krun.ram_mib` defaults to the OCI memory limit, else 1024 MiB. `krun.cpus` defaults to the CPUs in the process CPU affinity, up to 16. | [krun(1)](https://github.com/containers/crun/blob/1.31/krun.1.md) | crun 1.31 | 2026-11-16 | P0-2, P0-3 |
+| S-61 | Docker networks | A bridge is normally given the network's gateway address. `com.docker.network.bridge.inhibit_ipv4` stops Docker from giving the bridge an IPv4 address, so traffic to and from the network does not work unless something else holds the gateway. | [Bridge network driver](https://docs.docker.com/engine/network/drivers/bridge/) | Docker docs, checked live; behavior measured on Docker Engine 29.1.3 and 29.4.2 | 2026-11-16 | P0-2, P0-6 |
+| S-62 | TLS | A ClientHello carries the server name in the `server_name` extension as a `host_name`, and the list "MUST NOT contain more than one name of the same name_type". The proxy reads it in the clear to compare it with the CONNECT host. | [RFC 6066 section 3](https://www.rfc-editor.org/rfc/rfc6066) | RFC 6066 | 2026-11-16 | P0-2, P0-6 |
+| S-63 | TLS | The IANA TLS ExtensionType registry lists 65037 (0xfe0d) as `encrypted_client_hello`, RFC 9849. With ECH the real server name is encrypted, so a proxy that reads only the outer SNI cannot verify it. 0xffce is not listed and falls in a private-use range, so the proxy's check for it is a precaution. | [IANA TLS ExtensionType values](https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml) | IANA registry, checked live | 2026-11-16 | P0-2, P0-6 |
+| S-64 | Node | `net.BlockList` matches an IPv4 rule against its IPv4-mapped IPv6 forms, such as `::ffff:7b7b:7b7b`. The proxy relies on it and also rejects every `::ffff:0:0/96` address outright. | [Node.js net.BlockList](https://nodejs.org/api/net.html#class-netblocklist) | Node.js v26.13.1 docs; behavior measured on Node 24.21.0 and 26 | 2026-11-16 | P0-2 |
+| S-65 | Squid | `ssl_bump` requires a Squid built `--with-openssl`. Measured: `ubuntu/squid` 6.13 is built `--with-gnutls`, rejects `http_port ... ssl-bump` as an unknown option, and has no `ssl::server_name` ACL, so it cannot match SNI. | [Squid ssl_bump](https://www.squid-cache.org/Doc/config/ssl_bump/) | Squid 6.13 (`ubuntu/squid`), measured | 2026-11-16 | P0-2, P0-6 |
 
 ## Hosts, runners and runtimes
 
@@ -138,6 +143,12 @@ Each entry quotes the spec line and the source line. A spike or a G1 decision re
 - Source, S-55: "This change will be rolled out over a period of several weeks beginning October 19, 2026. We plan to complete the migration by November 19, 2026." S-48: every `ubuntu-latest` job of this PR ran on image `ubuntu-26.04` 20261111.196.1, with Docker 29.4.2 and Podman 5.7.0. The runner-images README linked from S-49 still lists `ubuntu-latest` next to Ubuntu 24.04, whose image is S-56.
 - Effect. Until the migration ends, one `ubuntu-latest` job can get Podman 4.9.3 and the next Podman 5.7.0. Each Linux lane prints `docker version` and `podman version` first. A lane whose result depends on the version pins `ubuntu-26.04`.
 
+### C-7. An internal network alone does not cut the cage off from the host
+
+- Spec, `AGENT_WORKS_PROMPT.md` §4 Firewall: "Traffic that ignores the proxy has no route out, so it fails closed."
+- Source, S-40: `--internal` "restricts external access". S-61: the bridge "is normally assigned the network's `--gateway` address", and `com.docker.network.bridge.inhibit_ipv4` will "Prevent Docker from assigning an IP address to the bridge."
+- Effect. P0-2 measured that a cage on a plain docker `--internal` network, and on a rootful podman internal network, connects to a host service on `0.0.0.0` through the gateway address. The docker driver must set `inhibit_ipv4` on the internal network and leave IPv6 off. Rootful podman has no such option, so it needs a host firewall rule or stays unsupported. Rootless podman is not affected.
+
 ## Spec assumptions the sources narrow
 
 These agree with the spec but limit how far a layer can be trusted.
@@ -153,5 +164,5 @@ These agree with the spec but limit how far a layer can be trusted.
 These assumptions have no primary source yet. The named spike tests each one directly.
 
 - "krun: it ignores the image `USER`, so the entrypoint must drop to the `agent` user itself." The krun man page at crun 1.31 does not mention it. P0-3 tests it.
-- TSI networking under krun (S-46) proxies guest sockets "in the VMM's network context". The man page does not say whether that context is the container's internal network namespace. P0-2 lane 4 tests the bypass under krun.
-- The runner's Podman behaves like the Podman docs checked. Those docs are v6.2.0, while `ubuntu-latest` gives Podman 5.7.0 on Ubuntu 26.04 (S-48) or Podman 4.9.3 on Ubuntu 24.04 (S-56) until the migration ends (C-6). P0-2 records `podman version` and the internal-network and DNS behavior the runner's Podman shows.
+- TSI networking under krun (S-46) proxies guest sockets "in the VMM's network context". P0-2 lane 4 found that context is the container's internal network namespace. Under krun on rootless podman 6.1.3, raw TCP, IPv6 and direct DNS all fail as they do without krun (`docs/spikes/P0-2-firewall.md`).
+- The runner's Podman behaves like the Podman docs checked. Those docs are v6.2.0, while `ubuntu-latest` gives Podman 5.7.0 on Ubuntu 26.04 (S-48) or Podman 4.9.3 on Ubuntu 24.04 (S-56) until the migration ends (C-6). P0-2 found the runner on 2026-11-16 reporting Podman 5.7.0 with netavark, Docker 29.4.2 and crun 1.21 without `+LIBKRUN`. On that Podman, rootless, an internal network had no route out and aardvark did not forward lookups (`docs/spikes/P0-2-firewall.md`).

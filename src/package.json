@@ -1,0 +1,32 @@
+{
+  "name": "@agent-works/floor",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json",
+    "size": "node scripts/size.mjs"
+  },
+  "dependencies": {
+    "@agent-works/core": "workspace:*",
+    "@fontsource/pixelify-sans": "5.3.0",
+    "@fontsource/press-start-2p": "5.3.0",
+    "@fontsource/sarabun": "5.3.0",
+    "@fontsource/silkscreen": "5.3.0",
+    "@fontsource/vt323": "5.3.0",
+    "i18next": "27.1.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-i18next": "18.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "axe-core": "4.14.1",
+    "playwright": "1.65.1",
+    "vite": "8.3.8"
+  }
+}

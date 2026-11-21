@@ -1,0 +1,87 @@
+{
+  "floor": {
+    "title": "โรงงาน",
+    "scene": "ภาพโรงงาน มี {{count}} กล่องบนสายพาน ส่งแล้ว {{shipped}} กล่อง",
+    "hud": {
+      "demo": "ข้อมูล Demo",
+      "demoProgress": "กำลังเล่นซ้ำ {{done}} จาก {{total}} events",
+      "live": "สด",
+      "offline": "กำลังเชื่อมต่อใหม่",
+      "actionItems": "Action items",
+      "actionItemsCount": "Action items · {{count}}",
+      "debug": "Debug",
+      "settings": "ตั้งค่า",
+      "menu": "เมนู HQ",
+      "crew": "ทีมงาน",
+      "crewCount": "ทีมงาน · {{count}}",
+      "needYou": "{{count}} คนรอคุณ",
+      "productionOrder": "ใบสั่งผลิต",
+      "boxesTotal_other": "{{count}} กล่อง",
+      "shippedTotal": "ส่งแล้ว {{count}} กล่อง",
+      "noCrew": "ยังไม่มี worker",
+      "close": "ปิด",
+      "selectWorker": "เลือก {{name}}",
+      "openActionItems": "{{name}} รอคุณอยู่ เปิด Action items",
+      "delivered": "ส่งของเรียบร้อย",
+      "deliveredDetail": "{{task}} merge และส่งแล้ว"
+    },
+    "station": {
+      "ORDER": "ออเดอร์",
+      "CODE": "เขียนโค้ด",
+      "TEST": "ทดสอบ",
+      "QC": "QC",
+      "SHIP": "ส่งของ"
+    },
+    "mood": {
+      "working": "กำลังทำงาน",
+      "needs": "รอคุณ",
+      "qc": "ที่ QC",
+      "break": "พักอยู่"
+    },
+    "worker": {
+      "file": "การ์ด worker",
+      "state": "สถานะ",
+      "task": "กล่อง",
+      "station": "สถานี",
+      "none": "ไม่มี",
+      "says": {
+        "working": "กำลังประกอบกล่อง เดี๋ยวตามด้วยการทดสอบ",
+        "needs": "ต้องการให้คุณช่วย เปิด Action items",
+        "qc": "กำลังยกกล่องไปที่ด่าน QC",
+        "break": "ไม่มีงานค้าง รอกล่องถัดไป"
+      }
+    },
+    "actions": {
+      "title": "Action items",
+      "empty": "ไม่มีอะไรรอคุณ",
+      "for": "สำหรับ {{name}}",
+      "kind": {
+        "ready_to_merge": "พร้อม merge {{task}} ให้ merge บน host HQ ไม่ merge เอง",
+        "closed_unmerged": "PR ของ {{task}} ถูกปิดโดยไม่ได้ merge",
+        "round_limit": "{{task}} ใช้รอบ review ครบแล้ว",
+        "website": "worker ขอเปิด {{detail}} ใน sandbox",
+        "alert": "HQ แจ้งเตือน: {{detail}}",
+        "job_failed": "job ของ {{task}} ล้มเหลว: {{detail}}"
+      },
+      "open": "เปิดบน host"
+    },
+    "settings": {
+      "title": "ตั้งค่า",
+      "project": "โปรเจกต์",
+      "language": "ภาษา"
+    },
+    "debug": {
+      "title": "Debug",
+      "socket": "WebSocket",
+      "socketOpen": "เปิด",
+      "socketClosed": "ปิด",
+      "rev": "Snapshot rev",
+      "mode": "โหมด",
+      "modeDemo": "Demo data",
+      "modeLive": "HQ จริง",
+      "source": "แหล่ง demo",
+      "events": "events ที่เล่นแล้ว",
+      "boxes": "กล่อง"
+    }
+  }
+}

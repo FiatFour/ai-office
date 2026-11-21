@@ -10,6 +10,7 @@ import {
   type CommentFact,
   contentText,
   count,
+  DROPPED_MARK,
   field,
   filePathProblem,
   firstTime,
@@ -20,6 +21,7 @@ import {
   type HostEvent,
   type HttpRequest,
   id,
+  type LineComment,
   once,
   oneOf,
   optLine,
@@ -34,7 +36,7 @@ import {
   type WriteRule,
   ZERO_SHA,
 } from './host.ts';
-import { SEGMENT } from './sanitize.ts';
+import { inlineCode, MAX_BODY, SEGMENT } from './sanitize.ts';
 
 const CONCLUSION: Record<string, HostCheckState> = {
   success: 'success',
@@ -243,6 +245,27 @@ const blobSha = (content: string): string => {
 
 const segments = (path: string): string => path.split('/').map(encodeURIComponent).join('/');
 
+const OWN_PULL_REQUEST = /own pull request/i;
+const OUTSIDE_THE_DIFF = /could not be resolved|must be part of the diff/i;
+
+const ownPullRequestNote = (verdict: string) =>
+  `\n\n(The reviewer's verdict was "${verdict}". GitHub refuses it on a PR the same account opened, so it is posted as a comment.)`;
+
+const droppedList = (prefix: string, comments: readonly LineComment[]): string => {
+  const head = `${prefix}\n\n${DROPPED_MARK}\nGitHub refused these inline comments because their lines are not in the diff, so they are listed here:`;
+  const tail = (left: number) => `\n\n(${left} more comments do not fit in a review body and are left out.)`;
+  const room = MAX_BODY - tail(comments.length).length;
+  let out = head;
+  let kept = 0;
+  for (const c of comments) {
+    const next = `${out}\n\n${inlineCode(`${c.path}:${c.line}`)}\n${c.body}`;
+    if (next.length > room) break;
+    out = next;
+    kept += 1;
+  }
+  return kept === comments.length ? out : `${out}${tail(comments.length - kept)}`;
+};
+
 export interface GithubOptions {
   readonly send: Transport;
   readonly log: (call: ApiCall) => void;
@@ -348,29 +371,34 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
     },
 
     async postReview(repo, number, draft) {
-      const body = (event: string, text: string) => ({
-        commit_id: draft.commitId,
-        event,
-        body: text,
-        comments: draft.comments.map((c) => ({ path: c.path, line: c.line, side: 'RIGHT', body: c.body })),
-      });
-      try {
-        return review(
-          repo,
-          number,
-          await call('POST', `/repos/${repo}/pulls/${number}/reviews`, body(EVENT[draft.verdict], draft.body)),
-        );
-      } catch (error) {
-        if (
-          !(error instanceof HostError && error.status === 422 && /own pull request/i.test(JSON.stringify(error.body)))
-        )
-          throw error;
-        const text = `${draft.body}\n\n(The reviewer's verdict was "${draft.verdict}". GitHub refuses it on a PR the same account opened, so it is posted as a comment.)`;
-        return review(
-          repo,
-          number,
-          await call('POST', `/repos/${repo}/pulls/${number}/reviews`, body('COMMENT', text)),
-        );
+      let event: string = EVENT[draft.verdict];
+      let own = false;
+      let comments = draft.comments;
+      let dropped = false;
+      const compose = () => {
+        const base = own ? `${draft.body}${ownPullRequestNote(draft.verdict)}` : draft.body;
+        return dropped ? droppedList(base, draft.comments) : base;
+      };
+      for (;;) {
+        try {
+          const posted = await call('POST', `/repos/${repo}/pulls/${number}/reviews`, {
+            commit_id: draft.commitId,
+            event,
+            body: compose(),
+            comments: comments.map((c) => ({ path: c.path, line: c.line, side: 'RIGHT', body: c.body })),
+          });
+          return review(repo, number, posted);
+        } catch (error) {
+          if (!(error instanceof HostError && error.status === 422)) throw error;
+          const refusal = JSON.stringify(error.body);
+          if (event !== 'COMMENT' && OWN_PULL_REQUEST.test(refusal)) {
+            event = 'COMMENT';
+            own = true;
+          } else if (comments.length > 0 && OUTSIDE_THE_DIFF.test(refusal)) {
+            dropped = true;
+            comments = [];
+          } else throw error;
+        }
       }
     },
 

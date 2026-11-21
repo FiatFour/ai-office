@@ -105,7 +105,7 @@ const MUTANTS = [
   {
     name: 'self-review-not-downgraded',
     claim: 'a verdict GitHub refuses on the same account is posted as a comment',
-    edits: [['server/githost/github.ts', '/own pull request/i.test', '/never matches/i.test']],
+    edits: [['server/githost/github.ts', 'OWN_PULL_REQUEST.test', '/never matches/i.test']],
     tests: [CONTRACT, CAGES],
   },
   {
@@ -712,8 +712,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/claude-code.ts',
-        'const ran = await shell.exec(argv, { input: promptFor(job), timeoutMs:',
-        'const ran = await shell.exec([...argv, promptFor(job)], { timeoutMs:',
+        'const ran = await shell.exec(argv, {\n      input: promptFor(job),',
+        'const ran = await shell.exec([...argv, promptFor(job)], {',
       ],
     ],
     tests: [AGENTS],

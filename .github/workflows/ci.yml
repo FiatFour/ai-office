@@ -52,6 +52,30 @@ jobs:
         run: |
           pnpm vitest run server/test/sandbox/driver.test.ts server/test/kill9.test.ts server/test/cli.test.ts server/test/lockrace.test.ts server/test/perf.test.ts
           if ($LASTEXITCODE -ne 0) { throw "the live server tests failed" }
+      - name: Run the heavy benchmark harness tests (real cages, git, graded runs)
+        run: |
+          pnpm test:bench-live
+          if ($LASTEXITCODE -ne 0) { throw "the benchmark live tests failed" }
+
+  bench-mutants:
+    name: bench mutants (the whole suite, every mutant caught)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Break each guard in turn and require a test to fail
+        run: |
+          $env:MUTANT_OUT = Join-Path $env:RUNNER_TEMP 'mutants.txt'
+          node bench/test/mutants.mjs
+          $status = $LASTEXITCODE
+          Get-Content $env:MUTANT_OUT | Select-Object -Last 1 | Add-Content $env:GITHUB_STEP_SUMMARY
+          if ($status -ne 0) { throw "a bench mutant survived or could not be applied" }
 
   perf:
     name: perf (cold and warm install, lint, typecheck, light test suite)
@@ -76,7 +100,9 @@ jobs:
                 @('install', '--frozen-lockfile', '--store-dir', $store, '--cache-dir', "$store-cache"),
                 @('lint'), @('typecheck'),
                 @('vitest', 'run', '--exclude', 'server/test/sandbox/driver.test.ts', '--exclude', 'server/test/kill9.test.ts',
-                  '--exclude', 'server/test/cli.test.ts', '--exclude', 'server/test/lockrace.test.ts', '--exclude', 'server/test/perf.test.ts')
+                  '--exclude', 'server/test/cli.test.ts', '--exclude', 'server/test/lockrace.test.ts', '--exclude', 'server/test/perf.test.ts',
+                  '--exclude', 'bench/test/task-setup.test.ts', '--exclude', 'bench/test/closure.test.ts', '--exclude', 'bench/test/cage-mount.test.ts',
+                  '--exclude', 'bench/test/arms.test.ts', '--exclude', 'bench/test/cli.test.ts')
               )
               foreach ($step in $steps) {
                 & pnpm @step | Out-Host

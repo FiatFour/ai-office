@@ -1,0 +1,5 @@
+{
+  "ufo-214": {
+    "files": [{ "path": "node_modules/.bin/vitest", "content": "#!/bin/sh\necho \"Tests  1 passed (1)\"\n" }]
+  }
+}

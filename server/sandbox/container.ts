@@ -37,6 +37,7 @@ export interface DriverOptions {
   readonly image: string;
   readonly project?: string;
   readonly allowlist?: readonly string[];
+  readonly homeWorker?: (worker: string) => string;
   readonly onDenial?: (denial: Denial) => void;
 }
 
@@ -61,6 +62,7 @@ export class SandboxDriver {
   private readonly image: string;
   private readonly project: string;
   private readonly allowlist: readonly string[];
+  private readonly homeWorker: (worker: string) => string;
   private readonly onDenial: (denial: Denial) => void;
   private firewall: Promise<Firewall> | null = null;
   private rootless: boolean | null = null;
@@ -69,6 +71,7 @@ export class SandboxDriver {
   constructor(options: DriverOptions) {
     this.engine = options.engine;
     this.home = options.home;
+    this.homeWorker = options.homeWorker ?? ((worker) => worker);
     this.hq = options.hq;
     this.image = options.image;
     this.project = options.project ?? 'agent-works';
@@ -143,7 +146,7 @@ export class SandboxDriver {
         `${spec.source} is inside a cage or a worker home, which an agent can write. Export from the operator's own clone instead.`,
       );
     await this.requireImage();
-    const homeSlug = homeName(spec.worker);
+    const homeSlug = homeName(this.homeWorker(spec.worker));
     const id = `${slug(spec.task)}-${randomBytes(3).toString('hex')}`;
     const cageDir = join(this.home, 'cages', id);
     const repo = exportPath(join(this.home, 'cages'), id);
@@ -213,7 +216,7 @@ export class SandboxDriver {
   async exec(
     id: string,
     argv: readonly string[],
-    options: { input?: string; timeoutMs?: number } = {},
+    options: { input?: string; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<RunResult> {
     const view = this.cages.get(id);
     if (view === undefined) throw new CageError(`no cage ${id} is running`);

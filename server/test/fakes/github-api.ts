@@ -44,6 +44,49 @@ const blob = (content: string) => {
   return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
 };
 
+const CONTEXT = 3;
+
+const textLines = (text: string): string[] => {
+  const lines = text.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines;
+};
+
+const hunkLines = (before: string | undefined, after: string): Set<number> => {
+  const a = before === undefined ? [] : textLines(before);
+  const b = textLines(after);
+  const width = b.length + 1;
+  const common = new Array<number>((a.length + 1) * width).fill(0);
+  const at = (i: number, j: number) => common[i * width + j] ?? 0;
+  for (let i = a.length - 1; i >= 0; i -= 1)
+    for (let j = b.length - 1; j >= 0; j -= 1)
+      common[i * width + j] = a[i] === b[j] ? at(i + 1, j + 1) + 1 : Math.max(at(i + 1, j), at(i, j + 1));
+  const changed: number[] = [];
+  let i = 0;
+  let j = 0;
+  while (j < b.length) {
+    if (i < a.length && a[i] === b[j]) {
+      i += 1;
+      j += 1;
+    } else if (i < a.length && at(i + 1, j) >= at(i, j + 1)) i += 1;
+    else {
+      changed.push(j + 1);
+      j += 1;
+    }
+  }
+  const shown = new Set<number>();
+  for (const line of changed)
+    for (let near = line - CONTEXT; near <= line + CONTEXT; near += 1)
+      if (near >= 1 && near <= b.length) shown.add(near);
+  return shown;
+};
+
+export const UNRESOLVED_LINE = {
+  message: 'Unprocessable Entity',
+  errors: ['Pull request review thread line must be part of the diff'],
+  status: '422',
+};
+
 export class FakeGithub {
   readonly repo: string;
   readonly calls: HttpRequest[] = [];
@@ -183,6 +226,12 @@ export class FakeGithub {
       this.moveRef(name, next);
       return ok({ ref: `refs/heads/${name}`, object: { sha: next } });
     }
+    m = method === 'DELETE' ? /^\/git\/refs\/heads\/(.+)$/.exec(rest) : null;
+    if (m) {
+      const name = m[1] ?? '';
+      if (!this.refs.delete(name)) return fail(422, 'Reference does not exist');
+      return { status: 204, body: null };
+    }
     m = method === 'GET' ? /^\/git\/commits\/([0-9a-f]+)$/.exec(rest) : null;
     if (m) {
       const files = this.trees.get(m[1] ?? '');
@@ -259,6 +308,11 @@ export class FakeGithub {
       if (pr === undefined) return fail(404, 'Not Found');
       const sub = m[2] ?? '';
       if (sub === '' && method === 'GET') return ok(this.prObject(pr));
+      if (sub === '' && method === 'PATCH') {
+        if (input.state === 'closed') pr.state = 'closed';
+        pr.updated = this.tick();
+        return ok(this.prObject(pr));
+      }
       if (sub === '/merge') {
         this.mergeByHuman(pr.number);
         return ok({ merged: true });
@@ -266,11 +320,12 @@ export class FakeGithub {
       if (sub === '/files' && method === 'GET') {
         const base = this.trees.get(this.refs.get(pr.base) ?? '') ?? new Map();
         const head = this.trees.get(this.refs.get(pr.head) ?? '') ?? new Map();
-        return ok(
-          [...head.entries()]
+        return ok([
+          ...[...head.entries()]
             .filter(([path, content]) => base.get(path) !== content)
-            .map(([filename]) => ({ filename, status: 'modified' })),
-        );
+            .map(([filename]) => ({ filename, status: base.has(filename) ? 'modified' : 'added' })),
+          ...[...base.keys()].filter((path) => !head.has(path)).map((filename) => ({ filename, status: 'removed' })),
+        ]);
       }
       if (sub === '/reviews' && method === 'GET')
         return ok(this.reviews.filter((r) => r.pr === pr.number).map((r) => this.reviewObject(r)));
@@ -283,6 +338,15 @@ export class FakeGithub {
           );
         const state = { APPROVE: 'APPROVED', REQUEST_CHANGES: 'CHANGES_REQUESTED', COMMENT: 'COMMENTED' }[event];
         if (state === undefined) return fail(422, 'bad event');
+        const commit = this.trees.get(String(input.commit_id));
+        if (commit === undefined) return fail(422, 'commit_id is not part of the pull request');
+        const base = this.trees.get(this.refs.get(pr.base) ?? '') ?? new Map<string, string>();
+        const comments = (input.comments ?? []) as Array<{ path: string; line: number; body: string }>;
+        for (const c of comments) {
+          const content = commit.get(c.path);
+          if (content === undefined || !hunkLines(base.get(c.path), content).has(c.line))
+            return { status: 422, body: UNRESOLVED_LINE };
+        }
         const review: Review = {
           id: this.next++,
           pr: pr.number,
@@ -293,7 +357,7 @@ export class FakeGithub {
           at: this.tick(),
         };
         this.reviews.push(review);
-        for (const c of (input.comments ?? []) as Array<{ path: string; line: number; body: string }>)
+        for (const c of comments)
           this.comments.push({
             id: this.next++,
             pr: pr.number,
@@ -336,6 +400,13 @@ export class FakeGithub {
       const posted = { id: this.next++, pr, user: account, body: String(input.body), at: this.tick() };
       this.issueComments.push(posted);
       return ok(shape(posted), 201);
+    }
+    m = method === 'POST' ? /^\/statuses\/([0-9a-f]{40})$/.exec(rest) : null;
+    if (m) {
+      const head = m[1] ?? '';
+      if (!this.trees.has(head)) return fail(422, `No commit found for SHA: ${head}`);
+      this.setStatus(head, String(input.context), String(input.state));
+      return ok({ context: input.context, state: input.state, description: input.description ?? null }, 201);
     }
     m = /^\/commits\/([0-9a-f]+)\/status$/.exec(rest);
     if (m) {

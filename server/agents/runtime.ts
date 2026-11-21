@@ -17,6 +17,7 @@ export interface Usage {
   readonly outputTokens: number;
   readonly cacheReadTokens: number;
   readonly cacheCreationTokens: number;
+  readonly webRequests: number;
 }
 
 interface JobBase {

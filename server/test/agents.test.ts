@@ -48,7 +48,21 @@ describe('the Claude Code runtime', () => {
       outputTokens: 227,
       cacheReadTokens: 39363,
       cacheCreationTokens: 15435,
+      webRequests: 0,
     });
+  });
+
+  it('counts the server-side web searches and fetches of a run, from the usage and from the stream blocks', () => {
+    const result = (usage: object) => JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', usage });
+    const served = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'server_tool_use', name: 'web_search' }] },
+    });
+    expect(
+      parseStream(result({ server_tool_use: { web_search_requests: 2, web_fetch_requests: 1 } })).usage.webRequests,
+    ).toBe(3);
+    expect(parseStream(`${served}\n${served}\n${result({})}`).usage.webRequests).toBe(2);
+    expect(parseStream(result({ input_tokens: 1 })).usage.webRequests).toBe(0);
   });
 
   it('runs claude headless in the cage and reads the commit through git inside the cage', async () => {
@@ -64,6 +78,7 @@ describe('the Claude Code runtime', () => {
     expect(claude).toEqual(
       expect.arrayContaining(['-p', '--output-format', 'stream-json', '--no-session-persistence']),
     );
+    expect(claude.slice(claude.indexOf('--disallowedTools'))[1]).toBe('WebSearch,WebFetch');
     expect(claude.join(' ')).not.toContain('Do not push');
     expect(inputs[calls.indexOf(claude)]).toContain('Do not push');
     for (const git of calls.filter((c) => c[0] === 'git'))
@@ -172,7 +187,7 @@ describe('the Claude Code runtime', () => {
       verdict: 'changes',
       body: 'Line 2 repeats line 1.',
       comments: [{ path: 'src/greet.txt', line: 2, body: 'Say hello 2.' }],
-      usage: { inputTokens: 4, outputTokens: 152, cacheReadTokens: 26091, cacheCreationTokens: 2616 },
+      usage: { inputTokens: 4, outputTokens: 152, cacheReadTokens: 26091, cacheCreationTokens: 2616, webRequests: 0 },
     });
   });
 

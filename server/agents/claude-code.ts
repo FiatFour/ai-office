@@ -3,7 +3,10 @@ import type { RunResult } from '../sandbox/engine.ts';
 import { AgentFailed, type AgentJob, type AgentResult, type AgentRuntime, parseReview, type Usage } from './runtime.ts';
 
 export interface CageShell {
-  exec(argv: readonly string[], options?: { input?: string; timeoutMs?: number }): Promise<RunResult>;
+  exec(
+    argv: readonly string[],
+    options?: { input?: string; timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<RunResult>;
 }
 
 export interface ClaudeOptions {
@@ -19,10 +22,12 @@ interface StreamLine {
   readonly subtype?: string;
   readonly is_error?: boolean;
   readonly result?: string;
-  readonly usage?: Record<string, unknown>;
+  readonly usage?: Record<string, unknown> & { readonly server_tool_use?: Record<string, unknown> };
+  readonly message?: { readonly content?: unknown };
 }
 
 const TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
+const WITHOUT_WEB = 'WebSearch,WebFetch';
 const GIT = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external='];
 
 const tokens = (usage: Record<string, unknown>, key: string): number => {
@@ -43,6 +48,12 @@ export const parseStream = (raw: string): { text: string; usage: Usage } => {
   if (result.is_error === true || result.subtype !== 'success')
     throw new AgentFailed(`claude ended with ${result.subtype ?? 'an error'}`);
   const usage = result.usage ?? {};
+  const served = lines
+    .flatMap((line) => (Array.isArray(line.message?.content) ? (line.message.content as { type?: unknown }[]) : []))
+    .filter((block) => block?.type === 'server_tool_use').length;
+  const reported =
+    tokens(usage.server_tool_use ?? {}, 'web_search_requests') +
+    tokens(usage.server_tool_use ?? {}, 'web_fetch_requests');
   return {
     text: result.result ?? '',
     usage: {
@@ -50,6 +61,7 @@ export const parseStream = (raw: string): { text: string; usage: Usage } => {
       outputTokens: tokens(usage, 'output_tokens'),
       cacheReadTokens: tokens(usage, 'cache_read_input_tokens'),
       cacheCreationTokens: tokens(usage, 'cache_creation_input_tokens'),
+      webRequests: Math.max(reported, served),
     },
   };
 };
@@ -78,6 +90,8 @@ const claudeArgv = (bin: string, model: string, maxTurns: number): string[] => [
   '--verbose',
   '--allowedTools',
   TOOLS,
+  '--disallowedTools',
+  WITHOUT_WEB,
   '--no-session-persistence',
   '--max-turns',
   String(maxTurns),
@@ -118,10 +132,16 @@ const changedFiles = async (shell: CageShell, since: string): Promise<FileEdit[]
 export const claudeCode = (options: ClaudeOptions): AgentRuntime => ({
   id: 'claude-code',
   async run(job): Promise<AgentResult> {
+    job.signal.throwIfAborted();
     const shell = options.shell(job.worker, job.task);
     const before = job.role === 'author' ? await head(shell) : '';
     const argv = claudeArgv(options.bin ?? 'claude', options.model ?? 'sonnet', options.maxTurns ?? 40);
-    const ran = await shell.exec(argv, { input: promptFor(job), timeoutMs: options.timeoutMs ?? 30 * 60_000 });
+    const ran = await shell.exec(argv, {
+      input: promptFor(job),
+      timeoutMs: options.timeoutMs ?? 30 * 60_000,
+      signal: job.signal,
+    });
+    if (job.signal.aborted) throw new AgentFailed('the run was aborted');
     if (ran.timedOut) throw new AgentFailed('claude ran past its time limit');
     const { text, usage } = parseStream(ran.out);
     if (job.role === 'reviewer') return { role: 'reviewer', ...parseReview(text), usage };

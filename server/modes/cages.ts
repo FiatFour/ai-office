@@ -17,7 +17,9 @@ import { InvalidEvent } from '../events.ts';
 import {
   type ChangeSnapshot,
   type CommentFact,
+  DROPPED_MARK,
   type GitHost,
+  HostError,
   type LineComment,
   type ReviewDraft,
   type ReviewFact,
@@ -90,6 +92,8 @@ export interface CagesOptions {
   readonly roundLimit?: number;
   readonly maxFailures?: number;
   readonly settleMs?: number;
+  readonly reviewRetryMs?: number;
+  readonly onJobFailed?: (task: TaskId, error: unknown) => void;
 }
 
 const ROUND_LIMIT = 3;
@@ -106,7 +110,7 @@ type Job =
     }
   | { readonly kind: 'brief'; readonly box: Box & { pr: string }; readonly change: Change };
 
-const REVIEW_MARK = /^<!-- agent-works:review worker=(\S+) verdict=(approve|changes|comment) -->$/m;
+export const REVIEW_MARK = /^<!-- agent-works:review worker=(\S+) verdict=(approve|changes|comment) -->$/m;
 const reviewMarker = (worker: string, verdict: Verdict) =>
   `<!-- agent-works:review worker=${worker} verdict=${verdict} -->`;
 const changeRef = (repo: string, number: number) => `${repo.toLowerCase()}#${number}`;
@@ -137,6 +141,8 @@ const objectOf = (raw: unknown): Record<string, unknown> => {
     throw new InvalidEvent('the body must be a JSON object');
   return raw as Record<string, unknown>;
 };
+
+const REVIEW_POSTS = 4;
 
 export const cagesMode = (options: CagesOptions): ModeFactory => {
   for (const task of Object.keys(options.tickets))
@@ -232,11 +238,30 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
     };
     const spend = (task: TaskId, used: Usage | null) => usage.set(task, [...(usage.get(task) ?? []), used]);
 
-    const askedBy = async (comments: readonly CommentFact[], head: string) => {
+    const askedBy = async (comments: readonly CommentFact[], reviews: readonly ReviewFact[], head: string) => {
       const reviewer = await reviewHost.login();
-      return comments
+      const inline = comments
         .filter((c) => c.commitId === head && c.author.toLowerCase() === reviewer)
         .map((c) => ({ ...c, body: unquote(c.body) }));
+      const carried = reviews
+        .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === reviewer && r.body.includes(DROPPED_MARK))
+        .map(
+          (r): CommentFact => ({
+            host: r.host,
+            kind: 'review_comment',
+            repo: r.repo,
+            number: r.number,
+            commentId: `${r.reviewId}-in-body`,
+            reviewId: r.reviewId,
+            author: r.reviewer,
+            path: null,
+            line: null,
+            commitId: r.commitId,
+            body: r.body.slice(r.body.indexOf(DROPPED_MARK) + DROPPED_MARK.length).trim(),
+            at: r.at,
+          }),
+        );
+      return [...inline, ...carried];
     };
 
     const runAuthor = async (task: TaskId, worker: string, round: number, comments: readonly CommentFact[]) => {
@@ -251,6 +276,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       });
       if (result.role !== 'author') throw new Error('the author runtime returned a review');
       spend(task, result.usage);
+      abort.signal.throwIfAborted();
       return host.pushFiles(repo, {
         branch: branchOf(task),
         base: options.base,
@@ -266,6 +292,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       if (existing !== null) return void (await poll(existing.number));
       const ticket = ticketOf(task);
       const head = await runAuthor(task, job.box.worker ?? options.author, 0, []);
+      abort.signal.throwIfAborted();
       const opened =
         (await host.findChange(repo, branch)) ??
         (await host.openChange(repo, {
@@ -281,7 +308,11 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       const task = job.box.id;
       const now = await poll(job.change.number);
       if (now.headSha !== job.change.head.v) return;
-      const asked = await askedBy(await host.comments(repo, job.change.number), job.change.head.v);
+      const asked = await askedBy(
+        await host.comments(repo, job.change.number),
+        (await host.snapshot(repo, job.change.number)).reviews,
+        job.change.head.v,
+      );
       const head = await runAuthor(task, options.author, job.round, asked);
       if (head === job.change.head.v) throw new Error('the fix round changed no file');
       await settle(job.change.number, head);
@@ -303,16 +334,39 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       };
     };
 
+    const reviewOf = (reviews: readonly ReviewFact[], head: string, worker: string, self: string) =>
+      reviews
+        .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === self)
+        .map((r) => ({ r, mark: REVIEW_MARK.exec(r.body) }))
+        .find(({ mark }) => mark?.[1] === worker);
+
+    const postWithRetry = async (number: number, draft: ReviewDraft, worker: string) => {
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await reviewHost.postReview(repo, number, draft);
+        } catch (error) {
+          const busy =
+            error instanceof HostError && (error.status === 429 || error.status === 403 || error.status >= 500);
+          if (!busy || attempt >= REVIEW_POSTS) throw error;
+          await sleep(attempt * (options.reviewRetryMs ?? 30_000), undefined, { signal: abort.signal });
+          const created = reviewOf(
+            (await host.snapshot(repo, number)).reviews,
+            draft.commitId,
+            worker,
+            await reviewHost.login(),
+          );
+          if (created !== undefined) return created.r;
+        }
+      }
+    };
+
     const review = async (job: Extract<Job, { kind: 'review' }>) => {
       const task = job.box.id;
       const head = job.change.head.v;
       const snapshot = await host.snapshot(repo, job.change.number);
       if (snapshot.change.headSha !== head) return void take(snapshot);
       const self = await reviewHost.login();
-      const mine = snapshot.reviews
-        .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === self)
-        .map((r) => ({ r, mark: REVIEW_MARK.exec(r.body) }))
-        .find(({ mark }) => mark?.[1] === job.reviewer);
+      const mine = reviewOf(snapshot.reviews, head, job.reviewer, self);
       if (mine !== undefined)
         return ingest(reviewFact(mine.r, job.change, job.reviewer, (mine.mark?.[2] ?? 'comment') as Verdict));
       const result = await runtimeOf(job.reviewer).run({
@@ -327,7 +381,18 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       });
       if (result.role !== 'reviewer') throw new Error('the reviewer runtime returned a change');
       spend(task, result.usage);
-      const posted = await reviewHost.postReview(repo, job.change.number, reviewDraft(head, job.reviewer, result));
+      abort.signal.throwIfAborted();
+      const posted = await postWithRetry(
+        job.change.number,
+        reviewDraft(head, job.reviewer, result),
+        job.reviewer,
+      ).catch(async (error: unknown) => {
+        const now = await host.snapshot(repo, job.change.number);
+        if (now.change.headSha === head) throw error;
+        take(now);
+        return null;
+      });
+      if (posted === null) return;
       ingest(reviewFact(posted, job.change, job.reviewer, result.verdict));
     };
 
@@ -401,6 +466,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
           failures.delete(key);
         } catch (error) {
           if (abort.signal.aborted) return;
+          options.onJobFailed?.(task, error);
           const count = (failures.get(key)?.count ?? 0) + 1;
           failures.set(key, { count, error: (error as Error).message });
           if (count >= maxFailures && job.kind === 'author' && job.box.worker !== null)

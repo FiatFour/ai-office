@@ -91,6 +91,10 @@ Versions come from the page itself when it states one. When it does not, the ver
 | S-54 | Terminal | node-pty uses the Windows ConPTY API and needs Windows 10 1809 or later. winpty support is removed. | [node-pty README](https://github.com/microsoft/node-pty/blob/main/README.md) | README on main, release v1.1.0 | 2026-11-16 | P0-5 |
 | S-55 | GitHub runners | The `ubuntu-latest` label moves from Ubuntu 24.04 to Ubuntu 26.04 over several weeks from October 19, 2026, with the migration planned to finish by November 19, 2026. Until then a job can land on either image. | [runner-images#14748](https://github.com/actions/runner-images/issues/14748) | issue open on the check date | 2026-11-16 | P0-2, P0-3, P2-3 |
 | S-56 | GitHub runners | The Ubuntu 24.04 image is Ubuntu 24.04.5 with Docker 28.0.4, Podman 4.9.3 and PowerShell 7.6.10. | [Ubuntu 24.04 runner image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) | image 20261111.370.1 | 2026-11-16 | P0-2, P2-3 |
+| S-57 | Terminal | `@lydell/node-pty` repackages node-pty with prebuilt binaries for Linux, macOS and Windows on x64 and arm64 as optional dependencies, with no install script. node-pty 1.1.0 itself has prebuilds only for darwin and win32. | [npm @lydell/node-pty](https://www.npmjs.com/package/@lydell/node-pty) | 1.2.0-beta.18 (npm view), node-pty 1.1.0 tarball | 2026-11-16 | P0-5 |
+| S-58 | GitHub runners | Measured: `macos-latest` reports `kern.hv_support: 0` and has no `docker`. `macos-15-intel` reports `kern.hv_support: 1`, and Colima starts a Linux VM with Docker there. | [probe run 43751166025](https://github.com/FiatFour/ai-office/actions/runs/43751166025), [Colima run 43751312726](https://github.com/FiatFour/ai-office/actions/runs/43751312726) | macOS 26.7.2 arm64, macOS 15.7.9 x86_64 | 2026-11-16 | P0-5 |
+| S-59 | GitHub runners | Measured: the Docker daemon on `windows-latest` reports `OSType: windows`, so it cannot run Linux images. | [probe run 43751166025](https://github.com/FiatFour/ai-office/actions/runs/43751166025) | Windows Server 2025, Docker 29 | 2026-11-16 | P0-5 |
+| S-60 | GitHub runners | Measured: `wsl --install -d Debian` works on `windows-latest`, and the distro runs as WSL 2 on kernel 6.18.54.1-microsoft-standard-WSL2. | [probe run 43751312726](https://github.com/FiatFour/ai-office/actions/runs/43751312726) | Windows Server 2025 image 20261103.298.1 | 2026-11-16 | P0-5 |
 
 ## Spec assumptions the sources contradict
 
@@ -114,6 +118,7 @@ Each entry quotes the spec line and the source line. A spike or a G1 decision re
 - Spec, `AGENT_WORKS_PROMPT.md` §9: "CI matrix `ubuntu-latest`, `macos-latest`, `windows-latest` (Docker on Windows runners; mark krun and Podman jobs as Linux-only where runners lack them)."
 - Source, S-49 and S-50: `macos-latest` is arm64 and its image lists no Docker. The runner docs say "Nested-virtualization is not supported due to the limitation of Apple's Virtualization Framework."
 - Effect. Colima and Docker Desktop need a VM, so the macOS terminal lane cannot run on `macos-latest`. P0-5 marks it as not runnable there, or the operator names a macOS machine. The Windows image has Docker 29.7.2 and WSL 2 (S-51), but whether it runs Linux containers is not stated, so P0-5 lane 4 records `docker version` OS type first.
+- Resolved by P0-5. The `macos-latest` lane stays not runnable (S-58). P0-5 runs the macOS lane on `macos-15-intel` with Colima instead. The Windows daemon is Windows-only (S-59), so the Windows lane points `docker.exe` at a Linux daemon inside WSL 2 (S-60).
 
 ### C-4. Hooks that report to HQ fail open by default
 

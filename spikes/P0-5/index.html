@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Agent Works cage terminal</title>
+    <link rel="stylesheet" href="/vendor/xterm.css" />
+    <style>
+      html, body { height: 100%; margin: 0; background: #111; color: #ddd; font: 14px system-ui, sans-serif; }
+      body { display: flex; flex-direction: column; }
+      #status { padding: 4px 8px; }
+      #status[data-state='open'] { background: #1d4d2b; }
+      #status[data-state='reconnecting'], #status[data-state='connecting'] { background: #5c4a12; }
+      #status[data-state='closed'] { background: #6b1d1d; }
+      #term { flex: 1; min-height: 0; padding: 4px; }
+    </style>
+  </head>
+  <body>
+    <div id="status" data-state="connecting">connecting</div>
+    <div id="term"></div>
+    <script type="module">
+      import { FitAddon } from '/vendor/addon-fit.mjs';
+      import { Terminal } from '/vendor/xterm.mjs';
+
+      const CLOSE_PTY_EXITED = 4000;
+      const status = document.getElementById('status');
+      const term = new Terminal({
+        fontFamily: "'DejaVu Sans Mono', 'Noto Sans Mono', 'Noto Sans Thai', 'Cascadia Mono', Menlo, monospace",
+        fontSize: 15,
+        scrollback: 5000,
+      });
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(document.getElementById('term'));
+      fit.fit();
+
+      const setState = (state, text = state) => {
+        status.dataset.state = state;
+        status.textContent = text;
+      };
+
+      let ws;
+      const send = (message) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(message));
+
+      function connect() {
+        const url = new URL('/term', location.href);
+        url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        url.search = new URLSearchParams({ cols: term.cols, rows: term.rows });
+        const socket = new WebSocket(url);
+        ws = socket;
+        socket.onopen = () => setState('open', `open, ${term.cols}x${term.rows}`);
+        socket.onmessage = (event) => {
+          const message = JSON.parse(event.data);
+          if (message.type === 'output') term.write(message.data);
+          if (message.type === 'exit') setState('closed', `closed, terminal exited with code ${message.code}`);
+        };
+        socket.onclose = (event) => {
+          if (ws !== socket) return;
+          if (event.code === CLOSE_PTY_EXITED) return status.dataset.state !== 'closed' && setState('closed');
+          setState('reconnecting');
+          setTimeout(connect, 500);
+        };
+      }
+
+      term.onData((data) => send({ type: 'input', data }));
+      term.onResize(({ cols, rows }) => {
+        send({ type: 'resize', cols, rows });
+        if (status.dataset.state === 'open') setState('open', `open, ${cols}x${rows}`);
+      });
+      window.addEventListener('resize', () => fit.fit());
+      window.aw = { term, drop: () => ws.close(), state: () => status.dataset.state };
+      connect();
+      term.focus();
+    </script>
+  </body>
+</html>

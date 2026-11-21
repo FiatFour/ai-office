@@ -1,0 +1,101 @@
+name: p0-6-replay
+
+on:
+  pull_request:
+    paths:
+      - spikes/P0-2/**
+      - spikes/P0-3/**
+      - spikes/P0-4/**
+      - spikes/P0-5/**
+      - spikes/P0-6/**
+      - docs/threat-model.md
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/p0-6-replay.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  replay:
+    name: replay (docker, 3 runs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Unit tests for the table and the layer 5 guard
+        run: pnpm test spikes/P0-6
+      - name: Replay every attack path three times and time each run
+        run: |
+          OUT="$RUNNER_TEMP/p0-6"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          : > "$OUT/wall-seconds.txt"
+          for run in 1 2 3; do
+            start=$(date +%s)
+            node spikes/P0-6/replay.mjs --out "$OUT/run-$run" 2>&1 | tee "$OUT/run-$run.txt"
+            status=${PIPESTATUS[0]}
+            echo $(( $(date +%s) - start )) >> "$OUT/wall-seconds.txt"
+            [ "$status" -eq 0 ] || { echo "replay run $run failed"; exit 1; }
+          done
+          median=$(sort -n "$OUT/wall-seconds.txt" | sed -n 2p)
+          echo "wall seconds per run: $(paste -sd, "$OUT/wall-seconds.txt"), median $median, budget 600"
+          {
+            echo "| run | wall seconds |"
+            echo "| --- | --- |"
+            awk '{ print "| " NR " | " $1 " |" }' "$OUT/wall-seconds.txt"
+            echo "| median | $median |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$median" -lt 600 ] || { echo "median $median s exceeds the 600 s budget"; exit 1; }
+      - name: Clean up by label
+        if: always()
+        run: node spikes/P0-6/replay.mjs --cleanup
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: p0-6-replay
+          path: ${{ runner.temp }}/p0-6
+
+  mutations:
+    name: mutations (docker, one switch per run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Turn each mechanism off and check that the rows the table declares turn to FAIL and no other row does
+        run: |
+          OUT="$RUNNER_TEMP/p0-6-mutations"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          set +e
+          start=$(date +%s)
+          node spikes/P0-6/run-mutations.mjs --out "$OUT" 2>&1 | tee "$OUT/run.txt"
+          status=${PIPESTATUS[0]}
+          echo "mutation job wall seconds: $(( $(date +%s) - start ))"
+          { echo "### mutations"; cat "$OUT/mutations.md"; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Clean up by label
+        if: always()
+        run: node spikes/P0-6/replay.mjs --cleanup
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: p0-6-mutations
+          path: ${{ runner.temp }}/p0-6-mutations

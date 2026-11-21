@@ -7,6 +7,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { clearRuntime, hqIdFor, VERSION, writeRuntime } from './config.ts';
 import { InvalidEvent, parseEvent } from './events.ts';
 import { Ledger } from './ledger.ts';
+import type { HqPort, ModeFactory } from './modes/cages.ts';
 import { Registry, RegistryError } from './registry.ts';
 import type { SandboxDriver } from './sandbox/container.ts';
 import type { Denial as RawDenial } from './sandbox/firewall.ts';
@@ -24,6 +25,7 @@ export interface HqOptions {
   readonly host?: string;
   readonly makeDriver?: (hq: string, onDenial: (denial: RawDenial) => void) => Promise<SandboxDriver | null>;
   readonly executors?: Partial<Record<CommandKind, Executor>>;
+  readonly mode?: ModeFactory;
 }
 
 export interface RunningHq {
@@ -85,8 +87,10 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
   const hqId = hqIdFor(home);
   const denials = new Map<string, Denial>();
   let lastDenialPush = 0;
+  let mode: ReturnType<ModeFactory> | null = null;
 
   const noteDenial = (raw: RawDenial): void => {
+    mode?.noteDenial(raw);
     const key = `${raw.agent}|${raw.host}|${raw.port}|${raw.reason}`;
     const seen = denials.get(key);
     denials.set(key, { ...raw, count: (seen?.count ?? 0) + 1, lastAt: raw.at });
@@ -119,6 +123,8 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     outbox: outboxSummary(ledger.outbox),
     cages: driver?.list() ?? [],
     denials: [...denials.values()],
+    actions: mode?.actions() ?? [],
+    mode: mode?.view() ?? null,
   });
 
   const push = (): void => {
@@ -128,10 +134,11 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
   };
 
   const run = async (entry: OutboxEntry): Promise<void> => {
-    const executor = options.executors?.[entry.command.kind];
+    const executor = mode?.executors[entry.command.kind] ?? options.executors?.[entry.command.kind];
     if (executor === undefined) {
       ledger.mark(entry.id, 'skipped', 'no executor is wired for this command yet');
     } else {
+      ledger.begin(entry.id);
       try {
         await executor(entry);
         ledger.mark(entry.id, 'done');
@@ -232,6 +239,8 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
       send(removed ? 200 : 404, { removed });
       return;
     }
+    const handled = mode?.route(method, url.pathname, () => readBody(req));
+    if (handled !== undefined) return send(200, await handled);
     if (method === 'POST' && url.pathname === '/api/stop') {
       send(200, { stopping: true });
       setImmediate(() => void close());
@@ -295,6 +304,19 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
   const url = `http://127.0.0.1:${boundPort}`;
   writeRuntime(home, { pid: process.pid, port: boundPort, startedAt, url });
 
+  const port: HqPort = {
+    state: () => ledger.state,
+    ingest: (event) => {
+      ledger.ingest(parseEvent(JSON.parse(JSON.stringify(event))));
+      push();
+      void drain();
+    },
+    outbox: () => ledger.outbox,
+    events: (after) => store.events(after),
+    changed: push,
+  };
+  mode = options.mode?.(port) ?? null;
+
   let closing: Promise<void> | null = null;
   let finish: () => void = () => {};
   const stopped = new Promise<void>((resolve) => {
@@ -302,6 +324,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
   });
   const close = (): Promise<void> => {
     closing ??= (async () => {
+      await mode?.close();
       for (const socket of sockets) socket.terminate();
       wss.close();
       await new Promise<void>((resolve) => {
@@ -316,6 +339,10 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     return closing;
   };
 
+  if (mode !== null) {
+    void getDriver().catch(() => null);
+    mode.start();
+  }
   void drain();
   return { url, port: boundPort, pid: process.pid, snapshot, stopped, close };
 };

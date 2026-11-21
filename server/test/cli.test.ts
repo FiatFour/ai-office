@@ -1,7 +1,8 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, main, parseArgs } from '../cli.ts';
@@ -157,7 +158,7 @@ live('the CLI as a process', () => {
     const stop = cli(a, home, ['stop']);
     expect(stop.out).toContain('stopped');
     await expect(fetch(`http://127.0.0.1:${port}/api/health`)).rejects.toBeTruthy();
-  });
+  }, 60_000);
 
   it('says the port is busy and suggests --port when another program holds it', async () => {
     const root = tempDir('cli-busy');
@@ -234,4 +235,83 @@ live('the CLI as a process', () => {
     const ls = cli(f1, home, ['ls']).out;
     expect(ls.match(/repo github.com\/acme\/shared/g)).toHaveLength(2);
   });
+});
+
+live('serve --mode cages', () => {
+  const config = (dir: string, over: Record<string, unknown> = {}) => {
+    const path = join(dir, 'cages.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        host: 'github',
+        repo: 'acme/app',
+        base: 'main',
+        source: dir,
+        author: 'nova',
+        reviewer: 'vega',
+        tickets: { 'alpha/t1': { kind: 'feature', title: 'Add a file', body: 'Write a file.' } },
+        pollMs: 3_600_000,
+        ...over,
+      }),
+    );
+    return path;
+  };
+
+  it.skipIf(process.platform === 'win32')(
+    'runs HQ with the cages mode from a config file, and Ctrl-C stops it',
+    async () => {
+      const home = tempDir('cli-cages');
+      const port = await freePort();
+      const child = spawn(
+        process.execPath,
+        [BIN, 'serve', '--port', String(port), '--home', home, '--mode', 'cages', '--config', config(home)],
+        {
+          stdio: ['ignore', 'ignore', 'pipe'],
+        },
+      );
+      try {
+        let snap: { mode: unknown } | null = null;
+        for (let i = 0; i < 200 && snap === null; i += 1) {
+          snap = await fetch(`http://127.0.0.1:${port}/api/snapshot`)
+            .then((r) => r.json() as Promise<{ mode: unknown }>)
+            .catch(() => null);
+          if (snap === null) await sleep(50);
+        }
+        expect(snap?.mode).toMatchObject({ rounds: {}, jobs: [] });
+        const bad = await fetch(`http://127.0.0.1:${port}/api/tickets`, { method: 'POST', body: 'null' });
+        expect(bad.status).toBe(400);
+        child.kill('SIGINT');
+        const code = await new Promise<number | null>((resolve) => child.once('exit', (c) => resolve(c)));
+        expect(code).toBe(0);
+      } finally {
+        child.kill('SIGKILL');
+      }
+    },
+    60_000,
+  );
+
+  it('refuses a config it cannot use with exit code 2', () => {
+    const dir = tempDir('cli-cages-bad');
+    expect(cli(dir, dir, ['serve', '--mode', 'cages', '--config', config(dir, { host: 'bitbucket' })]).code).toBe(2);
+    expect(
+      cli(dir, dir, [
+        'serve',
+        '--mode',
+        'cages',
+        '--config',
+        config(dir, { tickets: { 'bad id': { kind: 'chore', title: 't', body: 'b' } } }),
+      ]).code,
+    ).toBe(2);
+    for (const [over, said] of [
+      [{ reviewer: 'Nova' }, /different logins/],
+      [{ repo: 'acme' }, /not <owner>\/<name>/],
+      [{ host: 'gitlab', repo: '7' }, /not a namespace path/],
+    ] as const) {
+      const ran = cli(dir, dir, ['serve', '--mode', 'cages', '--config', config(dir, over)]);
+      expect(ran.code, JSON.stringify(over)).toBe(2);
+      expect(ran.out + ran.err).toMatch(said);
+    }
+    expect(cli(dir, dir, ['serve', '--mode', 'cages']).code).toBe(2);
+    expect(cli(dir, dir, ['serve', '--mode', 'other']).code).toBe(2);
+  }, 60_000);
 });

@@ -14,7 +14,10 @@ import {
   readRuntime,
   resolveHome,
 } from './config.ts';
+import { fileLog } from './githost/host.ts';
 import { startHq } from './hq.ts';
+import type { ModeFactory } from './modes/cages.ts';
+import { ConfigError, cagesFromConfig } from './modes/cages-config.ts';
 import { type DoctorContext, exitCodeOf, formatChecks, type PortState, runDoctor } from './preflight/checks.ts';
 import { realHostProbe } from './preflight/host.ts';
 import { Registry } from './registry.ts';
@@ -40,7 +43,7 @@ interface Parsed {
   readonly flags: Readonly<Record<string, string | true>>;
 }
 
-const VALUE_FLAGS = new Set(['port', 'home', 'factory', 'remote', 'task', 'worker', 'source']);
+const VALUE_FLAGS = new Set(['port', 'home', 'factory', 'remote', 'task', 'worker', 'source', 'mode', 'config']);
 
 export const parseArgs = (argv: readonly string[]): Parsed => {
   const positional: string[] = [];
@@ -58,7 +61,7 @@ export const parseArgs = (argv: readonly string[]): Parsed => {
   return { command, positional: rest, flags };
 };
 
-const HELP = `agent-works [open|ls|stop|doctor|add-repo|cage]
+const HELP = `agent-works [open|ls|stop|doctor|add-repo|cage|serve]
 
   open [--no-open] [--port N]   start or reuse HQ and register this folder as a factory (default)
   ls                            list factories and the repos each one holds
@@ -66,7 +69,8 @@ const HELP = `agent-works [open|ls|stop|doctor|add-repo|cage]
   doctor [--json]               check this machine, one PASS, WARN, FAIL or SKIP per line
   add-repo <path> [--factory <folder>] [--remote <url>]
   cage start --task <t> --worker <w> [--source <repo>]   start one cage (HQ needs a running engine)
-  cage stop <id>`;
+  cage stop <id>
+  serve [--mode cages --config <file.json>]   run HQ in the foreground; cages mode runs tickets to reviewed PRs`;
 
 const health = async (port: number): Promise<{ pid: number } | null> => {
   try {
@@ -241,6 +245,29 @@ const hqDriver =
     });
   };
 
+const serveMode = (
+  flags: Parsed['flags'],
+  home: string,
+  driver: () => Promise<SandboxDriver | null>,
+): ModeFactory | undefined => {
+  if (flags.mode === undefined) return undefined;
+  if (flags.mode !== 'cages') throw new CliError(`unknown mode ${String(flags.mode)}; the only mode is cages`, 2);
+  if (typeof flags.config !== 'string') throw new CliError('--mode cages needs --config <file.json>', 2);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(flags.config, 'utf8'));
+  } catch (error) {
+    throw new CliError(`cannot read ${flags.config}: ${(error as Error).message}`, 2);
+  }
+  try {
+    mkdirSync(home, { recursive: true });
+    return cagesFromConfig(raw, driver, fileLog(join(home, 'api-calls.jsonl')));
+  } catch (error) {
+    if (error instanceof ConfigError) throw new CliError(error.message, 2);
+    throw error;
+  }
+};
+
 export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: Io = stdio): Promise<number> => {
   const { command, positional, flags } = parseArgs(argv);
   const home = resolve(typeof flags.home === 'string' ? flags.home : resolveHome(env));
@@ -260,11 +287,32 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
     return 0;
   }
   if (command === 'serve') {
-    const hq = await startHq({ home, port, makeDriver: hqDriver(env, home) }).catch((error: unknown) => {
-      if (error instanceof StoreLockedError || error instanceof StoreCorruptError) throw new CliError(error.message, 3);
-      throw error;
+    let made: (driver: SandboxDriver | null) => void = () => {};
+    const driver = new Promise<SandboxDriver | null>((resolve) => {
+      made = resolve;
     });
-    const quit = () => void hq.close();
+    const makeDriver = async (hq: string, onDenial: Parameters<ReturnType<typeof hqDriver>>[1]) => {
+      const active = await hqDriver(env, home)(hq, onDenial).catch((error: unknown) => {
+        made(null);
+        throw error;
+      });
+      made(active);
+      return active;
+    };
+    const mode = serveMode(flags, home, () => driver);
+    const hq = await startHq({ home, port, makeDriver, ...(mode === undefined ? {} : { mode }) }).catch(
+      (error: unknown) => {
+        if (error instanceof StoreLockedError || error instanceof StoreCorruptError)
+          throw new CliError(error.message, 3);
+        throw error;
+      },
+    );
+    let quitting = false;
+    const quit = () => {
+      if (quitting) process.exit(130);
+      quitting = true;
+      void hq.close();
+    };
     process.on('SIGTERM', quit);
     process.on('SIGINT', quit);
     await hq.stopped;

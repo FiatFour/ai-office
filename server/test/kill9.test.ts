@@ -5,10 +5,9 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { hasSqlite, tempDir } from './helpers.ts';
+import { canSpawnTs as canRun, exited, tempDir } from './helpers.ts';
 
 const BIN = fileURLToPath(new URL('../../bin/agent-works.ts', import.meta.url));
-const canRun = (process.features as { typescript?: boolean | string }).typescript ? hasSqlite : false;
 
 const freePort = (): Promise<number> =>
   new Promise((resolve) => {
@@ -25,11 +24,6 @@ interface Booted {
   readonly stderr: () => string;
   readonly dead: boolean;
 }
-
-const exited = (child: ChildProcess): Promise<void> =>
-  new Promise((resolve) =>
-    child.exitCode !== null || child.signalCode !== null ? resolve() : child.once('exit', () => resolve()),
-  );
 
 const boot = async (home: string, port: number): Promise<Booted> => {
   const child = spawn(process.execPath, [...process.execArgv, BIN, 'serve', '--port', String(port), '--home', home], {

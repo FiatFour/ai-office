@@ -513,8 +513,8 @@ const MUTANTS = [
     edits: [
       [
         'server/ledger.ts',
-        "entry.status === 'pending' || retryable(entry));\n  }",
-        "entry.status === 'pending');\n  }",
+        "(entry.status === 'pending' || entry.status === 'failed') && entry.attempts < MAX_ATTEMPTS;",
+        "entry.status === 'pending' && entry.attempts < MAX_ATTEMPTS;",
       ],
     ],
     tests: [STORE, HQ],
@@ -523,7 +523,11 @@ const MUTANTS = [
     name: 'outbox-retry-unbounded',
     claim: 'a failed command stops being retried after its attempts and is then pruned',
     edits: [
-      ['server/ledger.ts', "entry.status === 'failed' && entry.attempts < MAX_ATTEMPTS", "entry.status === 'failed'"],
+      [
+        'server/ledger.ts',
+        "(entry.status === 'pending' || entry.status === 'failed') && entry.attempts < MAX_ATTEMPTS;",
+        "entry.status === 'pending' || entry.status === 'failed';",
+      ],
     ],
     tests: [STORE, HQ],
   },

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,16 @@ import { scanRepo } from './git-scan.mjs';
 import { startGuardServer } from './hooks/guard-server.mjs';
 import { checkToolCall, findProtected } from './protected-paths.mjs';
 import { classifyResult, hookDownBlocked } from './scoring.mjs';
+
+const scratchDirs: string[] = [];
+const scratch = (prefix: string): string => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  scratchDirs.push(dir);
+  return dir;
+};
+afterAll(() => {
+  for (const dir of scratchDirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+});
 
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
 
@@ -49,7 +59,7 @@ const readersOutput = (repo: string) =>
 describePosix('git readers against a masked repo', () => {
   let root: string;
   beforeAll(() => {
-    root = mkdtempSync(join(tmpdir(), 'p0-3-git-'));
+    root = scratch('p0-3-git-');
   });
 
   it('control: a harness that tracks the protected files leaks every canary once the mask empties them', () => {
@@ -140,7 +150,7 @@ describePosix('git readers against a masked repo', () => {
 describePosix('the directory walk fails closed', () => {
   let dir: string;
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), 'p0-3-walk-'));
+    dir = scratch('p0-3-walk-');
     mkdirSync(join(dir, 'zz'));
     mkdirSync(join(dir, 'node_modules', 'pkg'), { recursive: true });
     for (let i = 0; i < 5100; i++) writeFileSync(join(dir, `f${String(i).padStart(5, '0')}.txt`), '');
@@ -179,7 +189,7 @@ describePosix('the directory walk fails closed', () => {
 describePosix('layer 4 matcher bypass classes', () => {
   let dir: string;
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), 'p0-3-bypass-'));
+    dir = scratch('p0-3-bypass-');
     for (const name of ['.env', '.envrc', 'deploy.pem', 'notes.txt', 'config/credentials.json', 'src/a.ts']) {
       mkdirSync(join(dir, name, '..'), { recursive: true });
       writeFileSync(join(dir, name), 'x\n');
@@ -270,7 +280,7 @@ describePosix('guard server hardening', () => {
   let server: Awaited<ReturnType<typeof startGuardServer>>;
   const logPath = () => join(dir, 'events.jsonl');
   beforeAll(async () => {
-    dir = mkdtempSync(join(tmpdir(), 'p0-3-fuzz-'));
+    dir = scratch('p0-3-fuzz-');
     mkdirSync(join(dir, 'repo'));
     writeFileSync(join(dir, 'repo', '.env'), 'K=v\n');
     server = await startGuardServer({
@@ -373,7 +383,7 @@ describePosix('guard server hardening', () => {
 
 describePosix('maskMounts', () => {
   it('throws instead of returning a partial mask when the tree is too large to scan', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'p0-3-mask-'));
+    const dir = scratch('p0-3-mask-');
     for (let i = 0; i < 20; i++) writeFileSync(join(dir, `f${i}`), '');
     expect(() => maskMounts(dir, '/e', '/workspace', 5)).toThrow(/too large|cap/);
   });

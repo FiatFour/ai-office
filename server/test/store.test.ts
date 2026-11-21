@@ -286,9 +286,11 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
     it(`is offered again until it has failed ${MAX_ATTEMPTS} times, then stays failed with the reason`, () => {
       const { store, ledger, id } = seededFailing();
       for (let attempt = 1; attempt < MAX_ATTEMPTS; attempt += 1) {
+        ledger.begin(id);
         ledger.mark(id, 'failed', 'no image');
         expect(ledger.runnable().map((e) => e.id)).toContain(id);
       }
+      ledger.begin(id);
       ledger.mark(id, 'failed', 'no image');
       const spent = ledger.outbox.find((e) => e.id === id);
       expect(spent).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS });
@@ -299,6 +301,7 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
 
     it('is pruned with the other closed commands once it has given up, never before', () => {
       const { store, ledger, id } = seededFailing();
+      ledger.begin(id);
       ledger.mark(id, 'failed', 'x');
       const saved = store.load() as Persisted;
       const retrying = saved.outbox.find((e) => e.id === id) as OutboxEntry;
@@ -309,6 +312,7 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
       }));
       store.commit({ ...saved, outbox: [...spent, retrying] });
       const reloaded = new Ledger(store);
+      reloaded.begin(retrying.id);
       reloaded.mark(retrying.id, 'failed', 'x');
       const ids = reloaded.outbox.map((e) => e.id);
       expect(ids).toContain(retrying.id);
@@ -323,6 +327,7 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
       const first = open(dir);
       for (const event of story) first.ledger.ingest(ev(event));
       const id = first.ledger.pending()[0]?.id ?? '';
+      first.ledger.begin(id);
       first.ledger.mark(id, 'failed', 'x');
       first.store.close();
       const second = open(dir);
@@ -330,6 +335,44 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
       expect(second.ledger.runnable().map((e) => e.id)).toContain(id);
       second.store.close();
     });
+  });
+
+  it('counts a run that never finished as an attempt, so a command that kills HQ is given up', () => {
+    const dir = tempDir('ledger-crash');
+    let id = '';
+    for (let boot = 1; boot <= MAX_ATTEMPTS; boot += 1) {
+      const { store, ledger } = open(dir);
+      if (boot === 1) for (const event of story) ledger.ingest(ev(event));
+      id ||= ledger.pending()[0]?.id ?? '';
+      expect(ledger.runnable().map((e) => e.id)).toContain(id);
+      ledger.begin(id);
+      store.close();
+    }
+    const { store, ledger } = open(dir);
+    const spent = ledger.outbox.find((e) => e.id === id);
+    expect(spent).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS });
+    expect(spent?.error).toBe(`HQ stopped while it ran (gave up after ${MAX_ATTEMPTS} attempts)`);
+    expect(ledger.runnable().map((e) => e.id)).not.toContain(id);
+    store.close();
+  });
+
+  it('never issues a command id twice, even when the database is rolled back to an older copy', () => {
+    const dir = tempDir('ledger-rollback');
+    const first = open(dir);
+    first.ledger.ingest(ev(story[0]));
+    first.store.close();
+    const backup = readFileSync(join(dir, 'hq.db'));
+    const issued = [0, 1].map(() => {
+      writeFileSync(join(dir, 'hq.db'), backup);
+      const { store, ledger } = open(dir);
+      const ids = story.slice(1).flatMap((event) => ledger.ingest(ev(event)).commands.map((entry) => entry.id));
+      store.close();
+      return ids;
+    });
+    const [a = [], b = []] = issued;
+    expect(a.length).toBeGreaterThan(0);
+    expect(a.map((id) => id.split('.').slice(1).join('.'))).toEqual(b.map((id) => id.split('.').slice(1).join('.')));
+    expect(a.filter((id) => b.includes(id))).toEqual([]);
   });
 
   it('trims closed commands to the newest 200 and keeps every open one', () => {

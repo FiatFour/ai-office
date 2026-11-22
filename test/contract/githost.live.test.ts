@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { github } from '../../server/githost/github.ts';
-import type { ApiCall } from '../../server/githost/host.ts';
+import { type ApiCall, cliTransport } from '../../server/githost/host.ts';
 import { type GithostSubject, githostCases, payloadCases } from './githost.contract.ts';
 import { registerCases, registerNotRun } from './kit.ts';
-import { type Deliveries, forwardDeliveries, liveTransport, tidy } from './live-github.ts';
+import { type Deliveries, forwardDeliveries, tidy } from './live-github.ts';
 
 const repo = process.env.AW_LIVE_GITHUB ?? '';
 
@@ -21,7 +21,7 @@ if (repo === '') {
     const branches: string[] = [];
     const calls: ApiCall[] = [];
     let deliveries: Deliveries;
-    const client = github({ repo, base: 'main', send: liveTransport(), log: (call) => calls.push(call) });
+    const client = github({ repo, base: 'main', send: cliTransport('gh'), log: (call) => calls.push(call) });
     const subject: GithostSubject = {
       has: new Set(),
       host: 'github',

@@ -15,8 +15,6 @@ const OS_NAMES: Record<string, string> = { linux: 'linux', darwin: 'macos', win3
 
 export const OS: string = OS_NAMES[process.platform] ?? process.platform;
 
-export type DriverId = string;
-
 export const record = (entry: Omit<Row, 'os'>): void => {
   const file = process.env.CONTRACT_RESULTS;
   if (file !== undefined && file !== '') appendFileSync(file, `${JSON.stringify({ ...entry, os: OS })}\n`);
@@ -58,7 +56,7 @@ export const attempt = async <S extends Subject>(item: Case<S>, subject: S): Pro
 };
 
 export const registerCases = <S extends Subject>(
-  driver: DriverId,
+  driver: string,
   cases: readonly Case<S>[],
   subject: () => S,
   timeoutMs: number,
@@ -77,7 +75,7 @@ export const registerCases = <S extends Subject>(
   }
 };
 
-export const registerNotRun = (driver: DriverId, reason: string): void => {
+export const registerNotRun = (driver: string, reason: string): void => {
   record({ driver, case: null, status: 'not-run', reason });
   describe(driver, () => {
     it.skip(`not run: ${reason}`, () => {});

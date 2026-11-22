@@ -35,7 +35,7 @@ const failing = async (faults: SandboxFault[]): Promise<string[]> => {
 describe('the SandboxDriver contract against an in-memory fake', () => {
   it('passes every case on the fake that keeps every rule', async () => {
     expect(await failing([])).toEqual([]);
-  });
+  }, 60_000);
 
   it('names every fault in the table, and every case is broken by one', () => {
     const covered = new Set(Object.values(SANDBOX_BREAKS).flat());

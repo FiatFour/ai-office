@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
-import { type ApiCall, cliTransport, signatureValid } from '../../server/githost/host.ts';
+import { signatureValid } from '../../server/githost/host.ts';
 import { runBinary } from '../../server/sandbox/engine.ts';
 import type { Payload } from './githost.contract.ts';
 
@@ -91,8 +91,6 @@ export const forwardDeliveries = async (repo: string): Promise<Deliveries> => {
   } as Deliveries;
 };
 
-export const liveTransport = () => cliTransport('gh');
-
 export const tidy = async (repo: string, branches: readonly string[]): Promise<string[]> => {
   const left: string[] = [];
   const owner = repo.split('/')[0] ?? '';
@@ -109,5 +107,3 @@ export const tidy = async (repo: string, branches: readonly string[]): Promise<s
   }
   return left;
 };
-
-export type { ApiCall };

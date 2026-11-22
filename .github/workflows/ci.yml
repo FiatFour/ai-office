@@ -128,6 +128,26 @@ jobs:
           node scripts/contract-table.mjs contract-results
           if ($LASTEXITCODE -ne 0) { throw "the table has a blank cell or a failure" }
 
+  contract-mutants:
+    name: contract mutants (every broken guard fails a contract case or the table)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Break each guard in turn and require a contract case to fail
+        run: |
+          $env:MUTANT_OUT = Join-Path $env:RUNNER_TEMP 'contract-mutants.txt'
+          node test/contract/mutants.mjs
+          $status = $LASTEXITCODE
+          Get-Content $env:MUTANT_OUT | Select-Object -Last 1 | Add-Content $env:GITHUB_STEP_SUMMARY
+          if ($status -ne 0) { throw "a contract mutant survived or could not be applied" }
+
   bench-mutants:
     name: bench mutants (the whole suite, every mutant caught)
     runs-on: ubuntu-latest

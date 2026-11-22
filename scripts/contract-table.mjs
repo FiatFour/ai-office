@@ -8,6 +8,7 @@ export const OSES = ['linux', 'macos', 'windows'];
 /** @typedef {{ driver: string, os: string, case: string | null, status: 'pass' | 'fail' | 'not-run' | 'expected', reason: string | null }} Row */
 
 /** A case that cannot apply to a driver, with the reason the plan gives. */
+/** @type {Record<string, string[]>} */
 const NOT_APPLICABLE = { 'gitlab-recorded': ['a-github-signature-is-checked'] };
 
 /** @param {string} driver @param {string} os */

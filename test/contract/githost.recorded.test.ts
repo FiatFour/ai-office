@@ -27,6 +27,7 @@ const subjectOn = (host: 'github' | 'gitlab'): GithostSubject => {
     calls,
     merges: () => api.calls.filter((c) => /\/merge$/.test(c.path)).length,
     payloads: recorded(host),
+    firstNumber: 1,
     branch: (tag) => `aw/alpha/${tag}`,
   };
 };

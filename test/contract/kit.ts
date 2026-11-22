@@ -1,7 +1,7 @@
 import { appendFileSync } from 'node:fs';
 import { describe, it } from 'vitest';
 
-export type Status = 'pass' | 'fail' | 'not-run';
+export type Status = 'pass' | 'fail' | 'not-run' | 'expected';
 
 export interface Row {
   readonly driver: string;
@@ -20,6 +20,10 @@ export const record = (entry: Omit<Row, 'os'>): void => {
   if (file !== undefined && file !== '') appendFileSync(file, `${JSON.stringify({ ...entry, os: OS })}\n`);
 };
 
+export const recordExpected = (driver: string, ids: readonly string[]): void => {
+  for (const id of ids) record({ driver, case: id, status: 'expected', reason: null });
+};
+
 export class NotRun extends Error {}
 
 export interface Subject {
@@ -34,7 +38,7 @@ export interface Case<S extends Subject> {
 }
 
 export interface Outcome {
-  readonly status: Status;
+  readonly status: Exclude<Status, 'expected'>;
   readonly reason: string | null;
   readonly error: unknown;
 }
@@ -55,6 +59,21 @@ export const attempt = async <S extends Subject>(item: Case<S>, subject: S): Pro
   }
 };
 
+export const withDeadline = async (run: Promise<Outcome>, ms: number): Promise<Outcome> => {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<Outcome>((resolve) => {
+    timer = setTimeout(() => {
+      const reason = `timed out after ${ms} ms`;
+      resolve({ status: 'fail', reason, error: new Error(reason) });
+    }, ms);
+  });
+  try {
+    return await Promise.race([run, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export const registerCases = <S extends Subject>(
   driver: string,
   cases: readonly Case<S>[],
@@ -65,7 +84,7 @@ export const registerCases = <S extends Subject>(
     it(
       item.id,
       async (context) => {
-        const outcome = await attempt(item, subject());
+        const outcome = await withDeadline(attempt(item, subject()), Math.max(1, timeoutMs - 1000));
         record({ driver, case: item.id, status: outcome.status, reason: outcome.reason });
         if (outcome.status === 'not-run') context.skip(outcome.reason ?? 'not run');
         if (outcome.status === 'fail') throw outcome.error;

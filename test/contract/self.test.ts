@@ -3,9 +3,11 @@ import { tempDir } from '../../server/test/helpers.ts';
 import { type HostFault, memorySubject } from './fakes/githost.ts';
 import { fakeSubject, type SandboxFault } from './fakes/sandbox.ts';
 import { type GithostSubject, githostCases, type Payload, payloadCases } from './githost.contract.ts';
-import { attempt } from './kit.ts';
+import { attempt, withDeadline } from './kit.ts';
 import { recorded } from './payloads.ts';
 import { sandboxCases } from './sandbox.contract.ts';
+
+const ROOM = process.platform === 'win32' ? 240_000 : 60_000;
 
 const SANDBOX_BREAKS: Record<SandboxFault, string[]> = {
   'leaks-secrets': ['export-is-sanitized', 'every-protected-file-is-removed'],
@@ -33,9 +35,13 @@ const failing = async (faults: SandboxFault[]): Promise<string[]> => {
 };
 
 describe('the SandboxDriver contract against an in-memory fake', () => {
-  it('passes every case on the fake that keeps every rule', async () => {
-    expect(await failing([])).toEqual([]);
-  }, 60_000);
+  it(
+    'passes every case on the fake that keeps every rule',
+    async () => {
+      expect(await failing([])).toEqual([]);
+    },
+    ROOM,
+  );
 
   it('names every fault in the table, and every case is broken by one', () => {
     const covered = new Set(Object.values(SANDBOX_BREAKS).flat());
@@ -49,7 +55,7 @@ describe('the SandboxDriver contract against an in-memory fake', () => {
       expect(failed).toEqual(expect.arrayContaining(expected));
       expect(failed.length).toBeGreaterThan(0);
     },
-    60_000,
+    ROOM,
   );
 });
 
@@ -91,6 +97,11 @@ describe('the GitHost contract against an in-memory fake', () => {
     expect(skipped).toEqual([]);
   });
 
+  it('fails the first-number check when the host numbers its first change differently', async () => {
+    const subject = { ...memorySubject([], PAYLOADS), firstNumber: 99 };
+    expect(await failingCases(subject, [...githostCases])).toContain('push-and-open-are-idempotent');
+  });
+
   it('breaks every host case with one fault', () => {
     expect(githostCases.map((item) => item.id).filter((id) => !Object.values(HOST_BREAKS).flat().includes(id))).toEqual(
       [],
@@ -127,5 +138,17 @@ describe('the GitHost contract against an in-memory fake', () => {
   ])('fails the payload cases on %s', async (_name, payloads) => {
     const failed = await failingCases(memorySubject([], payloads), [...payloadCases]);
     expect(failed.length).toBeGreaterThan(0);
+  });
+});
+
+describe('a case that never returns', () => {
+  it('becomes a failed outcome with the time it was given, instead of a row nobody wrote', async () => {
+    const outcome = await withDeadline(new Promise(() => {}), 20);
+    expect(outcome).toMatchObject({ status: 'fail', reason: 'timed out after 20 ms' });
+  });
+
+  it('keeps the outcome of a case that returns in time', async () => {
+    const outcome = await withDeadline(Promise.resolve({ status: 'pass', reason: null, error: null }), 1000);
+    expect(outcome.status).toBe('pass');
   });
 });

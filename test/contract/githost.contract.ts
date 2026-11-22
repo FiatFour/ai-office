@@ -32,6 +32,7 @@ export interface GithostSubject extends Subject {
   readonly calls: readonly ApiCall[];
   readonly merges: () => number;
   readonly payloads: readonly Payload[];
+  readonly firstNumber?: number;
   branch(tag: string): string;
 }
 
@@ -76,7 +77,8 @@ export const githostCases: readonly Case<GithostSubject>[] = [
         state: 'open',
         headSha: head,
       });
-      expect(opened.author.toLowerCase()).toBe(await s.author.login());
+      if (s.firstNumber !== undefined) expect(opened.number).toBe(s.firstNumber);
+      expect(opened.author.toLowerCase()).toBe((await s.author.login()).toLowerCase());
       expect(opened.at).toBeGreaterThan(0);
       expect(await s.author.findChange(s.repo, branch)).toMatchObject({ number: opened.number });
       const before = writes(s);
@@ -128,19 +130,19 @@ export const githostCases: readonly Case<GithostSubject>[] = [
         comments: [{ path: 'contract/a.txt', line: 2, body: 'rename b' }],
       });
       expect(review).toMatchObject({ kind: 'review', verdict, commitId: head });
-      expect(review.reviewer.toLowerCase()).toBe(await s.reviewer.login());
+      expect(review.reviewer.toLowerCase()).toBe((await s.reviewer.login()).toLowerCase());
       expect(review.at).toBeGreaterThan(0);
       const comments = await s.author.comments(s.repo, pr.number);
       const line = comments.find((c) => c.line === 2);
       expect(line).toMatchObject({ path: 'contract/a.txt', body: 'rename b' });
-      expect(line?.author.toLowerCase()).toBe(await s.reviewer.login());
+      expect(line?.author.toLowerCase()).toBe((await s.reviewer.login()).toLowerCase());
       expect(await s.reviewer.files(s.repo, pr.number, head)).toEqual([
         { path: 'contract/a.txt', content: 'a\nb\nc\n' },
       ]);
       const poll = toPoll(await s.author.snapshot(s.repo, pr.number));
       expect(poll).toMatchObject({ source: 'poll', number: pr.number, headSha: head, branch: pr.branch });
-      expect(poll.reviews.map((r) => ({ reviewer: r.reviewer.toLowerCase(), verdict: r.verdict }))).toEqual([
-        { reviewer: await s.reviewer.login(), verdict },
+      expect(poll.reviews.map((r) => ({ ...r, reviewer: r.reviewer.toLowerCase() }))).toEqual([
+        { reviewer: (await s.reviewer.login()).toLowerCase(), verdict },
       ]);
     },
   },

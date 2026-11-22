@@ -174,7 +174,7 @@ jobs:
                   '--exclude', 'server/test/cli.test.ts', '--exclude', 'server/test/lockrace.test.ts', '--exclude', 'server/test/perf.test.ts',
                   '--exclude', 'bench/test/task-setup.test.ts', '--exclude', 'bench/test/closure.test.ts', '--exclude', 'bench/test/cage-mount.test.ts',
                   '--exclude', 'bench/test/arms.test.ts', '--exclude', 'bench/test/cli.test.ts',
-                  '--exclude', 'test/contract')
+                  '--exclude', 'test/contract/sandbox.real.test.ts')
               )
               foreach ($step in $steps) {
                 & pnpm @step | Out-Host

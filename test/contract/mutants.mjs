@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const HOST = 'test/contract/githost.recorded.test.ts';
+const EXPECTED = 'test/contract/expected.test.ts';
 const SANDBOX = 'test/contract/sandbox.real.test.ts';
 
-/** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, test: string, caught: string[] }>} */
+/** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, test: string, caught: string[], table?: RegExp }>} */
 const MUTANTS = [
   {
     name: 'find-comment-trusts-any-author',
@@ -131,6 +132,34 @@ const MUTANTS = [
     test: SANDBOX,
     caught: ['a-missing-image-names-the-build-command'],
   },
+  {
+    name: 'registration-drops-a-case',
+    claim: 'a case the contract lists but the registration dropped fails the table',
+    edits: [
+      [
+        'test/contract/githost.recorded.test.ts',
+        '[...githostCases, ...payloadCases]',
+        '[...githostCases, ...payloadCases].slice(1)',
+      ],
+    ],
+    test: HOST,
+    caught: [],
+    table: /github-recorded on linux never ran/,
+  },
+  {
+    name: 'registration-skips-a-case',
+    claim: 'a case wrapped in it.skip fails the table',
+    edits: [
+      [
+        'test/contract/kit.ts',
+        '    it(\n      item.id,',
+        "    (item.id.startsWith('every') ? it.skip : it)(\n      item.id,",
+      ],
+    ],
+    test: HOST,
+    caught: [],
+    table: /github-recorded on linux never ran every-/,
+  },
 ];
 
 const only = process.argv.slice(2);
@@ -151,10 +180,26 @@ for (const mutant of selected) {
       if (!current.includes(find)) throw new Error(`pattern not found in ${file}: ${find}`);
       writeFileSync(path, current.replace(find, replace));
     }
-    const run = spawnSync('pnpm', ['vitest', 'run', mutant.test], { cwd: ROOT, encoding: 'utf8', timeout: 600_000 });
+    const results = mkdtempSync(join(tmpdir(), 'contract-results-'));
+    const env = { ...process.env, CONTRACT_RESULTS: join(results, 'linux.jsonl') };
+    const targets = mutant.table ? [mutant.test, EXPECTED] : [mutant.test];
+    const run = spawnSync('pnpm', ['vitest', 'run', ...targets], {
+      cwd: ROOT,
+      env,
+      encoding: 'utf8',
+      timeout: 600_000,
+    });
     const output = `${run.stdout}${run.stderr}`;
     const failing = mutant.caught.filter((id) => new RegExp(`(×|✗|FAIL)[^\\n]*${id}`).test(output));
-    const ok = run.status !== 0 && failing.length === mutant.caught.length;
+    let ok = run.status !== 0 && failing.length === mutant.caught.length;
+    if (mutant.table) {
+      const table = spawnSync('node', ['scripts/contract-table.mjs', results, 'linux'], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      ok = table.status !== 0 && mutant.table.test(table.stderr);
+      failing.push(...(ok ? ['the table'] : []));
+    }
     if (ok) caught += 1;
     line = `${ok ? 'OK  ' : 'BAD '} ${mutant.name}: ${ok ? 'caught by' : `survived or the wrong case failed, wanted ${mutant.caught.join(', ')}, saw failing`} ${failing.join(', ') || 'nothing'}. Claim: ${mutant.claim}`;
   } catch (error) {

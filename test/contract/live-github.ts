@@ -107,3 +107,5 @@ export const tidy = async (repo: string, branches: readonly string[]): Promise<s
   }
   return left;
 };
+
+export const WEBHOOK_CASE = 'webhooks-are-delivered-signed';

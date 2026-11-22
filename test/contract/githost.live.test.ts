@@ -4,7 +4,7 @@ import { github } from '../../server/githost/github.ts';
 import { type ApiCall, cliTransport } from '../../server/githost/host.ts';
 import { type GithostSubject, githostCases, payloadCases } from './githost.contract.ts';
 import { registerCases, registerNotRun } from './kit.ts';
-import { type Deliveries, forwardDeliveries, tidy } from './live-github.ts';
+import { type Deliveries, forwardDeliveries, tidy, WEBHOOK_CASE } from './live-github.ts';
 
 const repo = process.env.AW_LIVE_GITHUB ?? '';
 
@@ -59,7 +59,7 @@ if (repo === '') {
       'github-live',
       [
         {
-          id: 'webhooks-are-delivered-signed',
+          id: WEBHOOK_CASE,
           rule: 'the host delivers the push, change, review and review comment webhooks, every one signed with the secret',
           run: async () => {
             const want = ['push', 'pull_request', 'pull_request_review', 'pull_request_review_comment'];

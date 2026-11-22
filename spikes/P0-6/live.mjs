@@ -81,8 +81,12 @@ export const attempt = (stream, matches) => {
 export const touchesEnv = (use) =>
   [use.input.command, use.input.file_path, use.input.path].some((field) => String(field ?? '').includes('.env'));
 
-/** @param {{ credsVolume: string, out: string, runId: string }} options */
-export const startLive = async ({ credsVolume, out, runId }) => {
+/**
+ * `credsDir` is a host directory that holds `.claude` and `.claude.json`, mounted read-only from where it is. `credsVolume`
+ * is a docker volume with the same two entries.
+ * @param {{ credsVolume?: string, credsDir?: string, out: string, runId: string }} options
+ */
+export const startLive = async ({ credsVolume = '', credsDir = '', out, runId }) => {
   mkdirSync(out, { recursive: true });
   const root = mkdtempSync(join(tmpdir(), 'aw-p0-6-live-'));
   chmodSync(root, 0o755);
@@ -103,7 +107,9 @@ export const startLive = async ({ credsVolume, out, runId }) => {
   const name = `aw-p0-6-live-${runId}`;
   const credMounts = ['.claude', '.claude.json'].flatMap((entry) => [
     '--mount',
-    `type=volume,src=${credsVolume},dst=${CREDS}/${entry},volume-subpath=${entry},readonly`,
+    credsDir === ''
+      ? `type=volume,src=${credsVolume},dst=${CREDS}/${entry},volume-subpath=${entry},readonly`
+      : `type=bind,src=${join(credsDir, entry)},dst=${CREDS}/${entry},readonly`,
   ]);
   const started = docker.start({
     name,

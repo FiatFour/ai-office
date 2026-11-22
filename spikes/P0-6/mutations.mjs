@@ -54,6 +54,10 @@ export const MUTATIONS = {
     switch: 'the proxy allowlist also names example.com',
     collateral: { 'fw-label-spoof': 'the row reads the deny event that an allowed host would no longer produce' },
   },
+  'allowlist-off': {
+    scope: 'firewall',
+    switch: 'a copy of the proxy tunnels to any host, not only the allowlisted ones',
+  },
   'sni-off': {
     scope: 'firewall',
     switch: 'a copy of the proxy skips the ClientHello check',

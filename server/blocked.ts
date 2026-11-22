@@ -1,4 +1,5 @@
 export const REPEAT_LIMIT = 3;
+export const REPEAT_WINDOW_MS = 10 * 60_000;
 const MAX_ENTRIES = 500;
 const MAX_TEXT = 240;
 const LAYER = /^(L[1-5]|PF|MS|GS|HG|WH|CG|F[1-5][a-z]?|W[1-3])$/;
@@ -56,25 +57,30 @@ const fingerprint = (a: Attempt): string => `${a.worker}\u0000${a.layer}\u0000${
 
 export class BlockedLog {
   private readonly list: BlockedEntry[] = [];
-  private readonly counts = new Map<string, number>();
-  private readonly held = new Set<string>();
+  private readonly times = new Map<string, number[]>();
+  private readonly held = new Map<string, string>();
   private seq = 0;
   private readonly limit: number;
+  private readonly windowMs: number;
 
-  constructor(limit: number = REPEAT_LIMIT) {
+  constructor(limit: number = REPEAT_LIMIT, windowMs: number = REPEAT_WINDOW_MS) {
     this.limit = limit;
+    this.windowMs = windowMs;
   }
 
-  record(attempt: Attempt): { readonly entry: BlockedEntry; readonly paused: boolean } {
+  record(
+    attempt: Attempt,
+    { counts = true }: { readonly counts?: boolean } = {},
+  ): { readonly entry: BlockedEntry; readonly paused: boolean } {
     const key = fingerprint(attempt);
-    const repeats = (this.counts.get(key) ?? 0) + 1;
-    this.counts.set(key, repeats);
+    const recent = [...(this.times.get(key) ?? []).filter((at) => attempt.at - at < this.windowMs), attempt.at];
+    this.times.set(key, recent);
     this.seq += 1;
-    const entry: BlockedEntry = { ...attempt, seq: this.seq, repeats };
+    const entry: BlockedEntry = { ...attempt, seq: this.seq, repeats: recent.length };
     this.list.push(entry);
     if (this.list.length > MAX_ENTRIES) this.list.shift();
-    const paused = repeats >= this.limit && !this.held.has(attempt.worker);
-    if (paused) this.held.add(attempt.worker);
+    const paused = counts && recent.length >= this.limit && !this.held.has(attempt.worker);
+    if (paused) this.held.set(attempt.worker, attempt.tool);
     return { entry, paused };
   }
 
@@ -83,7 +89,7 @@ export class BlockedLog {
   }
 
   paused(): readonly string[] {
-    return [...this.held].sort();
+    return [...this.held.keys()].sort();
   }
 
   isPaused(worker: string): boolean {
@@ -91,8 +97,15 @@ export class BlockedLog {
   }
 
   resume(worker: string): boolean {
-    for (const key of [...this.counts.keys()]) if (key.startsWith(`${worker}\u0000`)) this.counts.delete(key);
+    for (const key of [...this.times.keys()]) if (key.startsWith(`${worker}\u0000`)) this.times.delete(key);
     return this.held.delete(worker);
+  }
+
+  cleared(tool: string): readonly string[] {
+    for (const key of [...this.times.keys()]) if (key.split('\u0000')[2] === tool) this.times.delete(key);
+    const resumed = [...this.held].filter(([, cause]) => cause === tool).map(([worker]) => worker);
+    for (const worker of resumed) this.held.delete(worker);
+    return resumed;
   }
 }
 

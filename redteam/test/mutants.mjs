@@ -12,6 +12,7 @@ const COVERAGE = 'redteam/test/coverage.test.ts';
 const SCAN = 'redteam/test/scan.test.ts';
 const CHECKS = 'redteam/test/checks.test.ts';
 const BLOCKED = 'server/test/blocked.test.ts';
+const PROXY = 'redteam/test/proxy.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -116,13 +117,7 @@ const MUTANTS = [
   {
     name: 'repeat-never-pauses',
     claim: 'HQ pauses a worker that repeats a blocked attempt',
-    edits: [
-      [
-        'server/blocked.ts',
-        'const paused = repeats >= this.limit &&',
-        'const paused = repeats >= this.limit + 1000 &&',
-      ],
-    ],
+    edits: [['server/blocked.ts', 'recent.length >= this.limit &&', 'recent.length >= this.limit + 1000 &&']],
     tests: [BLOCKED],
   },
   {
@@ -146,8 +141,62 @@ const MUTANTS = [
   {
     name: 'denial-not-listed',
     claim: 'a firewall denial shows in BLOCKED ATTEMPTS with layer F2',
-    edits: [['server/hq.ts', "layer: 'F2',\n          },", "layer: 'F5',\n          },"]],
+    edits: [['server/hq.ts', "layer: 'F2',\n        },", "layer: 'F5',\n        },"]],
     tests: [BLOCKED],
+  },
+  {
+    name: 'pending-allow-pauses',
+    claim: 'three denials that wait on an Allow do not pause the worker',
+    edits: [
+      [
+        'server/hq.ts',
+        "{ counts: !(raw.reason === 'not-allowlisted' && siteOf(raw.host, raw.port) !== null) }",
+        '{ counts: true }',
+      ],
+    ],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'repeat-window-ignored',
+    claim: 'repeats older than the window do not add up',
+    edits: [['server/blocked.ts', '.filter((at) => attempt.at - at < this.windowMs)', '']],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'allow-does-not-resume',
+    claim: 'the Allow action resumes the worker the site paused',
+    edits: [['server/modes/cages.ts', 'if (entry !== undefined) hq.allowed(entry.host, entry.port);', '']],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'replay-error-not-run',
+    claim: 'a replay that throws is FAIL, not NOT-RUN',
+    edits: [
+      [
+        'redteam/outcome.ts',
+        "if ('error' in replay) return { status: 'FAIL',",
+        "if ('error' in replay) return { status: 'NOT-RUN',",
+      ],
+    ],
+    tests: [OUTCOME],
+  },
+  {
+    name: 'not-attempted-reads-as-zero',
+    claim: 'a task with no exfil attempt prints not-measured, never canary-hits=0',
+    edits: [['redteam/outcome.ts', 'const measured = r.attempted', 'const measured = true']],
+    tests: [OUTCOME],
+  },
+  {
+    name: 'rig-mounts-spike-proxy',
+    claim: 'the red-team rig mounts the product proxy',
+    edits: [['spikes/P0-6/rig.mjs', "'../../server/sandbox/proxy'", "'../P0-2/proxy'"]],
+    tests: [PROXY],
+  },
+  {
+    name: 'credential-shape-missed',
+    claim: 'the host scan finds a private key block and a GitHub token without a planted canary',
+    edits: [['redteam/scan.ts', "['private-key-block', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],\n", '']],
+    tests: [SCAN],
   },
 ];
 

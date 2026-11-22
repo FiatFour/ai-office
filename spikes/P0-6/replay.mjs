@@ -46,6 +46,7 @@ const { values: args } = parseArgs({
     only: { type: 'string' },
     live: { type: 'boolean', default: false },
     'creds-volume': { type: 'string', default: '' },
+    'creds-dir': { type: 'string', default: '' },
     mutate: { type: 'string', default: '' },
     table: { type: 'string', default: TABLE },
     cleanup: { type: 'boolean', default: false },
@@ -81,8 +82,10 @@ let liveStarted = false;
 const startedCages = once(() => startCages(runId, mutate));
 const startedLive = once(() => {
   const credsVolume = String(args['creds-volume']);
-  if (credsVolume === '') throw new Error('--live needs --creds-volume <volume that holds a claude.ai login>');
-  return startLive({ credsVolume, out, runId });
+  const credsDir = String(args['creds-dir']);
+  if (credsVolume === '' && credsDir === '')
+    throw new Error('--live needs --creds-volume <volume that holds a claude.ai login> or --creds-dir <login home>');
+  return startLive({ credsVolume, credsDir, out, runId });
 });
 const ctx = {
   mutate,

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { scripted } from '../agents/scripted.ts';
-import { BlockedLog, InvalidAttempt, parseAttempt, REPEAT_LIMIT, renderBlocked } from '../blocked.ts';
+import { BlockedLog, InvalidAttempt, parseAttempt, REPEAT_LIMIT, REPEAT_WINDOW_MS, renderBlocked } from '../blocked.ts';
 import { github } from '../githost/github.ts';
 import { type RunningHq, startHq } from '../hq.ts';
 import { cagesMode } from '../modes/cages.ts';
@@ -9,10 +9,10 @@ import { FakeGithub } from './fakes/github-api.ts';
 import { SCRIPTS, TICKETS } from './fixtures/factory.ts';
 import { hasSqlite, tempDir } from './helpers.ts';
 
-const attempt = (over: Record<string, unknown> = {}) =>
+const attempt = (over: Record<string, unknown> = {}, at = 1000) =>
   parseAttempt(
     { worker: 'nova', task: 'alpha/t1', tool: 'Bash', detail: 'cat .env', layer: 'L4', run: 'cages', ...over },
-    1000,
+    at,
   );
 
 describe('parseAttempt', () => {
@@ -71,6 +71,36 @@ describe('BlockedLog', () => {
   });
 });
 
+describe('BlockedLog window and operator decision', () => {
+  it('counts only the attempts of the last window, so a repeat hours later does not add up', () => {
+    const log = new BlockedLog();
+    log.record(attempt({}, 0));
+    log.record(attempt({}, 1000));
+    const late = log.record(attempt({}, REPEAT_WINDOW_MS + 5000));
+    expect(late.paused).toBe(false);
+    expect(late.entry.repeats).toBe(1);
+    expect(log.paused()).toEqual([]);
+  });
+
+  it('lists an attempt that waits on the operator without ever pausing for it', () => {
+    const log = new BlockedLog();
+    for (let i = 0; i < REPEAT_LIMIT * 3; i++)
+      log.record(attempt({ tool: 'CONNECT pypi.org:443' }, i), { counts: false });
+    expect(log.paused()).toEqual([]);
+    expect(log.entries().at(-1)?.repeats).toBe(REPEAT_LIMIT * 3);
+  });
+
+  it('cleared resumes the workers a tool paused, drops its counts, and leaves other pauses alone', () => {
+    const log = new BlockedLog();
+    for (let i = 0; i < REPEAT_LIMIT; i++) log.record(attempt({ tool: 'CONNECT a.test:443' }, i));
+    for (let i = 0; i < REPEAT_LIMIT; i++) log.record(attempt({ worker: 'vega', tool: 'CONNECT b.test:443' }, i));
+    expect(log.paused()).toEqual(['nova', 'vega']);
+    expect(log.cleared('CONNECT a.test:443')).toEqual(['nova']);
+    expect(log.paused()).toEqual(['vega']);
+    expect(log.record(attempt({ tool: 'CONNECT a.test:443' }, 10)).entry.repeats).toBe(1);
+  });
+});
+
 describe('renderBlocked', () => {
   it('escapes a hostile tool call and names worker, tool call and layer', () => {
     const log = new BlockedLog();
@@ -113,20 +143,74 @@ describe.skipIf(!hasSqlite)('HQ blocked attempts', () => {
     expect(hq.snapshot().paused).toEqual([]);
   });
 
-  it('records a firewall denial as an F2 attempt', async () => {
-    let sink: (d: { host: string; port: number; agent: string; reason: string; at: string }) => void = () => {};
+  const denialHq = async (extra: { mode?: ReturnType<typeof cagesMode>; allow?: (site: string) => void } = {}) => {
+    const sink: { push: (d: { host: string; port: number; agent: string; reason: string; at: string }) => void } = {
+      push: () => {},
+    };
     const hq = await startHq({
       home: tempDir('blocked'),
       port: 0,
       makeDriver: async (_hq, onDenial) => {
-        sink = onDenial;
+        sink.push = onDenial;
         return null;
       },
+      ...(extra.mode === undefined ? {} : { mode: extra.mode }),
     });
     running.push(hq);
     await fetch(`${hq.url}/api/cages`, { method: 'POST', body: JSON.stringify({}) });
-    sink({ host: 'example.com', port: 443, agent: 'nova', reason: 'not on the allowlist', at: 'now' });
+    return {
+      hq,
+      deny: (host: string, reason: string, port = 443) => sink.push({ host, port, agent: 'nova', reason, at: 'now' }),
+    };
+  };
+
+  it('records a firewall denial as an F2 attempt', async () => {
+    const { hq, deny } = await denialHq();
+    deny('example.com', 'sni-mismatch');
     expect(hq.snapshot().blocked[0]).toMatchObject({ worker: 'nova', layer: 'F2', tool: 'CONNECT example.com:443' });
+  });
+
+  it('does not pause a worker whose retries wait on an Allow (3 pypi.org denials)', async () => {
+    const { hq, deny } = await denialHq();
+    for (let i = 0; i < REPEAT_LIMIT + 2; i++) deny('pypi.org', 'not-allowlisted');
+    expect(hq.snapshot().blocked).toHaveLength(REPEAT_LIMIT + 2);
+    expect(hq.snapshot().blocked.at(-1)?.repeats).toBe(REPEAT_LIMIT + 2);
+    expect(hq.snapshot().paused).toEqual([]);
+  });
+
+  it('still pauses a worker that repeats a denial no Allow can fix', async () => {
+    const { hq, deny } = await denialHq();
+    for (let i = 0; i < REPEAT_LIMIT; i++) deny('meta.ssrf.test', 'non-public-address');
+    expect(hq.snapshot().paused).toEqual(['nova']);
+  });
+
+  it('pauses on a wildcard-style name the Allow action refuses, because no Allow is pending for it', async () => {
+    const { hq, deny } = await denialHq();
+    for (let i = 0; i < REPEAT_LIMIT; i++) deny('*.evil.test', 'not-allowlisted');
+    expect(hq.snapshot().paused).toEqual(['nova']);
+  });
+
+  it('the Allow action resumes the worker that the site paused', async () => {
+    const fake = new FakeGithub();
+    const agent = scripted({ scripts: SCRIPTS, retryMs: 10 });
+    const mode = cagesMode({
+      host: github({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} }),
+      reviewHost: github({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log: () => {} }),
+      repo: 'acme/app',
+      base: 'main',
+      tickets: TICKETS,
+      author: 'nova',
+      reviewer: 'vega',
+      workers: { nova: agent, vega: agent },
+      egress: { allow: async () => {} },
+      pollMs: 600_000,
+    });
+    const { hq, deny } = await denialHq({ mode });
+    for (let i = 0; i < REPEAT_LIMIT; i++) deny('meta.ssrf.test', 'non-public-address');
+    expect(hq.snapshot().paused).toEqual(['nova']);
+    const answer = await send(hq, '/api/actions/allow', { host: 'meta.ssrf.test' });
+    expect(answer.json).toEqual({ allowed: 'meta.ssrf.test:443' });
+    expect(hq.snapshot().paused).toEqual([]);
   });
 
   it('stops starting work for a paused worker', async () => {

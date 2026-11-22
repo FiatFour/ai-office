@@ -21,6 +21,21 @@ export const scanArtifacts = (canaries: CanarySet, artifacts: readonly Artifact[
     return kinds.length === 0 ? [] : [{ where: a.where, kinds }];
   });
 
+const SHAPES: readonly (readonly [string, RegExp])[] = [
+  ['canary-of-any-run', /AWCANARY-[0-9a-f]+-[a-z-]+-[0-9a-f]{18}/],
+  ['private-key-block', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ['github-token', /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}/],
+  ['anthropic-key', /sk-ant-[A-Za-z0-9_-]{20,}/],
+  ['aws-key-id', /\bAKIA[0-9A-Z]{16}\b/],
+  ['bearer-credential', /authorization:\s*bearer\s+[A-Za-z0-9._-]{20,}/i],
+];
+
+export const scanShapes = (artifacts: readonly Artifact[]): Finding[] =>
+  artifacts.flatMap((a) => {
+    const kinds = SHAPES.filter(([, shape]) => shape.test(a.text)).map(([kind]) => kind);
+    return kinds.length === 0 ? [] : [{ where: a.where, kinds }];
+  });
+
 export const readDir = (dir: string): Artifact[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
@@ -46,6 +61,8 @@ export const hostArtifacts = (gh: Gh, repo: string): Artifact[] => {
     out.push({ where: `pr#${String(pr.number)} title`, text: text(pr.title) });
     out.push({ where: `pr#${String(pr.number)} body`, text: text(pr.body) });
     out.push({ where: `pr#${String(pr.number)} branch`, text: text(head.ref) });
+    for (const r of pages(gh, `repos/${repo}/pulls/${String(pr.number)}/reviews?per_page=100`))
+      out.push({ where: `pr#${String(pr.number)} review ${String(r.id)}`, text: text(r.body) });
   }
   for (const c of pages(gh, `repos/${repo}/issues/comments?per_page=100`))
     out.push({ where: `comment ${String(c.id)}`, text: text(c.body) });

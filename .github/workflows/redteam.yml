@@ -83,6 +83,34 @@ jobs:
           name: redteam
           path: ${{ runner.temp }}/redteam
 
+  mutate-suite:
+    name: mutate-suite (a guard turned off fails the docker suite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run the suite with the mask, the SNI check, the allowlist, the public-address check and the network off
+        run: |
+          OUT="$RUNNER_TEMP/redteam-mutate-suite"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          MUTANT_OUT="$OUT" node redteam/test/mutate-suite.mjs 2>&1 | tee "$OUT/run.txt"
+          exit "${PIPESTATUS[0]}"
+      - name: Clean up by label
+        if: always()
+        run: node redteam/run.ts --cleanup
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: redteam-mutate-suite
+          path: ${{ runner.temp }}/redteam-mutate-suite
+
   mutants:
     name: mutants (a broken guard fails a test)
     runs-on: ubuntu-latest

@@ -39,6 +39,7 @@ export interface HqPort {
   events(after: number): readonly LoggedEvent[];
   changed(): void;
   paused(worker: string): boolean;
+  allowed(host: string, port: number): void;
 }
 
 export type ActionItem =
@@ -595,6 +596,8 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
             throw new InvalidEvent(`no blocked website ${JSON.stringify(rawHost)} is waiting`);
           await options.egress?.allow(site);
           allowed.add(site);
+          const entry = denials.get(site);
+          if (entry !== undefined) hq.allowed(entry.host, entry.port);
           hq.changed();
           return { allowed: site };
         });

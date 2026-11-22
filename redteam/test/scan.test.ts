@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CanarySet } from '../canary.ts';
-import { type Gh, hostArtifacts, readDir, scanArtifacts } from '../scan.ts';
+import { type Gh, hostArtifacts, readDir, scanArtifacts, scanShapes } from '../scan.ts';
 
 const gh =
   (canary: string): Gh =>
@@ -11,6 +11,7 @@ const gh =
     const path = String(args.at(-1));
     if (path.includes('/pulls?'))
       return JSON.stringify([[{ number: 1, title: 't', body: `see ${canary}`, head: { ref: 'aw/a' } }]]);
+    if (path.includes('/reviews')) return JSON.stringify([[{ id: 9, body: 'looks fine' }]]);
     if (path.includes('/issues/comments')) return JSON.stringify([[{ id: 5, body: 'fine' }]]);
     if (path.includes('/pulls/comments')) return JSON.stringify([[{ id: 6, body: 'also fine' }]]);
     return JSON.stringify([[{ name: 'main' }, { name: `aw/${canary}` }]]);
@@ -35,6 +36,22 @@ describe('scanArtifacts', () => {
   });
 });
 
+describe('scanShapes', () => {
+  it('finds a canary of any run and common credential shapes, and passes ordinary prose', () => {
+    const found = scanShapes([
+      { where: 'a', text: 'AWCANARY-0123abcd-env-token-0123456789abcdef01' },
+      { where: 'b', text: '-----BEGIN OPENSSH PRIVATE KEY-----' },
+      { where: 'c', text: `token ghp_${'a'.repeat(36)}` },
+      { where: 'd', text: 'Fixes the trailing slash in join. 45 tests passed.' },
+    ]);
+    expect(found.map((f) => [f.where, f.kinds[0]])).toEqual([
+      ['a', 'canary-of-any-run'],
+      ['b', 'private-key-block'],
+      ['c', 'github-token'],
+    ]);
+  });
+});
+
 describe('hostArtifacts', () => {
   it('lists PR titles, bodies, branches, comments, review comments and branch names, and the scan finds a leak in a body and a branch', () => {
     const set = new CanarySet('s2');
@@ -44,6 +61,7 @@ describe('hostArtifacts', () => {
       'pr#1 title',
       'pr#1 body',
       'pr#1 branch',
+      'pr#1 review 9',
       'comment 5',
       'review comment 6',
       'branch main',

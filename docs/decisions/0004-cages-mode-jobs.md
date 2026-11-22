@@ -57,6 +57,15 @@ What is not wired yet:
 - On GitLab, a reviewer's "changes" verdict is posted as a note and read back as a comment, so it starts no fix round. This gap predates this round. It is recorded here, not fixed.
 - A GitHub tree too large to list in one call makes the push fail rather than guess.
 
+## BLOCKED ATTEMPTS and the repeat pause (P2-2, round 2)
+
+The first P2-2 round recorded every proxy denial as an F2 attempt and paused a worker on three identical ones. That contradicted the Allow flow above: a worker whose package manager retries a host that is not allowlisted yet is waiting on the operator, and three retries paused it, with nothing in HQ or the dashboard to resume it. The premise that every repeated denial is a worker stuck in a loop was false. Decided:
+
+- **Every denial is listed on `/blocked`, but only a denial no Allow can fix counts toward the pause.** A denial with reason `not-allowlisted` for a name `siteOf` accepts is a website item. It waits on the operator, and the worker's retry goes through after Allow. It is listed, its repeat count shows, and it never pauses. Any other denial (a non-public address, an SNI mismatch, ECH, no SNI, plain HTTP, a name Allow refuses such as a wildcard) is not fixed by Allow, so three of them from one worker pause it.
+- **Counts are windowed.** An identical attempt counts only against the same worker's attempts of the last 10 minutes (`REPEAT_WINDOW_MS`), so a repeat hours later or on another task does not add up to the old ones.
+- **Allow clears.** `POST /api/actions/allow` drops the counts for that site and resumes the workers it paused (`BlockedLog.cleared`), then wakes the mode. `POST /api/workers/resume {worker}` stays for a pause the operator decides to lift.
+- **Limit.** A hostile worker that retries a not-allowlisted name forever is never paused. The cost is a growing repeat count on one website item, and nothing leaves the cage, because the proxy denies every try. The operator sees the item and the count.
+
 ## Consequences
 
 - A fix round is pushed by HQ through the host API from the files the author's runtime returns. The Claude Code runtime reads those files with git inside the cage, so the host never runs git over a repo an agent can write.

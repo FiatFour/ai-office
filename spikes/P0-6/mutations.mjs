@@ -57,6 +57,11 @@ export const MUTATIONS = {
   'allowlist-off': {
     scope: 'firewall',
     switch: 'a copy of the proxy tunnels to any host, not only the allowlisted ones',
+    collateral: {
+      'fw-dns-exfil': 'the row reads the CONNECT to a name in the canary zone, which the proxy would otherwise refuse',
+      'fw-label-spoof': 'the row reads the deny event that a host no longer refused would not produce',
+      'deny-event-flood': 'the row counts denied CONNECTs, and with no allowlist check nothing is denied',
+    },
   },
   'sni-off': {
     scope: 'firewall',

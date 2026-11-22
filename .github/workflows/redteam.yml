@@ -1,0 +1,137 @@
+name: redteam
+
+on:
+  pull_request:
+    paths:
+      - redteam/**
+      - spikes/P0-2/**
+      - spikes/P0-3/**
+      - spikes/P0-6/**
+      - server/blocked.ts
+      - server/hq.ts
+      - server/sandbox/**
+      - docs/threat-model.md
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/redteam.yml
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  unit:
+    name: unit (coverage, canary, scan, BLOCKED ATTEMPTS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test redteam server/test/blocked.test.ts
+
+  suite:
+    name: suite (docker, three modes, two runs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run the full red-team suite twice and time each run
+        run: |
+          OUT="$RUNNER_TEMP/redteam"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          : > "$OUT/wall-seconds.txt"
+          for run in 1 2; do
+            start=$(date +%s)
+            node redteam/run.ts --out "$OUT/run-$run" 2>&1 | tee "$OUT/run-$run.txt"
+            status=${PIPESTATUS[0]}
+            echo $(( $(date +%s) - start )) >> "$OUT/wall-seconds.txt"
+            [ "$status" -eq 0 ] || { echo "red-team run $run failed"; exit 1; }
+          done
+          median=$(sort -n "$OUT/wall-seconds.txt" | awk '{a[NR]=$1} END {print (NR%2 ? a[(NR+1)/2] : (a[NR/2]+a[NR/2+1])/2)}')
+          echo "wall seconds per run: $(paste -sd, "$OUT/wall-seconds.txt"), median $median, budget 2700"
+          {
+            echo "| run | wall seconds |"
+            echo "| --- | --- |"
+            awk '{ print "| " NR " | " $1 " |" }' "$OUT/wall-seconds.txt"
+            echo "| median | $median |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          awk -v m="$median" 'BEGIN { exit !(m < 2700) }' || { echo "median $median s exceeds the 2700 s budget"; exit 1; }
+      - name: Clean up by label
+        if: always()
+        run: node redteam/run.ts --cleanup
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: redteam
+          path: ${{ runner.temp }}/redteam
+
+  mutate-suite:
+    name: mutate-suite (a guard turned off fails the docker suite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run the suite with the mask, the SNI check, the allowlist, the public-address check and the network off
+        run: |
+          OUT="$RUNNER_TEMP/redteam-mutate-suite"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          MUTANT_OUT="$OUT" node redteam/test/mutate-suite.mjs 2>&1 | tee "$OUT/run.txt"
+          exit "${PIPESTATUS[0]}"
+      - name: Clean up by label
+        if: always()
+        run: node redteam/run.ts --cleanup
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: redteam-mutate-suite
+          path: ${{ runner.temp }}/redteam-mutate-suite
+
+  mutants:
+    name: mutants (a broken guard fails a test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Turn each guard off and check that a test fails
+        run: |
+          OUT="$RUNNER_TEMP/redteam-mutants"
+          mkdir -p "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          MUTANT_OUT="$OUT/mutants.txt" node redteam/test/mutants.mjs 2>&1 | tee "$OUT/run.txt"
+          exit "${PIPESTATUS[0]}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: redteam-mutants
+          path: ${{ runner.temp }}/redteam-mutants

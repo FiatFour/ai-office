@@ -1,4 +1,5 @@
 import type { State } from '@agent-works/core';
+import type { BlockedEntry } from './blocked.ts';
 import type { ActionItem, ModeView } from './modes/cages.ts';
 import type { RegistryView } from './registry.ts';
 import type { CageView } from './sandbox/container.ts';
@@ -22,6 +23,8 @@ export interface Snapshot {
   readonly outbox: { readonly pending: number; readonly failed: readonly OutboxEntry[] };
   readonly cages: readonly CageView[];
   readonly denials: readonly Denial[];
+  readonly blocked: readonly BlockedEntry[];
+  readonly paused: readonly string[];
   readonly actions: readonly ActionItem[];
   readonly mode: ModeView | null;
 }

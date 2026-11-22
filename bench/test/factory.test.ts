@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { AgentRuntime } from '../../server/agents/runtime.ts';
+import { type AgentRuntime, parseReview } from '../../server/agents/runtime.ts';
 import { scripted } from '../../server/agents/scripted.ts';
 import {
   type ChangeSnapshot,
@@ -267,7 +267,7 @@ describe('the crew guard', () => {
     await expect(crew.workers.nova?.run(job(0))).rejects.toThrow('login expired');
     await expect(crew.workers.vega?.run(job(1, 'reviewer'))).rejects.toThrow('no session starts after a failure');
     expect(started).toBe(1);
-    expect(crew.failure()).toEqual({ message: 'login expired', refused: false });
+    expect(crew.failure()).toEqual({ message: 'bench/t-0a1b2c3d-r1 author 0 failed: login expired', refused: false });
   });
 
   it('starts a session once per task, role and round, whatever the caller does after it', async () => {
@@ -359,7 +359,11 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
     const usageOf = (runtime: AgentRuntime): AgentRuntime => ({
       id: runtime.id,
       async run(job) {
-        const result = await runtime.run(job);
+        const said = await runtime.run(job);
+        const result =
+          said.role === 'reviewer'
+            ? { role: 'reviewer' as const, ...parseReview(`\`\`\`json\n${JSON.stringify(said)}\n\`\`\``) }
+            : said;
         return {
           ...result,
           usage: { inputTokens: 1, outputTokens: 10, cacheReadTokens: 100, cacheCreationTokens: 1000, webRequests: 0 },
@@ -368,7 +372,12 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
     });
 
     const setup = (
-      over: { script?: 'changes-then-approve' | 'approve'; fail?: boolean; keep?: boolean; statusStatus?: number } = {},
+      over: {
+        script?: 'changes-then-approve' | 'approve' | 'lineless' | 'text';
+        fail?: boolean;
+        keep?: boolean;
+        statusStatus?: number;
+      } = {},
     ) => {
       const fake = new FakeGithub(REPO, null);
       const remote = bare();
@@ -397,7 +406,15 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
                             {
                               verdict: 'changes',
                               body: 'tidy',
-                              comments: [{ path: 'src/slug.js', line: 1, body: 'tidy' }],
+                              comments:
+                                over.script === 'text'
+                                  ? (['fix the regex', { message: 'rename it' }] as never)
+                                  : over.script === 'lineless'
+                                    ? [
+                                        { path: 'src/slug.js', line: null, body: 'whole file' },
+                                        { path: null, line: null, body: 'general' },
+                                      ]
+                                    : [{ path: 'src/slug.js', line: 1, body: 'tidy' }],
                             },
                             { verdict: 'approve', body: 'ok', comments: [] },
                           ],
@@ -463,6 +480,33 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
       expect(log.some((line) => /\/merge/.test(line))).toBe(false);
       expect([...log].sort()).toEqual(fake.calls.map((c) => `${c.method} ${c.path}`).sort());
       expect(fake.calls.some((c) => /\/merge/.test(c.path))).toBe(false);
+    });
+
+    it('finishes the task when the reviewer asks for changes with comments that have no line or no path', async () => {
+      const { fx, scratch, prepared, cache } = await verified();
+      const { fake, env } = setup({ script: 'lineless' });
+      const row = await runTask({ ...fx.task, timeoutMs: 8000 }, 1, prepared, {
+        arm: factoryArm(env(fx.task, join(cache, 'scratch'))),
+        runner: localRunner,
+        scratch,
+      });
+      expect(row).toMatchObject({ outcome: 'pass', reviewRounds: 1 });
+      expect(fake.reviews.map((r) => r.state)).toEqual(['COMMENTED', 'COMMENTED']);
+      expect(fake.reviews[0]?.body).toContain('whole file');
+      expect(fake.reviews[0]?.body).toContain('general');
+    });
+
+    it('finishes the task when the reviewer writes its comments as plain strings or under another key', async () => {
+      const { fx, scratch, prepared, cache } = await verified();
+      const { fake, env } = setup({ script: 'text' });
+      const row = await runTask({ ...fx.task, timeoutMs: 8000 }, 1, prepared, {
+        arm: factoryArm(env(fx.task, join(cache, 'scratch'))),
+        runner: localRunner,
+        scratch,
+      });
+      expect(row).toMatchObject({ outcome: 'pass', reviewRounds: 1 });
+      expect(fake.reviews[0]?.body).toContain('fix the regex');
+      expect(fake.reviews[0]?.body).toContain('rename it');
     });
 
     it('reaches review on a host that reports no checks, with one harness status per head, fix round included', async () => {
@@ -548,7 +592,7 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
         scratch,
       });
       expect(row.outcome).toBe('error');
-      expect(row.note).toContain('no retry after the first failure: the agent crashed');
+      expect(row.note).toMatch(/no retry after the first failure: \S+ (author|reviewer) \d+ failed: the agent crashed/);
       expect(gitOf(remote, 'for-each-ref')).toBe('');
       expect(fake.prs.filter((p) => p.state === 'open')).toEqual([]);
     });

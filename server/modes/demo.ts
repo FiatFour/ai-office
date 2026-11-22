@@ -61,6 +61,7 @@ export const demoMode =
             })
           : undefined,
       noteDenial: () => {},
+      wake: () => {},
       start: () => {
         timer = setTimeout(step, intervalMs);
       },

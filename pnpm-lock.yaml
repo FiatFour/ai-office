@@ -175,6 +175,9 @@ importers:
 
   .:
     devDependencies:
+      '@agent-works/core':
+        specifier: workspace:*
+        version: link:packages/core
       '@biomejs/biome':
         specifier: 2.6.6
         version: 2.6.6

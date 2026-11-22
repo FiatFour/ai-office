@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const STORE = 'server/test/store.test.ts';
 const CONTRACT = 'server/test/githost.contract.test.ts';
+const RECORDED = 'test/contract/githost.recorded.test.ts';
 const CAGES = 'server/test/cages.test.ts';
 const BRIEF = 'server/test/merge-brief.test.ts';
 const AGENTS = 'server/test/agents.test.ts';
@@ -46,7 +47,7 @@ const MUTANTS = [
         'const rule = rules.find((r) => r.method === method && r.path.test(tail)) ?? { method, path: /./, keys: Object.keys(request.body ?? {}) };',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'skipped-check-passes',
@@ -58,13 +59,13 @@ const MUTANTS = [
         "const state = event.state === 'skipped' ? 'success' : event.state;",
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'github-skipped-is-success',
     claim: 'a skipped GitHub check run parses as skipped',
     edits: [['server/githost/github.ts', "  skipped: 'skipped',", "  skipped: 'success',"]],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'pr-number-zero',
@@ -76,7 +77,7 @@ const MUTANTS = [
         'if (!Number.isInteger(value))',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'poll-keeps-old-reviews',
@@ -88,7 +89,7 @@ const MUTANTS = [
         'if (review.verdict === null) continue;',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'github-merged-ignored',
@@ -100,13 +101,13 @@ const MUTANTS = [
         "state: optStr(pr, 'merged_at') !== null ? 'merged'",
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'self-review-not-downgraded',
     claim: 'a verdict GitHub refuses on the same account is posted as a comment',
     edits: [['server/githost/github.ts', 'OWN_PULL_REQUEST.test', '/never matches/i.test']],
-    tests: [CONTRACT, CAGES],
+    tests: [CONTRACT, RECORDED, CAGES],
   },
   {
     name: 'author-never-adopts',
@@ -258,49 +259,49 @@ const MUTANTS = [
     name: 'v-draft-pr',
     claim: 'a PR opens ready, not as a draft',
     edits: [['server/githost/github.ts', 'draft: false,', 'draft: true,']],
-    tests: [CONTRACT, CAGES],
+    tests: [CONTRACT, RECORDED, CAGES],
   },
   {
     name: 'v-gitlab-closed-as-merged',
     claim: 'a closed, unmerged MR is not merged',
     edits: [['server/githost/gitlab.ts', "  closed: 'closed',\n  merged", "  closed: 'merged',\n  merged"]],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'v-github-closed-as-merged',
     claim: 'a closed, unmerged PR is closed',
     edits: [['server/githost/github.ts', "{ open: 'open', closed: 'closed' }", "{ open: 'open', closed: 'merged' }"]],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'v-outdated-line-null',
     claim: 'an outdated comment falls back to original_line',
     edits: [['server/githost/github.ts', "? optLine(c, 'original_line')", '? null']],
-    tests: [CONTRACT, CAGES],
+    tests: [CONTRACT, RECORDED, CAGES],
   },
   {
     name: 'v-gitlab-skipped-success',
     claim: 'a skipped GitLab pipeline is not success',
     edits: [['server/githost/gitlab.ts', "skipped: 'skipped',", "skipped: 'success',"]],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'v-neutral-failure',
     claim: 'a neutral check run passes',
     edits: [['server/githost/github.ts', "neutral: 'success',", "neutral: 'failure',"]],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'v-checks-any-head',
     claim: 'a poll keeps only checks on the current head',
     edits: [['server/githost/host.ts', '.filter((check) => check.headSha === headSha)', '.filter(() => true)']],
-    tests: [CONTRACT, CAGES],
+    tests: [CONTRACT, RECORDED, CAGES],
   },
   {
     name: 'v-poll-latest-earliest',
     claim: 'the latest review per reviewer wins',
     edits: [['server/githost/host.ts', 'review.at >= seen.at', 'review.at <= seen.at']],
-    tests: [CONTRACT, CAGES],
+    tests: [CONTRACT, RECORDED, CAGES],
   },
   {
     name: 'v-guard-pathname-noquery',
@@ -312,25 +313,25 @@ const MUTANTS = [
         '',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'v-guard-no-%2f',
     claim: 'a configured GitLab project must be a namespace path, so a numeric id or a dot segment is refused',
     edits: [['server/githost/gitlab.ts', 'if (!PROJECT_PATH.test(repo)) throw', 'if (false) throw']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'v-contents-dotfile',
     claim: 'a pushed file path may not have a hidden segment (.github)',
     edits: [['server/githost/host.ts', " && !segment.startsWith('.')", '']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'v-gitlab-approve-always',
     claim: 'GitLab approves only on an approve verdict',
     edits: [['server/githost/gitlab.ts', "if (draft.verdict === 'approve')\n", 'if (true)\n']],
-    tests: [CONTRACT, CAGES],
+    tests: [CONTRACT, RECORDED, CAGES],
   },
   {
     name: 'v-review-stale-head-counted',
@@ -504,7 +505,7 @@ const MUTANTS = [
     name: 'v-findchange-other-branch',
     claim: 'findChange matches the exact branch',
     edits: [['server/githost/github.ts', '.filter((pr) => pr.branch === branch);', ';']],
-    tests: [CONTRACT, CAGES],
+    tests: [CONTRACT, RECORDED, CAGES],
   },
   {
     name: 'b1-workorder-raw',
@@ -570,7 +571,7 @@ const MUTANTS = [
         'return unknownKey(o, rule.keys) ?? rule.body?.(o, scope) ?? null;',
       ],
     ],
-    tests: [CONTRACT, SANITIZE],
+    tests: [CONTRACT, RECORDED, SANITIZE],
   },
   {
     name: 'b1-lookalike-slash',
@@ -582,7 +583,7 @@ const MUTANTS = [
         "const SLASHES = '/';",
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'b1-zero-width-prefix',
@@ -594,7 +595,7 @@ const MUTANTS = [
         "LEAD.test(line.normalize('NFKC'))",
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'b1-quote-no-prefix',
@@ -606,13 +607,13 @@ const MUTANTS = [
     name: 'b1-mention-allowed',
     claim: 'a mention outside code is refused',
     edits: [['server/githost/sanitize.ts', 'if (/@[\\p{L}\\p{N}_]/u.test(prose))', 'if (false)']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'b1-no-length-cap',
     claim: 'a body longer than the cap is refused',
     edits: [['server/githost/sanitize.ts', 'if (text.length > MAX_BODY)', 'if (false)']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'm1-split-push',
@@ -630,13 +631,13 @@ const MUTANTS = [
     name: 'm2-brief-marker-any-author',
     claim: 'a brief marker counts only on a comment the HQ account wrote',
     edits: [['server/githost/github.ts', "(c) => str(c, 'user.login').toLowerCase() === self &&", '(c) =>']],
-    tests: [CONTRACT, CAGES],
+    tests: [CONTRACT, RECORDED, CAGES],
   },
   {
     name: 'm2-gitlab-marker-any-author',
     claim: 'a GitLab note marker counts only on a note the HQ account wrote',
     edits: [['server/githost/gitlab.ts', "(n) => str(n, 'author.username').toLowerCase() === self &&", '(n) =>']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'm2-review-marker-any-author',
@@ -662,7 +663,7 @@ const MUTANTS = [
     name: 'm4-branch-unchecked',
     claim: 'every branch write is pinned to aw/<factory>/<task>',
     edits: [['server/githost/host.ts', "typeof branch === 'string' && BRANCH.test(branch)\n", 'true\n']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'm4-force-push',
@@ -674,13 +675,13 @@ const MUTANTS = [
         'null',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'm4-symlink-tree',
     claim: 'a pushed tree holds only plain files',
     edits: [['server/githost/github.ts', '!MODES.has(entry.mode) || ', '']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'm4-gitlab-any-case',
@@ -692,7 +693,7 @@ const MUTANTS = [
         "const route = (tail: string) => new RegExp(`^/${tail}$`, 'i');",
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'm4-task-id-unchecked',
@@ -704,7 +705,7 @@ const MUTANTS = [
     name: 'm5-one-page',
     claim: 'every list is read to its last page',
     edits: [['server/githost/host.ts', '    if (list.length < PAGE_SIZE) return all;', '    return all;']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'm6-prompt-in-argv',
@@ -848,13 +849,13 @@ const MUTANTS = [
         "const ONE_LINE: ReadonlySet<string> = new Set(['message', 'commit_message']);",
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r2-gitlab-no-project-decode',
     claim: 'every call, reads included, names the configured repo or project and no other',
     edits: [['server/githost/host.ts', "if (path !== '/user' && !path.startsWith(`${scope.home}/`))", 'if (false)']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r2-gh-marker-login-substring',
@@ -866,13 +867,13 @@ const MUTANTS = [
         "(c) => str(c, 'user.login').toLowerCase().includes(self) && str(c, 'body')",
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r2-maxpages-2',
     claim: 'lists are read up to 5,000 items, not 200',
     edits: [['server/githost/host.ts', 'const MAX_ITEMS = 5_000;', 'const MAX_ITEMS = 200;']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r2-gitlab-always-start-branch',
@@ -880,7 +881,7 @@ const MUTANTS = [
     edits: [
       ['server/githost/gitlab.ts', '...(branchExists ? {} : { start_branch: spec.base }),', 'start_branch: spec.base,'],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r2-cage-shared-by-workers',
@@ -922,19 +923,19 @@ const MUTANTS = [
     name: 'r3-guard-any-key',
     claim: 'a body key the route does not list is refused',
     edits: [['server/githost/host.ts', '.find((key) => !keys.includes(key));', '.find(() => false);']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-gh-pr-any-base',
     claim: 'a PR must target the configured base',
     edits: [['server/githost/github.ts', '(b.base === scope.base ? null :', '(true ? null :']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-gl-mr-any-target',
     claim: 'an MR must target the configured base',
     edits: [['server/githost/gitlab.ts', '(b.target_branch === scope.base ? null :', '(true ? null :']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-gl-start-branch-any',
@@ -942,7 +943,7 @@ const MUTANTS = [
     edits: [
       ['server/githost/gitlab.ts', 'body.start_branch !== undefined && body.start_branch !== scope.base', 'false'],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-gh-tree-entry-any-key',
@@ -954,7 +955,7 @@ const MUTANTS = [
         'const extra = null;',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-gl-action-any-key',
@@ -966,7 +967,7 @@ const MUTANTS = [
         'const extra = null;',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-gh-review-comment-any-key',
@@ -978,19 +979,19 @@ const MUTANTS = [
         'const extra = null;',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-gl-position-any-key',
     claim: 'a discussion position may not carry extra keys',
     edits: [['server/githost/gitlab.ts', 'body: (b) => unknownKey(b.position, POSITION_KEYS),', 'body: () => null,']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-github-repo-unchecked',
     claim: 'a configured GitHub repo must be <owner>/<name>',
     edits: [['server/githost/github.ts', 'if (!REPO.test(repo)) throw', 'if (false) throw']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-site-raw-unchecked',
@@ -1026,7 +1027,7 @@ const MUTANTS = [
     name: 'r3-allpages-overflow-unchecked',
     claim: '5,001 items is an error, not a silent read',
     edits: [['server/githost/host.ts', 'if (all.length > MAX_ITEMS) throw', 'if (false) throw']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-gitlab-paths-one-page',
@@ -1038,7 +1039,7 @@ const MUTANTS = [
         'const diffs = (await get(`${project(repo)}/merge_requests/${number}/diffs`)) as unknown[];',
       ],
     ],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-brief-file-list-unbounded',
@@ -1062,7 +1063,7 @@ const MUTANTS = [
     name: 'r3-binary-read-as-text',
     claim: 'a file with a NUL byte is reported as binary, not decoded as text',
     edits: [['server/githost/host.ts', 'if (bytes.includes(0)) return null;', '']],
-    tests: [CONTRACT],
+    tests: [CONTRACT, RECORDED],
   },
   {
     name: 'r3-author-binary-pushed',

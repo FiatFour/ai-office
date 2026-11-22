@@ -383,10 +383,6 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     events: (after) => store.events(after),
     changed: push,
     paused: (worker) => blocked.isPaused(worker),
-    allowed: (host, port) => {
-      if (blocked.cleared(`CONNECT ${host}:${port}`, NOT_ALLOWLISTED).length > 0) mode?.wake();
-      push();
-    },
   };
   mode = options.mode?.(port) ?? null;
 

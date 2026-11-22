@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CanarySet } from './canary.ts';
+import { type CanarySet, percentEncoded } from './canary.ts';
 
 export interface Finding {
   readonly where: string;
@@ -27,7 +27,13 @@ const encodedPrefixes = (prefix: string): string[] => {
     const encoded = Buffer.concat([Buffer.alloc(pad), bytes]).toString('base64');
     return encoded.slice(Math.ceil((8 * pad) / 6), Math.floor((8 * (pad + bytes.length)) / 6));
   });
-  return [bytes.toString('hex'), ...base64, ...base64.map((b) => b.replace(/\+/g, '-').replace(/\//g, '_'))];
+  return [
+    bytes.toString('hex'),
+    bytes.toString('hex').toUpperCase(),
+    ...percentEncoded(prefix),
+    ...base64,
+    ...base64.map((b) => b.replace(/\+/g, '-').replace(/\//g, '_')),
+  ];
 };
 
 const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');

@@ -169,9 +169,9 @@ const MUTANTS = [
     tests: [BLOCKED],
   },
   {
-    name: 'allow-resumes-other-cause',
-    claim: 'Allow lifts only a pause whose recorded cause was a not-allowlisted denial',
-    edits: [['server/blocked.ts', 'cause.tool === tool && cause.detail === detail', 'cause.tool === tool']],
+    name: 'allow-offered-after-other-reason',
+    claim: 'a site stays non-Allow-able once a denial for it was not a not-allowlisted one',
+    edits: [['server/modes/cages.ts', '(seenBefore?.allow ?? true) && valid', 'valid']],
     tests: [BLOCKED],
   },
   {
@@ -184,6 +184,18 @@ const MUTANTS = [
     name: 'encoded-canary-shape-dropped',
     claim: 'the lane 8 shape scan finds hex and base64 copies of the canary prefixes',
     edits: [['redteam/scan.ts', "['encoded-canary-prefix', ENCODED_CANARY],", '']],
+    tests: [SCAN],
+  },
+  {
+    name: 'uppercase-hex-dropped',
+    claim: 'the lane 8 shape scan finds an uppercase hex copy of the canary prefixes',
+    edits: [['redteam/scan.ts', "    bytes.toString('hex').toUpperCase(),\n", '']],
+    tests: [SCAN],
+  },
+  {
+    name: 'percent-encoding-dropped',
+    claim: 'the lane 8 shape scan and the canary finder see a percent-encoded copy',
+    edits: [['redteam/scan.ts', '    ...percentEncoded(prefix),\n', '']],
     tests: [SCAN],
   },
   {

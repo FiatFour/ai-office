@@ -89,16 +89,6 @@ describe('BlockedLog window and operator decision', () => {
     expect(log.paused()).toEqual([]);
     expect(log.entries().at(-1)?.repeats).toBe(REPEAT_LIMIT * 3);
   });
-
-  it('cleared resumes the workers a tool paused, drops its counts, and leaves other pauses alone', () => {
-    const log = new BlockedLog();
-    for (let i = 0; i < REPEAT_LIMIT; i++) log.record(attempt({ tool: 'CONNECT a.test:443' }, i));
-    for (let i = 0; i < REPEAT_LIMIT; i++) log.record(attempt({ worker: 'vega', tool: 'CONNECT b.test:443' }, i));
-    expect(log.paused()).toEqual(['nova', 'vega']);
-    expect(log.cleared('CONNECT a.test:443', 'cat .env')).toEqual(['nova']);
-    expect(log.paused()).toEqual(['vega']);
-    expect(log.record(attempt({ tool: 'CONNECT a.test:443' }, 10)).entry.repeats).toBe(1);
-  });
 });
 
 describe('renderBlocked', () => {
@@ -227,7 +217,7 @@ describe.skipIf(!hasSqlite)('HQ blocked attempts', () => {
     expect(hq.snapshot().paused).toEqual(['nova']);
   });
 
-  it('Allow on a not-allowlisted site opens it and leaves a pause for another cause alone', async () => {
+  it('Allow on a not-allowlisted site opens it and leaves a pause alone', async () => {
     const opened: string[] = [];
     const { hq, deny } = await denialHq({ mode: cagesWithEgress(async (site) => void opened.push(site)) });
     for (let i = 0; i < REPEAT_LIMIT; i++) deny('meta.ssrf.test', 'non-public-address');
@@ -238,13 +228,16 @@ describe.skipIf(!hasSqlite)('HQ blocked attempts', () => {
     expect(hq.snapshot().paused).toEqual(['nova']);
   });
 
-  it('a pause is lifted by Allow only when its recorded cause was a not-allowlisted denial', () => {
-    const log = new BlockedLog();
-    for (let i = 0; i < REPEAT_LIMIT; i++)
-      log.record(attempt({ tool: 'CONNECT x.test:443', detail: 'non-public-address' }, i));
-    expect(log.cleared('CONNECT x.test:443', 'not-allowlisted')).toEqual([]);
-    expect(log.paused()).toEqual(['nova']);
-    expect(log.cleared('CONNECT x.test:443', 'non-public-address')).toEqual(['nova']);
+  it('keeps a site non-Allow-able once any denial for it was not a not-allowlisted one', async () => {
+    const opened: string[] = [];
+    const { hq, deny } = await denialHq({ mode: cagesWithEgress(async (site) => void opened.push(site)) });
+    for (let i = 0; i < REPEAT_LIMIT; i++) deny('evil.test', 'sni-mismatch');
+    deny('evil.test', 'not-allowlisted');
+    expect(hq.snapshot().actions.filter((a) => a.kind === 'website')).toMatchObject([
+      { site: 'evil.test:443', allow: false, count: REPEAT_LIMIT + 1 },
+    ]);
+    expect((await send(hq, '/api/actions/allow', { host: 'evil.test' })).status).toBe(400);
+    expect(opened).toEqual([]);
   });
 
   it('stops starting work for a paused worker', async () => {

@@ -12,8 +12,11 @@ const MUTATIONS = ['mask-off', 'sni-off', 'network-open', 'allowlist-off', 'publ
 /** @type {Record<string, string>} */
 const WEAK = {
   'public-check-off':
-    'fw-ssrf-metadata flips by a connect timeout (connect=undefined), not by a proven connection to the address',
+    'fw-ssrf-metadata flips by a connect timeout, not by a proven connection to the address (the row says FLIP when a connection opened)',
 };
+
+const sha = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+console.log(`git commit: ${sha}`);
 
 const requested = process.argv.slice(2);
 const ids = requested.length === 0 ? MUTATIONS : requested;

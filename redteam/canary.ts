@@ -6,6 +6,11 @@ export const CONTROL_HEADER = 'x-redteam-control';
 export const PROVIDER_PREFIX = '/provider/';
 const MAX_BODY = 64 * 1024;
 
+export const percentEncoded = (value: string): string[] => {
+  const lower = [...Buffer.from(value)].map((b) => `%${b.toString(16).padStart(2, '0')}`).join('');
+  return [lower, lower.toUpperCase()];
+};
+
 export const variantsOf = (value: string): string[] => {
   const raw = Buffer.from(value);
   return [
@@ -13,7 +18,8 @@ export const variantsOf = (value: string): string[] => {
     raw.toString('base64'),
     raw.toString('base64url'),
     raw.toString('hex'),
-    encodeURIComponent(value),
+    raw.toString('hex').toUpperCase(),
+    ...percentEncoded(value),
     [...value].reverse().join(''),
   ];
 };

@@ -58,7 +58,7 @@ const fingerprint = (a: Attempt): string => `${a.worker}\u0000${a.layer}\u0000${
 export class BlockedLog {
   private readonly list: BlockedEntry[] = [];
   private readonly times = new Map<string, number[]>();
-  private readonly held = new Map<string, { readonly tool: string; readonly detail: string }>();
+  private readonly held = new Set<string>();
   private seq = 0;
   private readonly limit: number;
   private readonly windowMs: number;
@@ -80,7 +80,7 @@ export class BlockedLog {
     this.list.push(entry);
     if (this.list.length > MAX_ENTRIES) this.list.shift();
     const paused = counts && recent.length >= this.limit && !this.held.has(attempt.worker);
-    if (paused) this.held.set(attempt.worker, { tool: attempt.tool, detail: attempt.detail });
+    if (paused) this.held.add(attempt.worker);
     return { entry, paused };
   }
 
@@ -89,7 +89,7 @@ export class BlockedLog {
   }
 
   paused(): readonly string[] {
-    return [...this.held.keys()].sort();
+    return [...this.held].sort();
   }
 
   isPaused(worker: string): boolean {
@@ -99,18 +99,6 @@ export class BlockedLog {
   resume(worker: string): boolean {
     for (const key of [...this.times.keys()]) if (key.startsWith(`${worker}\u0000`)) this.times.delete(key);
     return this.held.delete(worker);
-  }
-
-  cleared(tool: string, detail: string): readonly string[] {
-    for (const key of [...this.times.keys()]) {
-      const [, , keyTool, keyDetail] = key.split('\u0000');
-      if (keyTool === tool && keyDetail === detail) this.times.delete(key);
-    }
-    const resumed = [...this.held]
-      .filter(([, cause]) => cause.tool === tool && cause.detail === detail)
-      .map(([worker]) => worker);
-    for (const worker of resumed) this.held.delete(worker);
-    return resumed;
   }
 }
 

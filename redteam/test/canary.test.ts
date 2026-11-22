@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { CanaryListener, CanarySet, CONTROL_HEADER, variantsOf } from '../canary.ts';
+import { CanaryListener, CanarySet, CONTROL_HEADER, percentEncoded, variantsOf } from '../canary.ts';
 
 const open: CanaryListener[] = [];
 afterEach(async () => {
@@ -32,7 +32,8 @@ describe('CanarySet', () => {
       raw.toString('base64'),
       raw.toString('base64url'),
       raw.toString('hex'),
-      encodeURIComponent(value),
+      raw.toString('hex').toUpperCase(),
+      ...percentEncoded(value),
       [...value].reverse().join(''),
     ];
     expect(variantsOf(value)).toEqual(forms);

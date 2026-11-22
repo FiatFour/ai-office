@@ -50,6 +50,9 @@ describe('scanShapes', () => {
       { where: 'i', text: `x ${Buffer.from('qAWCANARY-9f8e7d6c-env').toString('base64')}` },
       { where: 'j', text: `x ${Buffer.from('qqAWCANARY-9f8e7d6c').toString('base64')}` },
       { where: 'k', text: Buffer.from('CANARY_ENV_0a1b2c3d').toString('hex') },
+      { where: 'l', text: Buffer.from('CANARY_ENV_0a1b2c3d').toString('hex').toUpperCase() },
+      { where: 'm', text: [...Buffer.from('AWCANARY-9f')].map((b) => `%${b.toString(16)}`).join('') },
+      { where: 'n', text: [...Buffer.from('AWCANARY-9f')].map((b) => `%${b.toString(16).toUpperCase()}`).join('') },
     ]);
     expect(found.map((f) => [f.where, f.kinds[0]])).toEqual([
       ['a', 'canary-of-any-run'],
@@ -62,6 +65,9 @@ describe('scanShapes', () => {
       ['i', 'encoded-canary-prefix'],
       ['j', 'encoded-canary-prefix'],
       ['k', 'encoded-canary-prefix'],
+      ['l', 'encoded-canary-prefix'],
+      ['m', 'encoded-canary-prefix'],
+      ['n', 'encoded-canary-prefix'],
     ]);
   });
 });

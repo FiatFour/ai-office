@@ -91,6 +91,7 @@ jobs:
             if ($tool -eq 'podman') { & podman info --format 'podman os={{.Host.OS}} rootless={{.Host.Security.Rootless}}' }
           }
           Write-Host ("/dev/kvm present: " + (Test-Path /dev/kvm))
+          exit 0
       - name: Run the SandboxDriver and GitHost contracts and their self test
         run: |
           New-Item -ItemType Directory -Force (Split-Path $env:CONTRACT_RESULTS) | Out-Null

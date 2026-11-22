@@ -208,9 +208,36 @@ describe('the Claude Code runtime', () => {
   it('refuses a review without a valid verdict block', () => {
     expect(() => parseReview('no block')).toThrow(AgentFailed);
     expect(() => parseReview('```json\n{"verdict":"merge","body":"x"}\n```')).toThrow(/verdict/);
-    expect(() =>
-      parseReview('```json\n{"verdict":"approve","body":"x","comments":[{"path":"a","line":0,"body":"b"}]}\n```'),
-    ).toThrow(/line/);
+  });
+
+  it('keeps every comment the reviewer wrote, whatever its shape, and loses none to a throw', () => {
+    const comments = [
+      { path: 'a.ts', line: 3, body: 'inline' },
+      { path: 'a.ts', body: 'whole file' },
+      { path: 'a.ts', line: 0, body: 'zero line' },
+      { path: 'a.ts', line: 1.5, body: 'fraction' },
+      { path: 'a.ts', line: '4', body: 'string line' },
+      { line: 7, body: 'no path' },
+      { body: 'general' },
+      { path: 'a.ts', line: 2 },
+      { path: 'a.ts', line: 2, body: '  ' },
+      null,
+      'text',
+    ];
+    const text = `\`\`\`json\n${JSON.stringify({ verdict: 'changes', comments })}\n\`\`\``;
+    expect(parseReview(text)).toEqual({
+      verdict: 'changes',
+      body: '',
+      comments: [
+        { path: 'a.ts', line: 3, body: 'inline' },
+        { path: 'a.ts', line: null, body: 'whole file' },
+        { path: 'a.ts', line: null, body: 'zero line' },
+        { path: 'a.ts', line: null, body: 'fraction' },
+        { path: 'a.ts', line: null, body: 'string line' },
+        { path: null, line: null, body: 'no path' },
+        { path: null, line: null, body: 'general' },
+      ],
+    });
   });
 });
 

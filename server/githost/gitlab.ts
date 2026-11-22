@@ -6,6 +6,7 @@ import {
   type ChangeFact,
   type CheckFact,
   type CommentFact,
+  carriedList,
   contentText,
   count,
   field,
@@ -17,6 +18,7 @@ import {
   type HostEvent,
   type HttpRequest,
   id,
+  isPlaced,
   once,
   oneOf,
   optLine,
@@ -348,7 +350,9 @@ export const gitlab = ({ send, log, repo, base }: GitlabOptions): GitHost => {
     async postReview(repo, number, draft) {
       const mr = await call('GET', `${project(repo)}/merge_requests/${number}`);
       const refs = field(mr, 'diff_refs');
-      for (const c of draft.comments)
+      const placed = draft.comments.filter(isPlaced);
+      const unplaced = draft.comments.filter((c) => !isPlaced(c));
+      for (const c of placed)
         await call('POST', `${project(repo)}/merge_requests/${number}/discussions`, {
           body: c.body,
           position: {
@@ -362,7 +366,11 @@ export const gitlab = ({ send, log, repo, base }: GitlabOptions): GitHost => {
         });
       if (draft.verdict === 'approve')
         await call('POST', `${project(repo)}/merge_requests/${number}/approve`, { sha: draft.commitId });
-      const text = `${draft.body}\n\nVerdict: ${draft.verdict}`;
+      const carried =
+        unplaced.length === 0
+          ? draft.body
+          : carriedList(draft.body, 'These comments have no line in the diff, so they are listed here:', unplaced);
+      const text = `${carried}\n\nVerdict: ${draft.verdict}`;
       const summary = await call('POST', `${project(repo)}/merge_requests/${number}/notes`, { body: text });
       return {
         host: 'gitlab',

@@ -8,9 +8,9 @@ import {
   type ChangeFact,
   type CheckFact,
   type CommentFact,
+  carriedList,
   contentText,
   count,
-  DROPPED_MARK,
   field,
   filePathProblem,
   firstTime,
@@ -21,7 +21,7 @@ import {
   type HostEvent,
   type HttpRequest,
   id,
-  type LineComment,
+  isPlaced,
   once,
   oneOf,
   optLine,
@@ -36,7 +36,7 @@ import {
   type WriteRule,
   ZERO_SHA,
 } from './host.ts';
-import { inlineCode, MAX_BODY, SEGMENT } from './sanitize.ts';
+import { SEGMENT } from './sanitize.ts';
 
 const CONCLUSION: Record<string, HostCheckState> = {
   success: 'success',
@@ -251,20 +251,9 @@ const OUTSIDE_THE_DIFF = /could not be resolved|must be part of the diff/i;
 const ownPullRequestNote = (verdict: string) =>
   `\n\n(The reviewer's verdict was "${verdict}". GitHub refuses it on a PR the same account opened, so it is posted as a comment.)`;
 
-const droppedList = (prefix: string, comments: readonly LineComment[]): string => {
-  const head = `${prefix}\n\n${DROPPED_MARK}\nGitHub refused these inline comments because their lines are not in the diff, so they are listed here:`;
-  const tail = (left: number) => `\n\n(${left} more comments do not fit in a review body and are left out.)`;
-  const room = MAX_BODY - tail(comments.length).length;
-  let out = head;
-  let kept = 0;
-  for (const c of comments) {
-    const next = `${out}\n\n${inlineCode(`${c.path}:${c.line}`)}\n${c.body}`;
-    if (next.length > room) break;
-    out = next;
-    kept += 1;
-  }
-  return kept === comments.length ? out : `${out}${tail(comments.length - kept)}`;
-};
+const OUTSIDE_NOTE =
+  'GitHub refused these inline comments because their lines are not in the diff, so they are listed here:';
+const UNPLACED_NOTE = 'These comments have no line in the diff, so they are listed here:';
 
 export interface GithubOptions {
   readonly send: Transport;
@@ -373,11 +362,13 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
     async postReview(repo, number, draft) {
       let event: string = EVENT[draft.verdict];
       let own = false;
-      let comments = draft.comments;
+      let comments = draft.comments.filter(isPlaced);
+      const unplaced = draft.comments.filter((c) => !isPlaced(c));
       let dropped = false;
       const compose = () => {
         const base = own ? `${draft.body}${ownPullRequestNote(draft.verdict)}` : draft.body;
-        return dropped ? droppedList(base, draft.comments) : base;
+        if (dropped) return carriedList(base, OUTSIDE_NOTE, draft.comments);
+        return unplaced.length === 0 ? base : carriedList(base, UNPLACED_NOTE, unplaced);
       };
       for (;;) {
         try {

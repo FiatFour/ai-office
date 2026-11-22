@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import type { CheckState, HostChangeState, PollEvent, Verdict, WebhookEvent } from '@agent-works/core';
 import { runBinary } from '../sandbox/engine.ts';
-import { BRANCH, bodyProblem, LINE_BREAK } from './sanitize.ts';
+import { BRANCH, bodyProblem, inlineCode, LINE_BREAK, MAX_BODY } from './sanitize.ts';
 
 export type HostId = 'github' | 'gitlab';
 export type HostCheckState = CheckState | 'skipped';
@@ -93,12 +93,35 @@ export const textOf = (bytes: Buffer): string | null => {
 export const contentText = (got: unknown): string | null => textOf(Buffer.from(str(got, 'content'), 'base64'));
 
 export interface LineComment {
-  readonly path: string;
-  readonly line: number;
+  readonly path: string | null;
+  readonly line: number | null;
   readonly body: string;
 }
 
+export interface PlacedComment extends LineComment {
+  readonly path: string;
+  readonly line: number;
+}
+
+export const isPlaced = (c: LineComment): c is PlacedComment => c.path !== null && c.line !== null;
+
 export const DROPPED_MARK = '<!-- agent-works:comments-in-body -->';
+
+export const carriedList = (prefix: string, why: string, comments: readonly LineComment[]): string => {
+  const head = `${prefix}\n\n${DROPPED_MARK}\n${why}`;
+  const tail = (left: number) => `\n\n(${left} more comments do not fit in a review body and are left out.)`;
+  const room = MAX_BODY - tail(comments.length).length;
+  let out = head;
+  let kept = 0;
+  for (const c of comments) {
+    const where = c.path === null ? '' : `${inlineCode(c.line === null ? c.path : `${c.path}:${c.line}`)}\n`;
+    const next = `${out}\n\n${where}${c.body}`;
+    if (next.length > room) break;
+    out = next;
+    kept += 1;
+  }
+  return kept === comments.length ? out : `${out}${tail(comments.length - kept)}`;
+};
 
 export interface ReviewDraft {
   readonly commitId: string;

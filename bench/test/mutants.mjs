@@ -17,6 +17,7 @@ const ONCE = 'bench/test/once.test.ts';
 const NOCI = 'bench/test/no-ci.test.ts';
 const CONTRACT = 'server/test/githost.contract.test.ts';
 const CAGES = 'server/test/cages.test.ts';
+const AGENTS = 'server/test/agents.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -1164,6 +1165,62 @@ const MUTANTS = [
     tests: [CONTRACT, CAGES],
   },
   {
+    name: 'review-comment-without-path-aborts',
+    claim: 'a reviewer comment with no path is kept for the review body, it never aborts the review',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "const path = typeof c.path === 'string' && c.path !== '' ? c.path : null;",
+        "const path = typeof c.path === 'string' && c.path !== '' ? c.path : ((): never => { throw new Error('a review comment needs a path'); })();",
+      ],
+    ],
+    tests: [AGENTS, FACTORY],
+  },
+  {
+    name: 'review-comment-without-line-aborts',
+    claim: 'a reviewer comment with no usable line is kept as a whole-file comment, it never aborts the review',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        'const line = path !== null && Number.isSafeInteger(c.line)',
+        'const line = Number.isSafeInteger(c.line)',
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-lineless-comment-lost',
+    claim: 'a comment with no line or no path is carried into the GitHub review body',
+    edits: [
+      [
+        'server/githost/github.ts',
+        'return unplaced.length === 0 ? base : carriedList(base, UNPLACED_NOTE, unplaced);',
+        'return base;',
+      ],
+    ],
+    tests: [CONTRACT, FACTORY],
+  },
+  {
+    name: 'review-lineless-comment-sent-inline',
+    claim: 'a comment with no line is never sent to the host as an inline comment',
+    edits: [['server/githost/github.ts', 'draft.comments.filter(isPlaced);', 'draft.comments as never;']],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'gitlab-lineless-comment-lost',
+    claim: 'a comment with no line is carried into the GitLab summary note',
+    edits: [
+      ['server/githost/gitlab.ts', 'unplaced.length === 0\n          ? draft.body', 'true\n          ? draft.body'],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'failure-note-loses-the-step',
+    claim: 'the first failure of a crew names the task, role and round that failed',
+    edits: [['bench/scratch.ts', 'turn === undefined ? message :', 'true ? message :']],
+    tests: [FACTORY],
+  },
+  {
     name: 'review-dropped-comments-lost',
     claim: 'the inline comments a reposted review drops are carried into its body',
     edits: [['server/githost/github.ts', 'dropped = true;', 'void droppedList;']],
@@ -1174,9 +1231,9 @@ const MUTANTS = [
     claim: 'every dropped comment is carried, the last one included',
     edits: [
       [
-        'server/githost/github.ts',
-        'for (const c of comments) {\n    const next',
-        'for (const c of comments.slice(0, -1)) {\n    const next',
+        'server/githost/host.ts',
+        'for (const c of comments) {\n    const where',
+        'for (const c of comments.slice(0, -1)) {\n    const where',
       ],
     ],
     tests: [CONTRACT],
@@ -1184,7 +1241,7 @@ const MUTANTS = [
   {
     name: 'review-body-unbounded',
     claim: 'the carried comments stop before the review body passes the host limit',
-    edits: [['server/githost/github.ts', 'if (next.length > room) break;', '']],
+    edits: [['server/githost/host.ts', 'if (next.length > room) break;', '']],
     tests: [CONTRACT],
   },
   {
@@ -1248,14 +1305,14 @@ const MUTANTS = [
     name: 'r10-dropped-list-no-tail-room',
     claim: 'the list of refused inline comments leaves room for its own tail under the body cap',
     edits: [
-      ['server/githost/github.ts', 'const room = MAX_BODY - tail(comments.length).length;', 'const room = MAX_BODY;'],
+      ['server/githost/host.ts', 'const room = MAX_BODY - tail(comments.length).length;', 'const room = MAX_BODY;'],
     ],
     tests: [CONTRACT],
   },
   {
     name: 'r10-dropped-list-over-the-cap',
     claim: 'the list of refused inline comments stops below the write guard cap',
-    edits: [['server/githost/github.ts', 'const room = MAX_BODY - tail', 'const room = 2 * MAX_BODY - tail']],
+    edits: [['server/githost/host.ts', 'const room = MAX_BODY - tail', 'const room = 2 * MAX_BODY - tail']],
     tests: [CONTRACT],
   },
   {
@@ -1264,8 +1321,8 @@ const MUTANTS = [
     edits: [
       [
         'server/githost/github.ts',
-        'const base = own ? `${draft.body}${ownPullRequestNote(draft.verdict)}` : draft.body;\n        return dropped ? droppedList(base, draft.comments) : base;',
-        'const list = dropped ? droppedList(draft.body, draft.comments) : draft.body;\n        return own ? `${list}${ownPullRequestNote(draft.verdict)}` : list;',
+        'const base = own ? `${draft.body}${ownPullRequestNote(draft.verdict)}` : draft.body;\n        if (dropped) return carriedList(base, OUTSIDE_NOTE, draft.comments);',
+        'const list = dropped ? carriedList(draft.body, OUTSIDE_NOTE, draft.comments) : draft.body;\n        if (own) return `${list}${ownPullRequestNote(draft.verdict)}`;\n        if (dropped) return list;',
       ],
     ],
     tests: [CONTRACT],

@@ -59,6 +59,14 @@ export class AgentFailed extends Error {}
 
 const VERDICTS: readonly Verdict[] = ['approve', 'changes', 'comment'];
 
+const commentOf = (raw: unknown): LineComment[] => {
+  const c = (raw ?? {}) as Record<string, unknown>;
+  if (typeof c.body !== 'string' || c.body.trim() === '') return [];
+  const path = typeof c.path === 'string' && c.path !== '' ? c.path : null;
+  const line = path !== null && Number.isSafeInteger(c.line) && (c.line as number) >= 1 ? (c.line as number) : null;
+  return [{ path, line, body: c.body }];
+};
+
 export const parseReview = (text: string): Omit<Extract<AgentResult, { role: 'reviewer' }>, 'usage' | 'role'> => {
   const block = /```json\s*([\s\S]*?)```/.exec(text)?.[1];
   if (block === undefined) throw new AgentFailed('the reviewer gave no ```json verdict block');
@@ -71,20 +79,10 @@ export const parseReview = (text: string): Omit<Extract<AgentResult, { role: 're
   const o = (raw ?? {}) as Record<string, unknown>;
   if (!VERDICTS.includes(o.verdict as Verdict))
     throw new AgentFailed('the reviewer verdict is not approve, changes or comment');
-  if (typeof o.body !== 'string') throw new AgentFailed('the reviewer verdict has no body');
   const comments = Array.isArray(o.comments) ? o.comments : [];
   return {
     verdict: o.verdict as Verdict,
-    body: o.body,
-    comments: comments.map((c: Record<string, unknown>) => {
-      if (
-        typeof c.path !== 'string' ||
-        !Number.isSafeInteger(c.line) ||
-        (c.line as number) < 1 ||
-        typeof c.body !== 'string'
-      )
-        throw new AgentFailed('a review comment needs a path, a line and a body');
-      return { path: c.path, line: c.line as number, body: c.body };
-    }),
+    body: typeof o.body === 'string' ? o.body : '',
+    comments: comments.flatMap(commentOf),
   };
 };

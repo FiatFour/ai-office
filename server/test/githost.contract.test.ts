@@ -689,6 +689,35 @@ describe('parsing edge cases the cages mode relies on', () => {
     await reviewer.postReview('acme/app', mr.number, { commitId: head, verdict: 'approve', body: 'ok', comments: [] });
     expect(fake.approvals).toHaveLength(1);
   });
+
+  it('puts a GitLab comment with no line into the summary note instead of a discussion with no position', async () => {
+    const fake = new FakeGitlab();
+    const author = gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} });
+    const reviewer = gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log: () => {} });
+    const head = await author.pushFiles('acme/app', {
+      branch: 'aw/alpha/t1',
+      base: 'main',
+      files: [{ path: 'a', content: 'a\n' }],
+      message: 'm',
+    });
+    const mr = await author.openChange('acme/app', { branch: 'aw/alpha/t1', base: 'main', title: 't', body: 'b' });
+    await reviewer.postReview('acme/app', mr.number, {
+      commitId: head,
+      verdict: 'changes',
+      body: 'no',
+      comments: [
+        { path: 'a', line: 1, body: 'inline' },
+        { path: 'a', line: null, body: 'whole file' },
+        { path: null, line: null, body: 'general' },
+      ],
+    });
+    const mine = fake.notes.filter((n) => n.author === 'vega');
+    expect(mine.filter((n) => n.position !== null).map((n) => n.body)).toEqual(['inline']);
+    const summary = mine.at(-1)?.body ?? '';
+    expect(summary).toContain(DROPPED_MARK);
+    expect(summary).toContain('whole file');
+    expect(summary).toContain('general');
+  });
 });
 
 describe('a review the host refuses on a PR the same account opened', () => {
@@ -804,6 +833,39 @@ describe('a GitHub review with inline comments the host cannot place', () => {
     expect(body).toContain(DROPPED_MARK);
     for (const finding of ['`src/big.txt:2`\ninside', '`src/big.txt:12`\noutside', '`src/old.txt:1`\ndeleted'])
       expect(body).toContain(finding);
+  });
+
+  it('carries a comment with no line, or no path, into the review body and still places the inline ones', async () => {
+    const { fake, number, head, host } = await open('aw-reviewer', changed);
+    const posted = await host.postReview('acme/app', number, {
+      commitId: head,
+      verdict: 'changes',
+      body: 'needs work',
+      comments: [
+        { path: 'src/big.txt', line: 2, body: 'inline' },
+        { path: 'src/big.txt', line: null, body: 'whole file' },
+        { path: null, line: null, body: 'general' },
+      ],
+    });
+    expect(posted).toMatchObject({ kind: 'review', reviewer: 'aw-reviewer', commitId: head });
+    expect(fake.comments.map((c) => [c.path, c.line, c.body])).toEqual([['src/big.txt', 2, 'inline']]);
+    const body = fake.reviews.at(-1)?.body ?? '';
+    expect(body).toContain(DROPPED_MARK);
+    expect(body).toContain('`src/big.txt`\nwhole file');
+    expect(body).toContain('\n\ngeneral');
+    expect(body).not.toContain('inline');
+  });
+
+  it('carries every comment when none has a line, and posts a review with no inline comments', async () => {
+    const { fake, number, head, host } = await open('aw-reviewer', changed);
+    await host.postReview('acme/app', number, {
+      commitId: head,
+      verdict: 'comment',
+      body: 'b',
+      comments: [{ path: null, line: null, body: 'general' }],
+    });
+    expect(fake.comments).toEqual([]);
+    expect(fake.reviews.at(-1)?.body).toContain('general');
   });
 
   it('handles the own-pull-request refusal and the outside-the-diff refusal on one review', async () => {

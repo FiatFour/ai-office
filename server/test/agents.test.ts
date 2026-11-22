@@ -208,9 +208,104 @@ describe('the Claude Code runtime', () => {
   it('refuses a review without a valid verdict block', () => {
     expect(() => parseReview('no block')).toThrow(AgentFailed);
     expect(() => parseReview('```json\n{"verdict":"merge","body":"x"}\n```')).toThrow(/verdict/);
-    expect(() =>
-      parseReview('```json\n{"verdict":"approve","body":"x","comments":[{"path":"a","line":0,"body":"b"}]}\n```'),
-    ).toThrow(/line/);
+  });
+
+  it('keeps every comment the reviewer wrote, whatever its shape, and loses none to a throw', () => {
+    const comments = [
+      { path: 'a.ts', line: 3, body: 'inline' },
+      { path: 'a.ts', body: 'whole file' },
+      { path: 'a.ts', line: 0, body: 'zero line' },
+      { path: 'a.ts', line: 1.5, body: 'fraction' },
+      { path: 'a.ts', line: '4', body: 'string line' },
+      { line: 7, body: 'no path' },
+      { body: 'general' },
+      { path: 'a.ts', line: 2 },
+      { path: 'a.ts', line: 2, body: '  ' },
+      null,
+      '',
+      {},
+      'fix the regex',
+      { comment: 'by comment', path: 'b.ts', line: 2 },
+      { message: 'by message' },
+      { text: 'by text' },
+      [1, 2],
+    ];
+    const text = `\`\`\`json\n${JSON.stringify({ verdict: 'changes', comments })}\n\`\`\``;
+    expect(parseReview(text)).toEqual({
+      verdict: 'changes',
+      body: '',
+      comments: [
+        { path: 'a.ts', line: 3, body: 'inline' },
+        { path: 'a.ts', line: null, body: 'whole file' },
+        { path: 'a.ts', line: null, body: 'zero line' },
+        { path: 'a.ts', line: null, body: 'fraction' },
+        { path: 'a.ts', line: null, body: 'string line' },
+        { path: null, line: 7, body: 'no path' },
+        { path: null, line: null, body: 'general' },
+        { path: null, line: null, body: '{"path":"a.ts","line":2}' },
+        { path: null, line: null, body: '{"path":"a.ts","line":2,"body":"  "}' },
+        { path: null, line: null, body: 'fix the regex' },
+        { path: 'b.ts', line: 2, body: 'by comment' },
+        { path: null, line: null, body: 'by message' },
+        { path: null, line: null, body: 'by text' },
+        { path: null, line: null, body: '[1,2]' },
+      ],
+    });
+  });
+
+  it('carries comments given as a string, an object or a lone comment instead of a list', () => {
+    const verdict = (comments: unknown) =>
+      parseReview(`\`\`\`json\n${JSON.stringify({ verdict: 'changes', comments })}\n\`\`\``);
+    expect(verdict('fix it').comments).toEqual([{ path: null, line: null, body: 'fix it' }]);
+    expect(verdict({ path: 'a.ts', line: 2, body: 'lone' }).comments).toEqual([
+      { path: 'a.ts', line: 2, body: 'lone' },
+    ]);
+    expect(verdict({ 'a.ts': 'keyed' }).comments).toEqual([{ path: null, line: null, body: '{"a.ts":"keyed"}' }]);
+    expect(verdict(undefined).comments).toEqual([]);
+    expect(verdict([]).comments).toEqual([]);
+  });
+
+  it('keeps a changes verdict whose comments all lack a line', () => {
+    const text = `\`\`\`json\n${JSON.stringify({ verdict: 'changes', body: 'b', comments: [{ path: 'a.ts', body: 'x' }, { body: 'y' }] })}\n\`\`\``;
+    const review = parseReview(text);
+    expect(review.verdict).toBe('changes');
+    expect(review.comments.map((c) => c.line)).toEqual([null, null]);
+  });
+
+  it('finds the verdict block among other blocks, in any fence tag, with backticks inside a comment', () => {
+    const verdict = {
+      verdict: 'changes',
+      body: 'b',
+      comments: [{ path: 'a.ts', line: 1, body: 'use ```ts x``` here' }],
+    };
+    const quoted = '```json\n{"name":"pkg","version":"1.0.0"}\n```';
+    for (const tag of ['json', 'JSON', '']) {
+      const text = `Look at ${quoted}\nthen\n\`\`\`${tag}\n${JSON.stringify(verdict)}\n\`\`\`\nbye`;
+      expect(parseReview(text), tag).toEqual({
+        verdict: 'changes',
+        body: 'b',
+        comments: [{ path: 'a.ts', line: 1, body: 'use ```ts x``` here' }],
+      });
+    }
+    expect(parseReview(`${JSON.stringify(verdict)} trailing`).verdict).toBe('changes');
+    const two = (v: string) => `\`\`\`json\n{"verdict":"${v}"}\n\`\`\``;
+    expect(parseReview(`${two('approve')}\n${two('changes')}`).verdict).toBe('changes');
+    expect(parseReview(`${two('changes')}\n${quoted}`).verdict).toBe('changes');
+  });
+
+  it('shows the start of the reviewer text when no verdict block exists', () => {
+    const long = `${'x'.repeat(600)}`;
+    const failure = (() => {
+      try {
+        parseReview(`I think it is fine ${long}`);
+      } catch (e) {
+        return (e as Error).message;
+      }
+      return '';
+    })();
+    expect(failure).toContain('I think it is fine');
+    expect(failure).not.toContain('x'.repeat(500));
+    expect(() => parseReview('```json\n{"name":"pkg"}\n```')).toThrow(/"name":"pkg"/);
   });
 });
 

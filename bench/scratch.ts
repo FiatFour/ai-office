@@ -232,15 +232,16 @@ export const dropWork = async (
 export interface Crew {
   readonly workers: Record<string, AgentRuntime>;
   failure(): Failure | null;
-  fail(error: unknown): void;
+  fail(error: unknown, turn?: string): void;
 }
 
 export const oneSessionEach = (runtimes: Readonly<Record<string, AgentRuntime>>): Crew => {
   let failure: Failure | null = null;
   const started = new Set<string>();
-  const fail = (error: unknown) => {
+  const fail = (error: unknown, turn?: string) => {
+    const message = error instanceof Error ? error.message : String(error);
     failure ??= {
-      message: error instanceof Error ? error.message : String(error),
+      message: turn === undefined ? message : `${turn} failed: ${message}`,
       refused: error instanceof WriteRefused,
     };
   };
@@ -258,7 +259,7 @@ export const oneSessionEach = (runtimes: Readonly<Record<string, AgentRuntime>>)
       try {
         return await runtime.run(job);
       } catch (error) {
-        fail(error);
+        fail(error, turn);
         throw error;
       }
     },

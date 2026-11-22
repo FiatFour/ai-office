@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { CommandKind } from '@agent-works/core';
 import { WebSocket, WebSocketServer } from 'ws';
 import { type Asset, readAsset } from './assets.ts';
+import { BlockedLog, InvalidAttempt, parseAttempt, renderBlocked } from './blocked.ts';
 import { clearRuntime, hqIdFor, VERSION, writeRuntime } from './config.ts';
 import { InvalidEvent, parseEvent } from './events.ts';
 import { Ledger } from './ledger.ts';
@@ -99,11 +100,27 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
   const registry = new Registry(home);
   const hqId = hqIdFor(home);
   const denials = new Map<string, Denial>();
+  const blocked = new BlockedLog();
   let lastDenialPush = 0;
   let mode: ReturnType<ModeFactory> | null = null;
 
   const noteDenial = (raw: RawDenial): void => {
     mode?.noteDenial(raw);
+    try {
+      blocked.record(
+        parseAttempt(
+          {
+            worker: raw.agent,
+            tool: `CONNECT ${raw.host}:${raw.port}`,
+            detail: raw.reason === '' ? 'denied by the egress proxy' : raw.reason,
+            layer: 'F2',
+          },
+          Date.now(),
+        ),
+      );
+    } catch (error) {
+      if (!(error instanceof InvalidAttempt)) throw error;
+    }
     const key = `${raw.agent}|${raw.host}|${raw.port}|${raw.reason}`;
     const seen = denials.get(key);
     denials.set(key, { ...raw, count: (seen?.count ?? 0) + 1, lastAt: raw.at });
@@ -136,6 +153,8 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     outbox: outboxSummary(ledger.outbox),
     cages: driver?.list() ?? [],
     denials: [...denials.values()],
+    blocked: blocked.entries(),
+    paused: blocked.paused(),
     actions: mode?.actions() ?? [],
     mode: mode?.view() ?? null,
   });
@@ -203,6 +222,12 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
       res.end(DASHBOARD);
       return;
     }
+    if (method === 'GET' && url.pathname === '/blocked') {
+      res.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(renderBlocked(blocked.entries(), blocked.paused()));
+      return;
+    }
     if (method === 'GET' && url.pathname === '/api/health') {
       send(200, { ok: true, service: 'agent-works', pid: process.pid, startedAt, version: VERSION, rev: ledger.rev });
       return;
@@ -219,6 +244,19 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     if (options.readOnly !== undefined && method !== 'GET') throw new HttpError(403, options.readOnly);
     if (method !== 'POST' && method !== 'DELETE') throw new HttpError(404, 'not found');
 
+    if (method === 'POST' && url.pathname === '/api/sandbox/blocked') {
+      const { entry, paused } = blocked.record(parseAttempt(await readBody(req), Date.now()));
+      push();
+      send(200, { seq: entry.seq, repeats: entry.repeats, paused: blocked.isPaused(entry.worker), justPaused: paused });
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/api/workers/resume') {
+      const resumed = blocked.resume(field(asRecord(await readBody(req)), 'worker'));
+      if (resumed) mode?.wake();
+      push();
+      send(200, { resumed });
+      return;
+    }
     if (method === 'POST' && url.pathname === '/api/events') {
       const { rev, commands } = ledger.ingest(parseEvent(await readBody(req)));
       push();
@@ -296,7 +334,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
       const status =
         error instanceof HttpError
           ? error.status
-          : error instanceof InvalidEvent || error instanceof RegistryError
+          : error instanceof InvalidEvent || error instanceof InvalidAttempt || error instanceof RegistryError
             ? 400
             : 500;
       if (!res.headersSent) res.writeHead(status, { 'content-type': 'application/json' });
@@ -344,6 +382,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     outbox: () => ledger.outbox,
     events: (after) => store.events(after),
     changed: push,
+    paused: (worker) => blocked.isPaused(worker),
   };
   mode = options.mode?.(port) ?? null;
 

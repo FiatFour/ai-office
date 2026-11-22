@@ -38,6 +38,7 @@ export interface HqPort {
   outbox(): readonly OutboxEntry[];
   events(after: number): readonly LoggedEvent[];
   changed(): void;
+  paused(worker: string): boolean;
 }
 
 export type ActionItem =
@@ -68,6 +69,7 @@ export interface Mode {
   view(): ModeView;
   route(method: string, path: string, body: () => Promise<unknown>): Promise<unknown> | undefined;
   noteDenial(denial: Denial): void;
+  wake(): void;
   start(): void;
   close(): Promise<void>;
 }
@@ -450,6 +452,8 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       return brief(job);
     };
 
+    const workerOf = (job: Job): string => (job.kind === 'review' ? job.reviewer : (job.box.worker ?? options.author));
+
     const work = async (task: TaskId) => {
       let last: string | null = null;
       for (;;) {
@@ -457,6 +461,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         if (abort.signal.aborted) return;
         const job = needed(task);
         if (job === null) return;
+        if (hq.paused(workerOf(job))) return;
         const key = jobKey(job);
         if ((failures.get(key)?.count ?? 0) >= maxFailures) return;
         if (key === last) return;
@@ -625,6 +630,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
           allow: valid !== null,
         });
       },
+      wake: pokeAll,
       start: () => {
         pokeAll();
         timer = setInterval(() => void watch(), options.pollMs ?? 35_000);

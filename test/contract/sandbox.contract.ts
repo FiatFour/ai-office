@@ -61,6 +61,12 @@ const fixtureRepo = (canary: string): string => {
   return repo;
 };
 
+let sharedRepo: string | undefined;
+const shared = (): string => {
+  sharedRepo ??= fixtureRepo('c');
+  return sharedRepo;
+};
+
 const inCage = (s: SandboxSubject, cage: CageView, argv: string[]) => s.driver.exec(cage.id, argv);
 
 const present = async (s: SandboxSubject, cage: CageView, path: string): Promise<boolean> =>
@@ -137,7 +143,7 @@ export const sandboxCases: readonly Case<SandboxSubject>[] = [
     rule: 'a file the agent writes in the cage is owned by the host user, not by root',
     run: (s) =>
       using(s, async () => {
-        const cage = await s.driver.startCage({ task: 'acme/t1', worker: 'nova', source: fixtureRepo('c') });
+        const cage = await s.driver.startCage({ task: 'acme/t1', worker: 'nova', source: shared() });
         expect((await inCage(s, cage, probe.sh('write', 'echo owned > /work/owned.txt'))).code).toBe(0);
         if (process.getuid === undefined) throw new NotRun('this OS has no POSIX uid to compare the owner with');
         expect(statSync(join(cage.workdir, 'owned.txt')).uid).toBe(process.getuid());
@@ -148,7 +154,7 @@ export const sandboxCases: readonly Case<SandboxSubject>[] = [
     rule: 'the cage runs as the host user with no capabilities, no-new-privs and a read-only root',
     run: (s) =>
       using(s, async () => {
-        const cage = await s.driver.startCage({ task: 'acme/t1', worker: 'nova', source: fixtureRepo('c') });
+        const cage = await s.driver.startCage({ task: 'acme/t1', worker: 'nova', source: shared() });
         expectHardened((await inCage(s, cage, HARDENED)).out);
       }),
   },
@@ -157,7 +163,7 @@ export const sandboxCases: readonly Case<SandboxSubject>[] = [
     rule: 'a raw connection fails, a CONNECT to an unlisted host is refused and reported with the agent, a listed host is not',
     run: (s) =>
       using(s, async () => {
-        const cage = await s.driver.startCage({ task: 'acme/t1', worker: 'nova', source: fixtureRepo('c') });
+        const cage = await s.driver.startCage({ task: 'acme/t1', worker: 'nova', source: shared() });
         const raw = await inCage(
           s,
           cage,
@@ -181,7 +187,7 @@ export const sandboxCases: readonly Case<SandboxSubject>[] = [
     rule: 'allow refuses anything that is not a single host rule and lifts the refusal for one that is',
     run: (s) =>
       using(s, async () => {
-        const cage = await s.driver.startCage({ task: 'acme/t1', worker: 'nova', source: fixtureRepo('c') });
+        const cage = await s.driver.startCage({ task: 'acme/t1', worker: 'nova', source: shared() });
         for (const bad of ['two words', '', '*', 'a/b', 'example.org:0'] as const)
           await expect(s.driver.allow(bad)).rejects.toThrow();
         await s.driver.allow('example.org:443');
@@ -193,7 +199,7 @@ export const sandboxCases: readonly Case<SandboxSubject>[] = [
     rule: 'releasing a cage removes its container once and reports false the second time',
     run: (s) =>
       using(s, async () => {
-        const cage = await s.driver.startCage({ task: 'acme/t2', worker: 'nova', source: fixtureRepo('c') });
+        const cage = await s.driver.startCage({ task: 'acme/t2', worker: 'nova', source: shared() });
         expect(await s.driver.releaseCage(cage.id)).toBe(true);
         expect(await s.driver.releaseCage(cage.id)).toBe(false);
         expect((await s.driver.leftovers()).containers).not.toContain(cage.container);
@@ -203,8 +209,8 @@ export const sandboxCases: readonly Case<SandboxSubject>[] = [
     id: 'remove-all-leaves-nothing',
     rule: 'removeAll counts and removes every container and network of the project, and empties the list',
     run: async (s) => {
-      await s.driver.startCage({ task: 'acme/t2', worker: 'nova', source: fixtureRepo('c') });
-      await s.driver.startCage({ task: 'acme/t3', worker: 'mira', source: fixtureRepo('c') });
+      await s.driver.startCage({ task: 'acme/t2', worker: 'nova', source: shared() });
+      await s.driver.startCage({ task: 'acme/t3', worker: 'mira', source: shared() });
       expect(s.driver.list()).toHaveLength(2);
       const removed = await s.driver.removeAll();
       expect(removed.containers).toBeGreaterThanOrEqual(2);
@@ -303,7 +309,7 @@ export const sandboxCases: readonly Case<SandboxSubject>[] = [
     rule: 'a missing image fails with the build command for this engine and leaves nothing behind',
     run: async (s) => {
       const failure = await s.missingImage.driver
-        .startCage({ task: 'acme/t3', worker: 'nova', source: fixtureRepo('c') })
+        .startCage({ task: 'acme/t3', worker: 'nova', source: shared() })
         .catch((e: unknown) => e);
       expect(failure).toBeInstanceOf(Error);
       expect(String((failure as Error).message)).toContain(`${s.engine} build -t ${s.missingImage.image}`);

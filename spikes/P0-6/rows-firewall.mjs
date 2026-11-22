@@ -17,6 +17,14 @@ const HOST_SERVICE = `import { createServer } from 'node:net';
 const server = createServer((socket) => socket.on('error', () => {}).end('host\\n'));
 server.listen(0, '::', () => console.log(server.address().port));`;
 
+/** @param {number} status */
+const flipLabel = (status) =>
+  status === 403
+    ? ''
+    : status === 200
+      ? 'FLIP, a connection opened: '
+      : 'WEAK FLIP, no answer and not a proven connection: ';
+
 /** @param {(fw: Firewall) => Promise<Outcome> | Outcome} body @returns {(ctx: Ctx) => Promise<Outcome>} */
 const withFirewall = (body) => async (ctx) => body(await ctx.firewall());
 
@@ -158,7 +166,7 @@ export const FIREWALL_ROWS = {
           result.connectStatus === 403 && result.banner === '' && reasons.includes('non-public-address')
             ? ['F2a']
             : [`connect=${result.connectStatus}`],
-        detail: `CONNECT to allowlisted ${METADATA_NAME}, which resolves to 169.254.169.254: status ${result.connectStatus}, banner "${result.banner}", deny reasons ${JSON.stringify(reasons)}`,
+        detail: `${flipLabel(result.connectStatus)}CONNECT to allowlisted ${METADATA_NAME}, which resolves to 169.254.169.254: status ${result.connectStatus}, banner "${result.banner}", deny reasons ${JSON.stringify(reasons)}`,
       };
     }),
   },

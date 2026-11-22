@@ -17,6 +17,8 @@ export const DEFAULT_ALLOWLIST: readonly string[] = [
   'registry.npmjs.org',
 ];
 
+export const NOT_ALLOWLISTED = 'not-allowlisted';
+
 export interface Denial {
   readonly host: string;
   readonly port: number;

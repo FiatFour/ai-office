@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { parseAllowlist, toSquidConf } from '../P0-2/proxy/allowlist.mjs';
+import { parseAllowlist, toSquidConf } from '../../server/sandbox/proxy/allowlist.mjs';
 import { run } from '../P0-3/cage.mjs';
 
 const P02_DIR = fileURLToPath(new URL('../P0-2/', import.meta.url));
+export const PROXY_DIR = fileURLToPath(new URL('../../server/sandbox/proxy', import.meta.url));
 const P06_DIR = fileURLToPath(new URL('./', import.meta.url));
 
 export const LABEL = 'agent-works.project';
@@ -36,10 +37,11 @@ const NAME_BASES = {
 const ALLOWLIST = `${ALLOWED_HOST}\n${GITHUB_HOST}\n${METADATA_NAME}\n`;
 
 /**
- * Edits that turn one proxy check off, applied to a copy of the P0-2 proxy and never to the repository's own file.
+ * Edits that turn one proxy check off, applied to a copy of the product proxy (`server/sandbox/proxy`) and never to the repository's own file.
  * @type {Record<string, [string, string]>}
  */
 const PROXY_PATCHES = {
+  'allowlist-off': ['if (target === null || !isAllowed(rules, target.host, target.port)) {', 'if (target === null) {'],
   'sni-off': ['function helloDenial(hello, host) {', 'function helloDenial(hello, host) {\n  return null;'],
   'public-check-off': ['addresses.every(({ address }) => isPublicAddress(address))', 'true'],
   'deny-cap-off': ['const DENY_EVENTS_PER_SECOND = 20;', 'const DENY_EVENTS_PER_SECOND = 1_000_000;'],
@@ -48,9 +50,9 @@ const PROXY_PATCHES = {
 /** @param {string} dir @param {string} mutate */
 const proxyDirFor = (dir, mutate) => {
   const patch = PROXY_PATCHES[mutate];
-  if (patch === undefined) return `${P02_DIR}proxy`;
+  if (patch === undefined) return PROXY_DIR;
   const copy = join(dir, 'proxy-mutated');
-  cpSync(`${P02_DIR}proxy`, copy, { recursive: true });
+  cpSync(PROXY_DIR, copy, { recursive: true });
   const file = join(copy, 'node-proxy.mjs');
   const text = readFileSync(file, 'utf8');
   if (!text.includes(patch[0])) throw new Error(`mutation ${mutate} no longer matches node-proxy.mjs`);
@@ -175,7 +177,7 @@ const logs = (name) => {
 
 /**
  * Own copy of the P0-2 firewall layout under this PR's label: an internal network with no host address, one allowlist
- * proxy (the P0-2 Node proxy, mounted), a CoreDNS canary, a deny-event stub and one probe cage. `mutate` names one
+ * proxy (the product Node proxy from server/sandbox/proxy, mounted), a CoreDNS canary, a deny-event stub and one probe cage. `mutate` names one
  * switch from `mutations.mjs` that turns a mechanism off for this run. Every container and network carries the run's
  * label and a name with the run id, so two replays on one docker daemon share nothing and neither removes the other's.
  * @param {string} runId

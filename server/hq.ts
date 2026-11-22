@@ -13,7 +13,7 @@ import { Ledger } from './ledger.ts';
 import type { HqPort, ModeFactory } from './modes/cages.ts';
 import { Registry, RegistryError } from './registry.ts';
 import type { SandboxDriver } from './sandbox/container.ts';
-import type { Denial as RawDenial } from './sandbox/firewall.ts';
+import { NOT_ALLOWLISTED, type Denial as RawDenial } from './sandbox/firewall.ts';
 import { siteOf } from './sandbox/site.ts';
 import { type Denial, outboxSummary, type Snapshot } from './snapshot.ts';
 import type { OutboxEntry } from './store/store.ts';
@@ -117,7 +117,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
         },
         Date.now(),
       );
-      blocked.record(attempt, { counts: !(raw.reason === 'not-allowlisted' && siteOf(raw.host, raw.port) !== null) });
+      blocked.record(attempt, { counts: !(raw.reason === NOT_ALLOWLISTED && siteOf(raw.host, raw.port) !== null) });
     } catch (error) {
       if (!(error instanceof InvalidAttempt)) throw error;
     }
@@ -384,7 +384,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     changed: push,
     paused: (worker) => blocked.isPaused(worker),
     allowed: (host, port) => {
-      if (blocked.cleared(`CONNECT ${host}:${port}`).length > 0) mode?.wake();
+      if (blocked.cleared(`CONNECT ${host}:${port}`, NOT_ALLOWLISTED).length > 0) mode?.wake();
       push();
     },
   };

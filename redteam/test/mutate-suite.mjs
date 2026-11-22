@@ -9,6 +9,12 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const TABLE = join(ROOT, 'docs/threat-model.md');
 const MUTATIONS = ['mask-off', 'sni-off', 'network-open', 'allowlist-off', 'public-check-off'];
 
+/** @type {Record<string, string>} */
+const WEAK = {
+  'public-check-off':
+    'fw-ssrf-metadata flips by a connect timeout (connect=undefined), not by a proven connection to the address',
+};
+
 const requested = process.argv.slice(2);
 const ids = requested.length === 0 ? MUTATIONS : requested;
 const out = process.env.MUTANT_OUT ?? join(tmpdir(), 'redteam-mutate-suite');
@@ -46,7 +52,7 @@ for (const id of ids) {
       .filter(Boolean),
   );
   const missed = declared.filter((row) => !failed.has(row));
-  const line = `${missed.length === 0 && result.status === 1 ? 'OK ' : 'BAD'} ${id}: the suite exited ${result.status} and turned ${[...failed].join(', ') || 'nothing'} to FAIL (declared ${declared.join(', ')})`;
+  const line = `${missed.length === 0 && result.status === 1 ? 'OK ' : 'BAD'} ${id}: the suite exited ${result.status} and turned ${[...failed].join(', ') || 'nothing'} to FAIL (declared ${declared.join(', ')})${WEAK[id] === undefined ? '' : `; WEAK: ${WEAK[id]}`}`;
   lines.push(line);
   console.log(line);
   if (result.status !== 1) problems.push(`${id}: the suite did not exit 1 with the guard off`);

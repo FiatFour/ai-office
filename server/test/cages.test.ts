@@ -24,7 +24,7 @@ class FakeProxy {
   reach = async (agent: string, host: string) => {
     if (this.allowed.has(`${host}:443`)) return true;
     this.denies += 1;
-    this.sink({ host, port: 443, agent, reason: 'not on the allowlist', at: new Date().toISOString() });
+    this.sink({ host, port: 443, agent, reason: 'not-allowlisted', at: new Date().toISOString() });
     return false;
   };
   allow = async (site: string) => {

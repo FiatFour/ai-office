@@ -150,7 +150,7 @@ const MUTANTS = [
     edits: [
       [
         'server/hq.ts',
-        "{ counts: !(raw.reason === 'not-allowlisted' && siteOf(raw.host, raw.port) !== null) }",
+        '{ counts: !(raw.reason === NOT_ALLOWLISTED && siteOf(raw.host, raw.port) !== null) }',
         '{ counts: true }',
       ],
     ],
@@ -163,10 +163,34 @@ const MUTANTS = [
     tests: [BLOCKED],
   },
   {
-    name: 'allow-does-not-resume',
-    claim: 'the Allow action resumes the worker the site paused',
-    edits: [['server/modes/cages.ts', 'if (entry !== undefined) hq.allowed(entry.host, entry.port);', '']],
+    name: 'allow-offered-for-any-reason',
+    claim: 'only a not-allowlisted denial becomes an Allow-able website item',
+    edits: [['server/modes/cages.ts', 'valid !== null && denial.reason === NOT_ALLOWLISTED', 'valid !== null']],
     tests: [BLOCKED],
+  },
+  {
+    name: 'allow-resumes-other-cause',
+    claim: 'Allow lifts only a pause whose recorded cause was a not-allowlisted denial',
+    edits: [['server/blocked.ts', 'cause.tool === tool && cause.detail === detail', 'cause.tool === tool']],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'fixture-canary-shape-dropped',
+    claim: 'the lane 8 shape scan finds the P0-3 and P0-6 fixture canaries and FAKE KEY blocks',
+    edits: [['redteam/scan.ts', "['fixture-canary', /\\bCANARY_[A-Z]+_[0-9a-f]{8}\\b/],", '']],
+    tests: [SCAN],
+  },
+  {
+    name: 'encoded-canary-shape-dropped',
+    claim: 'the lane 8 shape scan finds hex and base64 copies of the canary prefixes',
+    edits: [['redteam/scan.ts', "['encoded-canary-prefix', ENCODED_CANARY],", '']],
+    tests: [SCAN],
+  },
+  {
+    name: 'unattempted-hit-hidden',
+    claim: 'a hit on a row with no exfil attempt prints its real count',
+    edits: [['redteam/outcome.ts', 'r.hits + r.providerUses > 0\n      ?', 'false\n      ?']],
+    tests: [OUTCOME],
   },
   {
     name: 'replay-error-not-run',

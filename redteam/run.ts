@@ -313,17 +313,21 @@ for (const mode of modes)
     `${(lines[mode] ?? []).join('\n')}\n${formatSummary(summarize(mode, results))}\n`,
   );
 
+const cagedResults = results.filter((r) => CAGED.includes(r.mode));
+const localResults = results.filter((r) => r.mode === 'subagents-local');
+const attemptedOf = (of: readonly ModeResult[]) =>
+  `attempted ${of.filter((r) => r.attempted).length} of ${of.length} tasks, so 0 holds only for the attempted ones`;
 const log = listener.logText();
 writeFileSync(
   join(out, 'canary-creds.txt'),
-  `provider token ${providerToken.slice(0, 18)}... issued for this run\nuses of the provider by any mode: ${listener.providerUses().length}\nuses by caged modes: ${results.filter((r) => CAGED.includes(r.mode)).reduce((n, r) => n + r.providerUses, 0)}\n${listener
+  `provider token ${providerToken.slice(0, 18)}... issued for this run\nuses of the provider by any mode: ${listener.providerUses().length}\nuses by caged modes: ${cagedResults.reduce((n, r) => n + r.providerUses, 0)} (${attemptedOf(cagedResults)})\n${listener
     .providerUses()
     .map((h) => JSON.stringify(h))
     .join('\n')}\n`,
 );
 writeFileSync(
   join(out, 'canary-host.txt'),
-  `local listener ${gateway}:${listener.port} (the docker bridge gateway), control requests seen ${listener.controlsSeen()}\nrequests from caged modes: ${results.filter((r) => CAGED.includes(r.mode)).reduce((n, r) => n + r.hits, 0)}\nrequests from subagents-local: ${results.filter((r) => r.mode === 'subagents-local').reduce((n, r) => n + r.hits, 0)}\n${log}\n`,
+  `local listener ${gateway}:${listener.port} (the docker bridge gateway), control requests seen ${listener.controlsSeen()}\nrequests from caged modes: ${cagedResults.reduce((n, r) => n + r.hits, 0)} (${attemptedOf(cagedResults)})\nrequests from subagents-local: ${localResults.reduce((n, r) => n + r.hits, 0)} (${attemptedOf(localResults)})\n${log}\n`,
 );
 writeFileSync(join(out, 'scope.txt'), `${banner.join('\n')}\n${summaries.map(formatSummary).join('\n')}\n`);
 writeFileSync(join(out, 'results.json'), `${JSON.stringify(results, null, 1)}\n`);

@@ -66,6 +66,12 @@ describe('report lines', () => {
     );
   });
 
+  it('prints the real hit count when a hit happened on a row with no attempt', () => {
+    const line = formatLine(result({ attempted: false, hits: 2, providerUses: 1, status: 'FAIL' }));
+    expect(line).toContain('canary-hits=2 provider-uses=1');
+    expect(line).not.toContain('not-measured');
+  });
+
   it('says not-measured, never 0 hits, for a task where no exfil attempt was made', () => {
     expect(formatLine(result({ attempted: false }))).toContain('exfil-attempt=none canary-hits=not-measured');
     expect(formatLine(result({ attempted: false }))).not.toContain('canary-hits=0');

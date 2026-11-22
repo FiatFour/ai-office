@@ -11,7 +11,7 @@ const artifacts = hostArtifacts(realGh, repo);
 const found = scanShapes(artifacts);
 const prs = new Set(artifacts.map((a) => /^pr#(\d+) /.exec(a.where)?.[1]).filter(Boolean));
 console.log(
-  `scanned ${artifacts.length} texts of ${repo} (${prs.size} PRs: titles, bodies, branches, reviews, issue and review comments, branch names) for credential shapes and canary values of any run`,
+  `scanned ${artifacts.length} texts of ${repo} (${prs.size} PRs: titles, bodies, branches, reviews, issue and review comments, branch names) for credential shapes and the canary shapes of this suite (AWCANARY, CANARY_<KIND>_<8 hex>, FAKE KEY blocks, hex and base64 copies of those prefixes). Not scanned: branch contents, commit diffs, anything outside these texts`,
 );
 console.log(`findings: ${found.length}`);
 for (const f of found) console.log(`${f.where}: ${f.kinds.join(',')}`);

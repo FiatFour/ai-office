@@ -27,7 +27,7 @@ import {
 } from '../githost/host.ts';
 import { inlineCode, plainLine, quoteBlock, TASK_ID, unquote } from '../githost/sanitize.ts';
 import type { Executor } from '../hq.ts';
-import type { Denial } from '../sandbox/firewall.ts';
+import { type Denial, NOT_ALLOWLISTED } from '../sandbox/firewall.ts';
 import { siteOf } from '../sandbox/site.ts';
 import { canonicalJson } from '../store/atomic.ts';
 import type { LoggedEvent, OutboxEntry } from '../store/store.ts';
@@ -630,7 +630,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
           ...key,
           agent: denial.agent,
           count: (seenBefore?.count ?? 0) + 1,
-          allow: valid !== null,
+          allow: valid !== null && denial.reason === NOT_ALLOWLISTED,
         });
       },
       wake: pokeAll,

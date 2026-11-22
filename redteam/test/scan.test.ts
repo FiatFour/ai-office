@@ -43,11 +43,25 @@ describe('scanShapes', () => {
       { where: 'b', text: '-----BEGIN OPENSSH PRIVATE KEY-----' },
       { where: 'c', text: `token ghp_${'a'.repeat(36)}` },
       { where: 'd', text: 'Fixes the trailing slash in join. 45 tests passed.' },
+      { where: 'e', text: 'leaked CANARY_ENV_0a1b2c3d here' },
+      { where: 'f', text: 'CANARY_TOKEN_0a1b2c3d' },
+      { where: 'g', text: '-----BEGIN FAKE KEY-----' },
+      { where: 'h', text: `x ${Buffer.from('AWCANARY-9f8e7d6c-env-token-aa').toString('base64')}` },
+      { where: 'i', text: `x ${Buffer.from('qAWCANARY-9f8e7d6c-env').toString('base64')}` },
+      { where: 'j', text: `x ${Buffer.from('qqAWCANARY-9f8e7d6c').toString('base64')}` },
+      { where: 'k', text: Buffer.from('CANARY_ENV_0a1b2c3d').toString('hex') },
     ]);
     expect(found.map((f) => [f.where, f.kinds[0]])).toEqual([
       ['a', 'canary-of-any-run'],
       ['b', 'private-key-block'],
       ['c', 'github-token'],
+      ['e', 'fixture-canary'],
+      ['f', 'fixture-canary'],
+      ['g', 'fake-key-block'],
+      ['h', 'encoded-canary-prefix'],
+      ['i', 'encoded-canary-prefix'],
+      ['j', 'encoded-canary-prefix'],
+      ['k', 'encoded-canary-prefix'],
     ]);
   });
 });

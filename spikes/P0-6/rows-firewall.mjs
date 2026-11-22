@@ -158,7 +158,7 @@ export const FIREWALL_ROWS = {
           result.connectStatus === 403 && result.banner === '' && reasons.includes('non-public-address')
             ? ['F2a']
             : [`connect=${result.connectStatus}`],
-        detail: `CONNECT to allowlisted ${METADATA_NAME}, which resolves to 169.254.169.254: status ${result.connectStatus}, banner "${result.banner}", deny reasons ${JSON.stringify(reasons)}`,
+        detail: `${result.connectStatus === 403 ? '' : 'WEAK FLIP, a timeout and not a proven connection: '}CONNECT to allowlisted ${METADATA_NAME}, which resolves to 169.254.169.254: status ${result.connectStatus}, banner "${result.banner}", deny reasons ${JSON.stringify(reasons)}`,
       };
     }),
   },

@@ -95,7 +95,7 @@ describe('BlockedLog window and operator decision', () => {
     for (let i = 0; i < REPEAT_LIMIT; i++) log.record(attempt({ tool: 'CONNECT a.test:443' }, i));
     for (let i = 0; i < REPEAT_LIMIT; i++) log.record(attempt({ worker: 'vega', tool: 'CONNECT b.test:443' }, i));
     expect(log.paused()).toEqual(['nova', 'vega']);
-    expect(log.cleared('CONNECT a.test:443')).toEqual(['nova']);
+    expect(log.cleared('CONNECT a.test:443', 'cat .env')).toEqual(['nova']);
     expect(log.paused()).toEqual(['vega']);
     expect(log.record(attempt({ tool: 'CONNECT a.test:443' }, 10)).entry.repeats).toBe(1);
   });
@@ -190,10 +190,10 @@ describe.skipIf(!hasSqlite)('HQ blocked attempts', () => {
     expect(hq.snapshot().paused).toEqual(['nova']);
   });
 
-  it('the Allow action resumes the worker that the site paused', async () => {
+  const cagesWithEgress = (allow: (site: string) => Promise<void>) => {
     const fake = new FakeGithub();
     const agent = scripted({ scripts: SCRIPTS, retryMs: 10 });
-    const mode = cagesMode({
+    return cagesMode({
       host: github({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log: () => {} }),
       reviewHost: github({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log: () => {} }),
       repo: 'acme/app',
@@ -202,15 +202,49 @@ describe.skipIf(!hasSqlite)('HQ blocked attempts', () => {
       author: 'nova',
       reviewer: 'vega',
       workers: { nova: agent, vega: agent },
-      egress: { allow: async () => {} },
+      egress: { allow },
       pollMs: 600_000,
     });
-    const { hq, deny } = await denialHq({ mode });
+  };
+
+  it('offers no Allow for a denial that is not about the allowlist, and the pause stays', async () => {
+    const opened: string[] = [];
+    const { hq, deny } = await denialHq({ mode: cagesWithEgress(async (site) => void opened.push(site)) });
     for (let i = 0; i < REPEAT_LIMIT; i++) deny('meta.ssrf.test', 'non-public-address');
     expect(hq.snapshot().paused).toEqual(['nova']);
-    const answer = await send(hq, '/api/actions/allow', { host: 'meta.ssrf.test' });
-    expect(answer.json).toEqual({ allowed: 'meta.ssrf.test:443' });
-    expect(hq.snapshot().paused).toEqual([]);
+    expect((await send(hq, '/api/actions/allow', { host: 'meta.ssrf.test' })).status).toBe(400);
+    expect(opened).toEqual([]);
+    expect(hq.snapshot().paused).toEqual(['nova']);
+  });
+
+  it('offers no Allow for a fronting attempt reported under the SNI host', async () => {
+    const opened: string[] = [];
+    const { hq, deny } = await denialHq({ mode: cagesWithEgress(async (site) => void opened.push(site)) });
+    for (let i = 0; i < REPEAT_LIMIT; i++) deny('evil.test', 'sni-mismatch');
+    expect(hq.snapshot().paused).toEqual(['nova']);
+    expect((await send(hq, '/api/actions/allow', { host: 'evil.test' })).status).toBe(400);
+    expect(opened).toEqual([]);
+    expect(hq.snapshot().paused).toEqual(['nova']);
+  });
+
+  it('Allow on a not-allowlisted site opens it and leaves a pause for another cause alone', async () => {
+    const opened: string[] = [];
+    const { hq, deny } = await denialHq({ mode: cagesWithEgress(async (site) => void opened.push(site)) });
+    for (let i = 0; i < REPEAT_LIMIT; i++) deny('meta.ssrf.test', 'non-public-address');
+    deny('pypi.org', 'not-allowlisted');
+    const answer = await send(hq, '/api/actions/allow', { host: 'pypi.org' });
+    expect(answer.json).toEqual({ allowed: 'pypi.org:443' });
+    expect(opened).toEqual(['pypi.org:443']);
+    expect(hq.snapshot().paused).toEqual(['nova']);
+  });
+
+  it('a pause is lifted by Allow only when its recorded cause was a not-allowlisted denial', () => {
+    const log = new BlockedLog();
+    for (let i = 0; i < REPEAT_LIMIT; i++)
+      log.record(attempt({ tool: 'CONNECT x.test:443', detail: 'non-public-address' }, i));
+    expect(log.cleared('CONNECT x.test:443', 'not-allowlisted')).toEqual([]);
+    expect(log.paused()).toEqual(['nova']);
+    expect(log.cleared('CONNECT x.test:443', 'non-public-address')).toEqual(['nova']);
   });
 
   it('stops starting work for a paused worker', async () => {

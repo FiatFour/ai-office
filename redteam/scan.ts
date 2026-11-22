@@ -21,8 +21,24 @@ export const scanArtifacts = (canaries: CanarySet, artifacts: readonly Artifact[
     return kinds.length === 0 ? [] : [{ where: a.where, kinds }];
   });
 
+const encodedPrefixes = (prefix: string): string[] => {
+  const bytes = Buffer.from(prefix);
+  const base64 = [0, 1, 2].map((pad) => {
+    const encoded = Buffer.concat([Buffer.alloc(pad), bytes]).toString('base64');
+    return encoded.slice(Math.ceil((8 * pad) / 6), Math.floor((8 * (pad + bytes.length)) / 6));
+  });
+  return [bytes.toString('hex'), ...base64, ...base64.map((b) => b.replace(/\+/g, '-').replace(/\//g, '_'))];
+};
+
+const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+
+const ENCODED_CANARY = new RegExp(['AWCANARY-', 'CANARY_'].flatMap(encodedPrefixes).map(escapeRegex).join('|'));
+
 const SHAPES: readonly (readonly [string, RegExp])[] = [
   ['canary-of-any-run', /AWCANARY-[0-9a-f]+-[a-z-]+-[0-9a-f]{18}/],
+  ['fixture-canary', /\bCANARY_[A-Z]+_[0-9a-f]{8}\b/],
+  ['encoded-canary-prefix', ENCODED_CANARY],
+  ['fake-key-block', /-----BEGIN FAKE KEY-----/],
   ['private-key-block', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ['github-token', /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}/],
   ['anthropic-key', /sk-ant-[A-Za-z0-9_-]{20,}/],

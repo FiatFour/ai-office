@@ -835,6 +835,31 @@ describe('a GitHub review with inline comments the host cannot place', () => {
       expect(body).toContain(finding);
   });
 
+  it('lists a comment with no line beside the refused ones after the outside-the-diff fallback, with accurate wording', async () => {
+    const { fake, number, head, host } = await open('aw-reviewer', changed);
+    await host.postReview('acme/app', number, {
+      commitId: head,
+      verdict: 'changes',
+      body: 'needs work',
+      comments: [
+        { path: 'src/big.txt', line: 12, body: 'outside' },
+        { path: 'src/big.txt', line: null, body: 'whole file' },
+        { path: null, line: 7, body: 'pathless' },
+        { path: null, line: null, body: 'general' },
+      ],
+    });
+    expect(fake.comments).toEqual([]);
+    const body = fake.reviews.at(-1)?.body ?? '';
+    for (const finding of [
+      '`src/big.txt:12`\noutside',
+      '`src/big.txt`\nwhole file',
+      '`line 7`\npathless',
+      '\n\ngeneral',
+    ])
+      expect(body).toContain(finding);
+    expect(body).not.toContain('because their lines are not in the diff');
+  });
+
   it('carries a comment with no line, or no path, into the review body and still places the inline ones', async () => {
     const { fake, number, head, host } = await open('aw-reviewer', changed);
     const posted = await host.postReview('acme/app', number, {

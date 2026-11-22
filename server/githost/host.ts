@@ -114,7 +114,9 @@ export const carriedList = (prefix: string, why: string, comments: readonly Line
   let out = head;
   let kept = 0;
   for (const c of comments) {
-    const where = c.path === null ? '' : `${inlineCode(c.line === null ? c.path : `${c.path}:${c.line}`)}\n`;
+    const spot =
+      c.path === null ? (c.line === null ? null : `line ${c.line}`) : c.line === null ? c.path : `${c.path}:${c.line}`;
+    const where = spot === null ? '' : `${inlineCode(spot)}\n`;
     const next = `${out}\n\n${where}${c.body}`;
     if (next.length > room) break;
     out = next;

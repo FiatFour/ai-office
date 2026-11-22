@@ -244,9 +244,11 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         .filter((c) => c.commitId === head && c.author.toLowerCase() === reviewer)
         .map((c) => ({ ...c, body: unquote(c.body) }));
       const carried = reviews
-        .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === reviewer && r.body.includes(DROPPED_MARK))
+        .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === reviewer)
+        .map((r) => ({ r, text: r.body.replace(REVIEW_MARK, '').replace(DROPPED_MARK, '\n').trim() }))
+        .filter(({ text }) => text !== '')
         .map(
-          (r): CommentFact => ({
+          ({ r, text }): CommentFact => ({
             host: r.host,
             kind: 'review_comment',
             repo: r.repo,
@@ -257,7 +259,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
             path: null,
             line: null,
             commitId: r.commitId,
-            body: r.body.slice(r.body.indexOf(DROPPED_MARK) + DROPPED_MARK.length).trim(),
+            body: text,
             at: r.at,
           }),
         );

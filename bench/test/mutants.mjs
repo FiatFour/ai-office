@@ -1177,15 +1177,9 @@ const MUTANTS = [
     tests: [AGENTS, FACTORY],
   },
   {
-    name: 'review-comment-without-line-aborts',
-    claim: 'a reviewer comment with no usable line is kept as a whole-file comment, it never aborts the review',
-    edits: [
-      [
-        'server/agents/runtime.ts',
-        'const line = path !== null && Number.isSafeInteger(c.line)',
-        'const line = Number.isSafeInteger(c.line)',
-      ],
-    ],
+    name: 'review-comment-zero-line-placed',
+    claim: 'a reviewer comment whose line is below 1 is kept as a whole-file comment, never placed inline',
+    edits: [['server/agents/runtime.ts', '(c.line as number) >= 1', 'true']],
     tests: [AGENTS],
   },
   {
@@ -1232,8 +1226,8 @@ const MUTANTS = [
     edits: [
       [
         'server/githost/host.ts',
-        'for (const c of comments) {\n    const where',
-        'for (const c of comments.slice(0, -1)) {\n    const where',
+        'for (const c of comments) {\n    const spot',
+        'for (const c of comments.slice(0, -1)) {\n    const spot',
       ],
     ],
     tests: [CONTRACT],
@@ -1255,8 +1249,104 @@ const MUTANTS = [
   {
     name: 'fix-round-misses-dropped-comments',
     claim: 'the author of a fix round is given the findings that were carried into the review body',
-    edits: [['server/modes/cages.ts', 'r.body.includes(DROPPED_MARK))', 'false)']],
+    edits: [['server/modes/cages.ts', ".filter(({ text }) => text !== '')", '.filter(() => false)']],
     tests: [CAGES],
+  },
+  {
+    name: 'fix-round-misses-review-body',
+    claim: 'the author of a fix round is given the main review body, not only the text after the carried-comments mark',
+    edits: [
+      [
+        'server/modes/cages.ts',
+        ".map((r) => ({ r, text: r.body.replace(REVIEW_MARK, '').replace(DROPPED_MARK, '\\n').trim() }))",
+        ".map((r) => ({ r, text: r.body.includes(DROPPED_MARK) ? r.body.slice(r.body.indexOf(DROPPED_MARK) + DROPPED_MARK.length).trim() : '' }))",
+      ],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'review-string-comment-dropped',
+    claim: 'a reviewer comment written as a plain string is carried, never dropped',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "if (typeof raw === 'string') return raw.trim() === '' ? [] : [{ path: null, line: null, body: raw }];",
+        "if (typeof raw === 'string') return [];",
+      ],
+    ],
+    tests: [AGENTS, FACTORY],
+  },
+  {
+    name: 'review-comment-other-key-dropped',
+    claim: 'a reviewer comment whose text is under comment, message or text is carried with that text',
+    edits: [['server/agents/runtime.ts', "['body', 'comment', 'message', 'text']", "['body']"]],
+    tests: [AGENTS, FACTORY],
+  },
+  {
+    name: 'review-textless-comment-dropped',
+    claim: 'a reviewer comment object with no text field is carried as its JSON text',
+    edits: [['server/agents/runtime.ts', 'body: JSON.stringify(c) }]', 'body: "" }].filter(() => false)']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-comments-object-dropped',
+    claim: 'reviewer comments given as one object instead of a list are carried',
+    edits: [['server/agents/runtime.ts', ': commentOf(raw));', ': []);']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-first-verdict-block-wins',
+    claim: 'the last json block with a verdict is the review, so an earlier quoted block never wins',
+    edits: [['server/agents/runtime.ts', 'objectsIn(text).findLast(hasVerdict)', 'objectsIn(text).find(hasVerdict)']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-block-ends-at-first-fence',
+    claim: 'a verdict block holding triple backticks inside a comment still parses',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        'for (const end of closers) if (end > start && take(text.slice(start, end))) break;',
+        'for (const end of closers) if (end > start) { take(text.slice(start, end)); break; }',
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-failure-hides-reviewer-text',
+    claim: 'a review with no verdict block fails with the start of the reviewer text in the message',
+    edits: [['server/agents/runtime.ts', 'Reviewer text: ${text.slice(0, EXCERPT)}', 'Reviewer text.']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-lineless-changes-downgraded',
+    claim: 'a changes verdict whose comments all lack a line stays changes after parsing',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        'verdict: o.verdict as Verdict,',
+        "verdict: o.verdict === 'changes' && commentsOf(o.comments).every((c) => c.line === null) ? 'comment' : (o.verdict as Verdict),",
+      ],
+    ],
+    tests: [AGENTS, FACTORY],
+  },
+  {
+    name: 'review-outside-fallback-lists-only-placed',
+    claim: 'after the outside-the-diff fallback every comment is listed, those with no line included',
+    edits: [
+      [
+        'server/githost/github.ts',
+        'return carriedList(base, OUTSIDE_NOTE, draft.comments);',
+        'return carriedList(base, OUTSIDE_NOTE, draft.comments.filter(isPlaced));',
+      ],
+    ],
+    tests: [CONTRACT],
+  },
+  {
+    name: 'review-pathless-line-dropped-from-list',
+    claim: 'a comment with a line but no path keeps its line number in the carried text',
+    edits: [['server/githost/host.ts', '(c.line === null ? null : `line ${c.line}`)', 'null']],
+    tests: [CONTRACT],
   },
   {
     name: 'review-refused-on-moved-head-ends-task',

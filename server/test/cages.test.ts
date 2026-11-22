@@ -497,7 +497,7 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
     await until(hq, (s) => action('round_limit')(s) !== undefined);
     const fixes = rec.runs.filter((r) => r.role === 'author' && r.round > 0);
     expect(fixes.map((r) => r.round)).toEqual([1, 2, 3]);
-    expect(fixes.map((r) => r.comments)).toEqual([1, 1, 1]);
+    expect(fixes.map((r) => r.comments)).toEqual([2, 2, 2]);
   });
 
   it('files a review whose inline comment is outside the diff, and gives the fix round the finding from the review body', async () => {
@@ -537,7 +537,41 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
     expect(ready.mode?.rounds['alpha/t2']).toBe(1);
     expect(asked).toHaveLength(1);
     expect(asked[0]).toHaveLength(1);
-    expect(asked[0]?.[0]).toMatch(/^null\|null\|[\s\S]*docs\/note\.md:99[\s\S]*second draft/);
+    expect(asked[0]?.[0]).toMatch(/^null\|null\|[\s\S]*Fix it\.[\s\S]*docs\/note\.md:99[\s\S]*second draft/);
+  });
+
+  it('gives the fix round the review body as well as the inline comments', async () => {
+    const { hosts } = twoAccounts();
+    const scripts = {
+      ...SCRIPTS,
+      'alpha/t2': {
+        ...SCRIPTS['alpha/t2'],
+        reviews: [
+          {
+            verdict: 'changes',
+            body: 'Rename the helper everywhere.',
+            comments: [{ path: 'docs/note.md', line: 3, body: 'Say "second draft".' }],
+          },
+          { verdict: 'approve', body: 'Fine.', comments: [] },
+        ],
+      },
+    } as typeof SCRIPTS;
+    const inner = scripted({ scripts });
+    const asked: string[][] = [];
+    const runtime: AgentRuntime = {
+      id: 'scripted',
+      run: (job) => {
+        if (job.role === 'author' && job.round > 0) asked.push(job.comments.map((c) => c.body));
+        return inner.run(job);
+      },
+    };
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    await until(hq, (s) => action('ready_to_merge')(s) !== undefined);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.some((b) => b.includes('Rename the helper everywhere.'))).toBe(true);
+    expect(asked[0]?.some((b) => b.includes('second draft'))).toBe(true);
+    expect(asked[0]?.some((b) => b.includes('agent-works:review'))).toBe(false);
   });
 
   it('does not end the task when the host refuses a review for a head that moved while the reviewer worked', async () => {

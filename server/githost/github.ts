@@ -252,7 +252,7 @@ const ownPullRequestNote = (verdict: string) =>
   `\n\n(The reviewer's verdict was "${verdict}". GitHub refuses it on a PR the same account opened, so it is posted as a comment.)`;
 
 const OUTSIDE_NOTE =
-  'GitHub refused these inline comments because their lines are not in the diff, so they are listed here:';
+  'GitHub refused the inline comments because a line is not in the diff, so every comment is listed here:';
 const UNPLACED_NOTE = 'These comments have no line in the diff, so they are listed here:';
 
 export interface GithubOptions {

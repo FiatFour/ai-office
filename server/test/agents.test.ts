@@ -65,6 +65,11 @@ describe('the Claude Code runtime', () => {
     expect(parseStream(result({ input_tokens: 1 })).usage.webRequests).toBe(0);
   });
 
+  it('keeps the provider message when claude reports an error result', () => {
+    const raw = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'usage limit reached' });
+    expect(() => parseStream(raw)).toThrow('claude ended with success: usage limit reached');
+  });
+
   it('runs claude headless in the cage and reads the commit through git inside the cage', async () => {
     const calls: string[][] = [];
     const inputs: string[] = [];

@@ -16,5 +16,14 @@
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["bench/**/*", "scripts/**/*", "spikes/**/*", "redteam/**/*", "packages/**/*", "server/**/*", "bin/**/*"]
+  "include": [
+    "bench/**/*",
+    "scripts/**/*",
+    "spikes/**/*",
+    "redteam/**/*",
+    "packages/**/*",
+    "server/**/*",
+    "bin/**/*",
+    "test/**/*"
+  ]
 }

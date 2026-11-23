@@ -57,6 +57,98 @@ jobs:
           pnpm test:bench-live
           if ($LASTEXITCODE -ne 0) { throw "the benchmark live tests failed" }
 
+  contract:
+    name: contract (${{ matrix.cell }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cell: linux
+          - os: macos-latest
+            cell: macos
+          - os: windows-latest
+            cell: windows
+    env:
+      CONTRACT_RESULTS: ${{ github.workspace }}/contract-results/${{ matrix.cell }}.jsonl
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: What this runner offers
+        run: |
+          foreach ($tool in 'docker', 'podman') {
+            $found = Get-Command $tool -ErrorAction SilentlyContinue
+            if ($null -eq $found) { Write-Host "$tool : not installed"; continue }
+            & $tool --version
+            if ($tool -eq 'docker') { & docker info --format 'docker OSType={{.OSType}} rootless={{.SecurityOptions}}' }
+            if ($tool -eq 'podman') { & podman info --format 'podman os={{.Host.OS}} rootless={{.Host.Security.Rootless}}' }
+          }
+          Write-Host ("/dev/kvm present: " + (Test-Path /dev/kvm))
+          exit 0
+      - name: Run the SandboxDriver and GitHost contracts and their self test
+        run: |
+          New-Item -ItemType Directory -Force (Split-Path $env:CONTRACT_RESULTS) | Out-Null
+          pnpm vitest run test/contract
+          if ($LASTEXITCODE -ne 0) { throw "a contract case failed" }
+      - name: Table for this runner
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/contract-table.mjs contract-results ${{ matrix.cell }}
+          if ($LASTEXITCODE -ne 0) { throw "a cell on this runner is blank or failed" }
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: contract-${{ matrix.cell }}
+          path: contract-results
+          if-no-files-found: error
+
+  contract-table:
+    name: contract table (driver by OS)
+    needs: contract
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: contract-*
+          merge-multiple: true
+          path: contract-results
+      - name: Every driver on every OS is a pass, a failure or a named reason
+        run: |
+          node scripts/contract-table.mjs contract-results
+          if ($LASTEXITCODE -ne 0) { throw "the table has a blank cell or a failure" }
+
+  contract-mutants:
+    name: contract mutants (every broken guard fails a contract case or the table)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Break each guard in turn and require a contract case to fail
+        run: |
+          $env:MUTANT_OUT = Join-Path $env:RUNNER_TEMP 'contract-mutants.txt'
+          node test/contract/mutants.mjs
+          $status = $LASTEXITCODE
+          Get-Content $env:MUTANT_OUT | Select-Object -Last 1 | Add-Content $env:GITHUB_STEP_SUMMARY
+          if ($status -ne 0) { throw "a contract mutant survived or could not be applied" }
+
   bench-mutants:
     name: bench mutants (the whole suite, every mutant caught)
     runs-on: ubuntu-latest
@@ -102,7 +194,8 @@ jobs:
                 @('vitest', 'run', '--exclude', 'server/test/sandbox/driver.test.ts', '--exclude', 'server/test/kill9.test.ts',
                   '--exclude', 'server/test/cli.test.ts', '--exclude', 'server/test/lockrace.test.ts', '--exclude', 'server/test/perf.test.ts',
                   '--exclude', 'bench/test/task-setup.test.ts', '--exclude', 'bench/test/closure.test.ts', '--exclude', 'bench/test/cage-mount.test.ts',
-                  '--exclude', 'bench/test/arms.test.ts', '--exclude', 'bench/test/cli.test.ts')
+                  '--exclude', 'bench/test/arms.test.ts', '--exclude', 'bench/test/cli.test.ts',
+                  '--exclude', 'test/contract')
               )
               foreach ($step in $steps) {
                 & pnpm @step | Out-Host

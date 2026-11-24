@@ -1,6 +1,11 @@
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { tempDir } from '../../../server/test/helpers.ts';
 import type { Row } from '../../model.ts';
-import { checks, renderReport } from '../../report.ts';
+import { checks, readRows, renderReport } from '../../report.ts';
 
 const row = (over: Partial<Row>): Row => ({
   task: 'b1',
@@ -56,10 +61,39 @@ describe('Set B report', () => {
     expect(cell(rows, 'Set B merge rate')?.value).toBe('1 of 1 (100%)');
   });
 
+  it('emits the baseline line and the new columns only when Set B rows exist', () => {
+    const a = [row({ set: 'A', task: 'a1' })];
+    expect(cell(a, 'Set B baseline pass rate')).toBeUndefined();
+    expect(renderReport(a, 'd')).not.toContain('edit lines');
+    expect(cell([row({})], 'Set B baseline pass rate')).toMatchObject({ verdict: 'UNMEASURED' });
+    expect(renderReport([row({})], 'd')).toContain('edit lines');
+  });
+
   it('adds the edit, judge, root and inferred columns to the per-task table', () => {
     const md = renderReport([row({ editLines: 4, judgeMinutes: 2, rootMinutes: 3, inferredWindows: 0.25 })], 'd');
     for (const head of ['edit lines', 'judge min', 'root min', 'windows (inferred)'])
       expect(md).toContain(`factory ${head}`);
     expect(md).toMatch(/\| b1 \| B \| pass \|.* 4 \| 2 \| 3 \|/);
+  });
+});
+
+describe('Set A output', () => {
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const ROWS = join(HERE, 'fixtures', 'both.jsonl');
+  const GOLDEN = join(HERE, '..', '..', 'results', 'report-set-a.md');
+
+  it('is byte for byte the recorded Set A report, with no Set B row, column or baseline line', () => {
+    expect(`${renderReport(readRows(ROWS), 'both')}\n`).toBe(readFileSync(GOLDEN, 'utf8'));
+    const md = renderReport(readRows(ROWS), 'both');
+    expect(md).not.toContain('baseline pass rate');
+    expect(md).not.toContain('edit lines');
+  });
+
+  it('is what node bench/report.ts prints for those rows', () => {
+    const out = join(tempDir('setb-report'), 'o.md');
+    const printed = execFileSync(process.execPath, [join(HERE, '..', '..', 'report.ts'), ROWS, '--out', out], {
+      encoding: 'utf8',
+    });
+    expect(printed).toBe(readFileSync(GOLDEN, 'utf8'));
   });
 });

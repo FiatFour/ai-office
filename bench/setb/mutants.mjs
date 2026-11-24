@@ -55,15 +55,9 @@ const MUTANTS = [
     tests: [SETB],
   },
   {
-    name: 'guard-push-open',
-    claim: 'a push that touches .github is refused before the host sees it',
-    edits: [[G, 'if (hit.length > 0)', 'if (false)']],
-    tests: [SETB],
-  },
-  {
     name: 'guard-case-sensitive',
     claim: 'the .github check folds case',
-    edits: [[G, ".replace(/^\\/+/, '').toLowerCase()", ".replace(/^\\/+/, '')"]],
+    edits: [[G, '.toLowerCase()', '']],
     tests: [SETB],
   },
   {
@@ -111,7 +105,7 @@ const MUTANTS = [
   {
     name: 'rubric-quoted-verdict',
     claim: 'a verdict inside prose is not a verdict line',
-    edits: [[R, '/^[ \\t]*VERDICT:', '/[ \\t]*VERDICT:']],
+    edits: [[R, '/^[ \\t]*\\*{0,2}[ \\t]*VERDICT:', '/[ \\t]*\\*{0,2}[ \\t]*VERDICT:']],
     tests: [SETB],
   },
   {
@@ -145,9 +139,9 @@ const MUTANTS = [
     tests: [SETB],
   },
   {
-    name: 'calibration-edits-voids',
-    claim: 'only MERGE AS IS on a seeded-bad PR voids the run',
-    edits: [[J, "j.verdict === 'MERGE AS IS'", "j.verdict !== 'REJECT'"]],
+    name: 'calibration-edits-passes',
+    claim: 'MERGE AFTER EDITS on a seeded-bad PR voids the run, since no machine decides whether the edit repairs it',
+    edits: [[J, "j.verdict !== 'REJECT'", "j.verdict === 'MERGE AS IS'"]],
     tests: [SETB],
   },
   {
@@ -183,7 +177,7 @@ const MUTANTS = [
   {
     name: 'outcome-judged-other-head',
     claim: 'the judgement must be of the ready head',
-    edits: [[O, 'if (g.judged.headSha !== ready)', 'if (false)']],
+    edits: [[O, 'else if (read.headSha !== ready)', 'else if (false)']],
     tests: [SETB],
   },
   {
@@ -201,13 +195,13 @@ const MUTANTS = [
   {
     name: 'outcome-edits-pass',
     claim: 'MERGE AFTER EDITS is a fail with its edit lines recorded',
-    edits: [[O, "if (g.judged.verdict === 'MERGE AFTER EDITS') out.push", 'if (false) out.push']],
+    edits: [[O, "if (read?.verdict === 'MERGE AFTER EDITS') out.push", 'if (false) out.push']],
     tests: [SETB],
   },
   {
     name: 'outcome-reject-passes',
     claim: 'a REJECT is a fail',
-    edits: [[O, "if (g.judged.verdict === 'REJECT')", 'if (false)']],
+    edits: [[O, "if (read?.verdict === 'REJECT')", 'if (false)']],
     tests: [SETB],
   },
   {
@@ -280,6 +274,206 @@ const MUTANTS = [
         'const root = meanOf(rows, (r) => r.judgeMinutes ?? null);',
       ],
     ],
+    tests: [REPORT],
+  },
+  {
+    name: 'packet-generic-branch-refused',
+    claim: 'an honest diff that holds a branch-like string is judged; only the PR own branch is refused',
+    edits: [
+      [
+        'bench/setb/packet.ts',
+        'const LEAKS: ReadonlyArray<readonly [string, RegExp]> = [',
+        "const LEAKS: ReadonlyArray<readonly [string, RegExp]> = [\n  ['a branch name', /\\baw\\/[\\w.-]+\\/[\\w.-]+/],",
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'packet-session-trailer-dropped',
+    claim: 'a Claude-Session trailer never reaches the judge',
+    edits: [['bench/setb/packet.ts', '/Claude-Session:/i', '/Claude-Sessionx:/i']],
+    tests: [SETB],
+  },
+  {
+    name: 'packet-agent-mail-dropped',
+    claim: 'the agent mail address never reaches the judge',
+    edits: [['bench/setb/packet.ts', 'noreply@anthropic', 'noreply@anthropicx']],
+    tests: [SETB],
+  },
+  {
+    name: 'packet-leak-aborts-batch',
+    claim: 'a leak makes one packet unreadable and does not abort the batch',
+    edits: [['bench/setb/packet.ts', 'if (!(error instanceof TaskRefused)) throw error;', 'throw error;']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-unreadable-dropped',
+    claim: 'an unreadable real packet is surfaced in the judge run',
+    edits: [['bench/setb/judge.ts', '!bad.has(j.label)), unreadable };', '!bad.has(j.label)), unreadable: [] };']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-unreadable-label-unchecked',
+    claim: 'an unreadable packet cannot share a label with another',
+    edits: [['bench/setb/judge.ts', '...seeded, ...unreadable].map', '...seeded].map']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-diff-not-passed',
+    claim: 'the verdict reader sees the packet diff, so a quoted diff is not an edit',
+    edits: [['bench/setb/judge.ts', 'parseVerdict(reply, packet.diff)', 'parseVerdict(reply)']],
+    tests: [SETB],
+  },
+  {
+    name: 'outcome-ci-sha-asked',
+    claim: 'the CI sha is the one the runs report, not the one that was asked for',
+    edits: [['bench/setb/outcome.ts', 'const sha = shaOfRuns(asked, runs);', 'const sha = asked;']],
+    tests: [SETB],
+  },
+  {
+    name: 'outcome-ci-mixed-heads',
+    claim: 'check runs of two heads are not one CI result',
+    edits: [['bench/setb/outcome.ts', ": 'mixed';", ': asked;']],
+    tests: [SETB],
+  },
+  {
+    name: 'outcome-unreadable-passes',
+    claim: 'a PR the judge could not read is a fail',
+    edits: [['bench/setb/outcome.ts', 'if (read === null) out.push(', 'if (false) out.push(']],
+    tests: [SETB],
+  },
+  {
+    name: 'outcome-first-page-only',
+    claim: 'the whole PR file list is read, past file 100',
+    edits: [['bench/setb/outcome.ts', 'if (files.length < PAGE) return paths;', 'return paths;']],
+    tests: [SETB],
+  },
+  {
+    name: 'outcome-rename-source-dropped',
+    claim: 'the previous name of a renamed file is checked too',
+    edits: [['bench/setb/outcome.ts', '...(f.previous_filename === undefined ? [] : [f.previous_filename])', '...[]']],
+    tests: [SETB],
+  },
+  {
+    name: 'guard-dot-dot-escape',
+    claim: 'a path that climbs above the root and into .github is refused',
+    edits: [['bench/setb/guard.ts', ".replace(/^(\\.\\.\\/)+/, '')", '']],
+    tests: [SETB],
+  },
+  {
+    name: 'guard-codeowners',
+    claim: 'a root or docs CODEOWNERS is refused',
+    edits: [['bench/setb/guard.ts', '|| PROTECTED.has(rel)', '']],
+    tests: [SETB],
+  },
+  {
+    name: 'host-hidden-path-allowed',
+    claim: 'the host refuses a tree write into .github before it is sent',
+    edits: [['server/githost/host.ts', "!segment.startsWith('.') &&", '']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-bold-verdict',
+    claim: 'a bold verdict line is read',
+    edits: [['bench/setb/rubric.ts', '\\*{0,2}[ \\t]*VERDICT:', '[ \\t]*VERDICT:']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-crlf-block',
+    claim: 'a diff block with CRLF line ends is read',
+    edits: [['bench/setb/rubric.ts', '```diff[ \\t]*\\r?\\n', '```diff\\n']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-quote-counted',
+    claim: 'a block that quotes the original diff is not an edit',
+    edits: [['bench/setb/rubric.ts', 'quotesOriginal(body, original) ? n : n +', 'false ? n : n +']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-quote-crlf',
+    claim: 'a CRLF quote of the original diff is not an edit',
+    edits: [['bench/setb/rubric.ts', 'const LINES = /\\r?\\n/;', 'const LINES = /\\n/;']],
+    tests: [SETB],
+  },
+  {
+    name: 'task-test-file-owned-allowed',
+    claim: 'a task whose test file a wave 2 ticket owns is refused',
+    edits: [['bench/setb/task.ts', '[...files, ...testCommand]', 'files']],
+    tests: [SETB],
+  },
+  {
+    name: 'fetch-diff-at-pr-head',
+    claim: 'the diff is read at the ready head, not at the PR head now',
+    edits: [
+      ['bench/setb/fetch.ts', 'hub.diff(repo, pull.base.sha, ready)', 'hub.diff(repo, pull.base.sha, pull.head.sha)'],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'fetch-pr-labels-not-secret',
+    claim: 'the PR own labels are checked for a leak',
+    edits: [['bench/setb/fetch.ts', '...pull.labels.map((l) => l.name),', '']],
+    tests: [SETB],
+  },
+  {
+    name: 'fetch-ticket-id-not-secret',
+    claim: 'the PR own ticket id is checked for a leak',
+    edits: [['bench/setb/fetch.ts', '...(pull.head.ref.match(/t-[0-9a-f]{8}/g) ?? []),', '']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-title-prefixed',
+    claim: 'a seeded PR carries the task issue title as tasks.json has it',
+    edits: [
+      [
+        'bench/setb/cli.ts',
+        'issue: { title: task.title, body: task.body },',
+        "issue: { title: '#7 ' + task.title, body: task.body },",
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-ci-note-invented',
+    claim: 'a seeded PR carries a CI note in the format ciFrom writes',
+    edits: [['bench/setb/cli.ts', 'ci: ciFrom(sha, runs),', "ci: { sha, state: 'green', note: 'all checks passed' },"]],
+    tests: [SETB],
+  },
+  {
+    name: 'cli-label-unfrozen',
+    claim: 'label reads the frozen task list',
+    edits: [
+      [
+        'bench/setb/cli.ts',
+        'const list = loadFrozen(values.dir);\n    const entries',
+        'const list = { tasks: [] };\n    const entries',
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'cli-judge-unfrozen',
+    claim: 'judge reads the frozen task list',
+    edits: [
+      [
+        'bench/setb/cli.ts',
+        'const list = loadFrozen(values.dir);\n    const key',
+        'const list = { tasks: [] };\n    const key',
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'report-setb-columns-always',
+    claim: 'Set A output carries no Set B column',
+    edits: [['bench/report.ts', 'hasSetB(rows) ? columns : columns.filter((c) => c.setB !== true)', 'columns']],
+    tests: [REPORT],
+  },
+  {
+    name: 'report-baseline-line-always',
+    claim: 'Set A output carries no Set B baseline line',
+    edits: [['bench/report.ts', '...(hasSetB(live(all))', '...(true']],
     tests: [REPORT],
   },
 ];

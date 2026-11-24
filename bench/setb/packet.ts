@@ -16,16 +16,20 @@ export interface Packet {
 }
 
 const LEAKS: ReadonlyArray<readonly [string, RegExp]> = [
-  ['a branch name', /\baw\/[\w.-]+\/[\w.-]+/],
-  ['an agent-works label', /agent-works:[\w-]+/],
-  ['a bench ticket id', /bench\/t-[0-9a-f]{8}/],
   ['a co-author trailer', /Co-Authored-By:/i],
+  ['a session trailer', /Claude-Session:/i],
+  ['the agent mail address', /noreply@anthropic\.com/i],
   ['a generated-by line', /Generated with \[?Claude Code/i],
 ];
 
-export const armLeaks = (text: string, extra: readonly string[] = []): string[] => [
+export interface Unreadable {
+  readonly label: string;
+  readonly reason: string;
+}
+
+export const armLeaks = (text: string, secrets: readonly string[] = []): string[] => [
   ...LEAKS.filter(([, re]) => re.test(text)).map(([name]) => name),
-  ...extra.filter((s) => s !== '' && text.includes(s)).map((s) => `the text ${JSON.stringify(s)}`),
+  ...secrets.filter((s) => s !== '' && text.includes(s)).map((s) => `the text ${JSON.stringify(s)}`),
 ];
 
 export const buildPacket = (p: Packet, secrets: readonly string[] = []): Packet => {
@@ -33,6 +37,17 @@ export const buildPacket = (p: Packet, secrets: readonly string[] = []): Packet 
   if (seen.length > 0) throw new TaskRefused(`${p.label}: the packet would show the arm through ${seen.join(', ')}`);
   return p;
 };
+
+export const packetOrUnreadable = (p: Packet, secrets: readonly string[] = []): Packet | Unreadable => {
+  try {
+    return buildPacket(p, secrets);
+  } catch (error) {
+    if (!(error instanceof TaskRefused)) throw error;
+    return { label: p.label, reason: `unreadable by leak: ${error.message}` };
+  }
+};
+
+export const isUnreadable = (x: Packet | Unreadable): x is Unreadable => 'reason' in x;
 
 export const renderPrompt = (p: Packet): string =>
   [

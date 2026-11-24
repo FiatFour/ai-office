@@ -33,13 +33,13 @@
       "check": "reproduced"
     },
     {
-      "id": "contents-over-1mb",
-      "issue": 16,
-      "item": "M5",
-      "title": "GitHub contents API returns empty content for files over 1 MB",
-      "body": "The GitHub contents API returns empty content for files over 1 MB, so the reviewer sees an empty file instead of a 'not shown' marker. Make files() report such a file as not shown, with a test on the fake host.",
-      "files": ["server/githost/github.ts"],
-      "testCommand": ["pnpm", "vitest", "run", "server/test/githost.contract.test.ts"],
+      "id": "testside-bare-literals",
+      "issue": 20,
+      "item": "1",
+      "title": "runner config files named by a bare path are not test-side",
+      "body": "bench/SEALING.md says every file a runner config imports or names is test-side, but LITERAL in bench/testside.ts only matches strings that start with `./` or `../`. A config with `setupFiles: ['vitest.setup.ts', 'src/setup-env.ts']` names files the grader does not protect. Resolve bare relative-looking literals against the config directory and treat them as test-side, with a test.",
+      "files": ["bench/testside.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "bench/test/closure.test.ts"],
       "check": "read"
     },
     {

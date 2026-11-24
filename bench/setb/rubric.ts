@@ -23,21 +23,28 @@ export interface Judgement {
   readonly editLines: number;
 }
 
-const VERDICT_LINE = /^[ \t]*VERDICT:[ \t]*(MERGE AS IS|MERGE AFTER EDITS|REJECT)[ \t]*$/gm;
-const DIFF_BLOCK = /```diff\n([\s\S]*?)```/g;
+const VERDICT_LINE = /^[ \t]*\*{0,2}[ \t]*VERDICT:[ \t*]*(MERGE AS IS|MERGE AFTER EDITS|REJECT)[ \t*]*\r?$/gm;
+const DIFF_BLOCK = /```diff[ \t]*\r?\n([\s\S]*?)```/g;
+const LINES = /\r?\n/;
+const isChange = (l: string): boolean => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l);
 
-export const editLinesOf = (reply: string): number =>
-  [...reply.matchAll(DIFF_BLOCK)].reduce(
-    (n, block) => n + (block[1] ?? '').split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l)).length,
-    0,
-  );
+const quotesOriginal = (block: string, original: string): boolean => {
+  const text = block.split(LINES).join('\n').trim();
+  return text !== '' && original.split(LINES).join('\n').includes(text);
+};
 
-export const parseVerdict = (reply: string): Judgement => {
+export const editLinesOf = (reply: string, original = ''): number =>
+  [...reply.matchAll(DIFF_BLOCK)].reduce((n, block) => {
+    const body = block[1] ?? '';
+    return quotesOriginal(body, original) ? n : n + body.split(LINES).filter(isChange).length;
+  }, 0);
+
+export const parseVerdict = (reply: string, original = ''): Judgement => {
   const found = [...reply.matchAll(VERDICT_LINE)].map((m) => m[1] as Verdict);
   if (found.length === 0) throw new JudgeUnparseable('the reply has no VERDICT line');
   const verdict = found.reduce((a, b) => (STRICTNESS[b] > STRICTNESS[a] ? b : a));
   if (verdict !== 'MERGE AFTER EDITS') return { verdict, editLines: 0 };
-  const editLines = editLinesOf(reply);
+  const editLines = editLinesOf(reply, original);
   if (editLines === 0) throw new JudgeUnparseable('MERGE AFTER EDITS came with no edit diff');
   return { verdict, editLines };
 };

@@ -5,17 +5,24 @@ import { type Row, TaskRefused, type Tokens, totalTokens } from '../model.ts';
 import { workflowPaths } from './guard.ts';
 import type { Judged } from './judge.ts';
 import type { Entry } from './labels.ts';
-import type { Ci } from './packet.ts';
+import type { Ci, Unreadable } from './packet.ts';
 
 export interface CheckRun {
+  readonly head_sha: string;
   readonly status: string;
   readonly conclusion: string | null;
 }
 
 const BAD = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'stale', 'startup_failure']);
 
-export const ciFrom = (sha: string, runs: readonly CheckRun[]): Ci => {
-  if (runs.length === 0) return { sha, state: 'none', note: 'no check runs on this head' };
+const shaOfRuns = (asked: string, runs: readonly CheckRun[]): string => {
+  const shas = new Set(runs.map((r) => r.head_sha));
+  return shas.size === 1 ? ([...shas][0] ?? asked) : 'mixed';
+};
+
+export const ciFrom = (asked: string, runs: readonly CheckRun[]): Ci => {
+  if (runs.length === 0) return { sha: asked, state: 'none', note: 'no check runs on this head' };
+  const sha = shaOfRuns(asked, runs);
   if (runs.some((r) => r.status !== 'completed'))
     return { sha, state: 'pending', note: 'some checks have not finished' };
   const bad = runs.filter((r) => r.conclusion === null || BAD.has(r.conclusion)).length;
@@ -29,7 +36,28 @@ export const ghReadCi = async (repo: string, sha: string): Promise<Ci> => {
     timeoutMs: 60_000,
   });
   if (ran.code !== 0) throw new TaskRefused(`gh could not read the checks of ${sha}: ${ran.err.trim().slice(-200)}`);
-  return ciFrom(sha, (JSON.parse(ran.out) as { check_runs: CheckRun[] }).check_runs);
+  const body = JSON.parse(ran.out) as { total_count: number; check_runs: CheckRun[] };
+  if (body.total_count > body.check_runs.length)
+    throw new TaskRefused(`${sha} has ${body.total_count} check runs, only ${body.check_runs.length} were read`);
+  return ciFrom(sha, body.check_runs);
+};
+
+export interface PullFile {
+  readonly filename: string;
+  readonly previous_filename?: string;
+}
+
+export const PAGE = 100;
+const MAX_PAGES = 30;
+
+export const readPaths = async (page: (n: number) => Promise<readonly PullFile[]>): Promise<string[]> => {
+  const paths: string[] = [];
+  for (let n = 1; n <= MAX_PAGES; n += 1) {
+    const files = await page(n);
+    for (const f of files) paths.push(f.filename, ...(f.previous_filename === undefined ? [] : [f.previous_filename]));
+    if (files.length < PAGE) return paths;
+  }
+  throw new TaskRefused(`the PR lists more than ${MAX_PAGES * PAGE} files, too many to check`);
 };
 
 export interface WindowCalibration {
@@ -50,7 +78,7 @@ export const inferWindows = (tokens: Tokens | null, calibration: WindowCalibrati
 
 export interface Grading {
   readonly entry: Entry & { readonly arm: 'factory' | 'baseline' };
-  readonly judged: Judged;
+  readonly judged: Judged | Unreadable;
   readonly pull: Pick<HostPull, 'head'>;
   readonly ci: Ci;
   readonly paths: readonly string[];
@@ -64,14 +92,16 @@ export interface Grading {
 export const failures = (g: Grading): string[] => {
   const ready = g.entry.readyHeadSha;
   const out: string[] = [];
+  const read = 'reason' in g.judged ? null : g.judged;
   const flows = workflowPaths(g.paths);
   if (flows.length > 0) out.push(`touches .github (${flows.join(', ')})`);
   if (g.pull.head.sha !== ready) out.push(`head moved from ${ready.slice(0, 7)} to ${g.pull.head.sha.slice(0, 7)}`);
-  if (g.judged.headSha !== ready) out.push(`judged ${g.judged.headSha.slice(0, 7)}, not the ready head`);
+  if (read === null) out.push(`the judge could not read it (${(g.judged as Unreadable).reason})`);
+  else if (read.headSha !== ready) out.push(`judged ${read.headSha.slice(0, 7)}, not the ready head`);
   if (g.ci.sha !== ready) out.push(`CI read at ${g.ci.sha.slice(0, 7)}, not the ready head`);
   if (g.ci.state !== 'green') out.push(`CI ${g.ci.state}: ${g.ci.note}`);
-  if (g.judged.verdict === 'MERGE AFTER EDITS') out.push(`judge wants edits (${g.judged.editLines} lines)`);
-  if (g.judged.verdict === 'REJECT') out.push('judge rejects');
+  if (read?.verdict === 'MERGE AFTER EDITS') out.push(`judge wants edits (${read.editLines} lines)`);
+  if (read?.verdict === 'REJECT') out.push('judge rejects');
   return out;
 };
 
@@ -92,8 +122,8 @@ export const gradeSetB = (g: Grading): Row => {
     flag: null,
     quotaWindows: null,
     humanMinutes: g.operatorMinutes,
-    editLines: g.judged.verdict === 'MERGE AFTER EDITS' ? g.judged.editLines : 0,
-    judgeMinutes: g.judged.judgeMinutes,
+    editLines: 'reason' in g.judged || g.judged.verdict !== 'MERGE AFTER EDITS' ? 0 : g.judged.editLines,
+    judgeMinutes: 'reason' in g.judged ? null : g.judged.judgeMinutes,
     rootMinutes: g.rootMinutes,
     inferredWindows: inferWindows(g.tokens, g.calibration),
     note:

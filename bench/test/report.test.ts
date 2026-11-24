@@ -112,7 +112,6 @@ describe('thresholds', () => {
     expect(byName(rows)).toEqual({
       'Set A hidden-test pass rate': 'UNMEASURED',
       'Set B merge rate': 'UNMEASURED',
-      'Set B baseline pass rate': 'UNMEASURED',
       Cost: 'UNMEASURED',
       'Human minutes': 'UNMEASURED',
     });

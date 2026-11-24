@@ -1,16 +1,20 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { GitHost } from '../../../server/githost/host.ts';
+import { GITHUB_WRITES } from '../../../server/githost/github.ts';
+import { writeProblem } from '../../../server/githost/host.ts';
 import { tempDir } from '../../../server/test/helpers.ts';
 import { TaskRefused } from '../../model.ts';
-import { guardWorkflows, touchesWorkflows } from '../guard.ts';
+import { type Seed, seededPackets } from '../cli.ts';
+import { fetchPacket, type Hub, secretsOf } from '../fetch.ts';
+import { touchesWorkflows } from '../guard.ts';
 import { CALIBRATION_SIZE, claudeArgs, judgeOne, runJudge } from '../judge.ts';
 import { assignLabels, type Entry } from '../labels.ts';
-import { ciFrom, type Grading, gradeSetB, inferWindows, readWindow } from '../outcome.ts';
+import { ciFrom, type Grading, gradeSetB, inferWindows, PAGE, readPaths, readWindow } from '../outcome.ts';
 import { ownerOf } from '../owned.ts';
-import { armLeaks, buildPacket, type Packet, renderPrompt } from '../packet.ts';
+import { armLeaks, buildPacket, isUnreadable, type Packet, packetOrUnreadable, renderPrompt } from '../packet.ts';
 import { JudgeUnparseable, parseVerdict } from '../rubric.ts';
 import { loadFrozen, parseTaskList, SET_B_SIZE, SHA_FILE, shaOf, TASKS_FILE } from '../task.ts';
 
@@ -60,6 +64,38 @@ describe('the frozen task list', () => {
     );
   });
 
+  it('refuses a task whose test file a wave 2 ticket owns, even when its source files are free', () => {
+    const own = (testCommand: string[]) => mutate((o) => (o.tasks[0] = { ...o.tasks[0], testCommand }));
+    expect(own(['pnpm', 'vitest', 'run', 'server/test/githost.contract.test.ts'])).toThrow(/owned by P3-5/);
+    expect(own(['pnpm', 'vitest', 'run', 'scripts/check-sources.test.ts'])).not.toThrow();
+  });
+
+  it('holds no task whose source or test file belongs to another ticket', () => {
+    for (const t of loadFrozen(SETB).tasks)
+      for (const f of [...t.files, ...t.testCommand]) expect(ownerOf(f), `${t.id}: ${f}`).toBeNull();
+  });
+
+  it('runs the CLI check, label and judge through the frozen-list check', () => {
+    const dir = tempDir('setb-cli');
+    writeFileSync(join(dir, TASKS_FILE), readFileSync(join(SETB, TASKS_FILE)));
+    writeFileSync(join(dir, SHA_FILE), `${'0'.repeat(64)}\n`);
+    writeFileSync(join(dir, 'entries.json'), '[]');
+    const run = (...args: string[]) =>
+      spawnSync(process.execPath, [join(SETB, 'cli.ts'), ...args, '--dir', dir], {
+        encoding: 'utf8',
+        env: { ...process.env, AW_BENCH_LOGIN_CONFIRMED: '1' },
+      });
+    for (const args of [
+      ['check'],
+      ['label', '--entries', join(dir, 'entries.json'), '--key', join(dir, 'k.json')],
+      ['judge', '--key', join(dir, 'k.json'), '--out', join(dir, 'o.json')],
+    ]) {
+      const ran = run(...args);
+      expect(ran.stderr, args[0]).toMatch(/changed after it was frozen/);
+      expect(ran.status, args[0]).toBe(3);
+    }
+  });
+
   it('keeps ownership patterns exact', () => {
     expect(ownerOf('bench/setb/cli.ts')).toBe('P3-1');
     expect(ownerOf('./server/githost/host.ts')).toBe('P3-5');
@@ -83,29 +119,28 @@ describe('the .github guard', () => {
     expect(touchesWorkflows(p)).toBe(false),
   );
 
-  it('refuses a push that touches .github before the host sees it, and passes any other', async () => {
-    const pushed: string[][] = [];
-    const host = {
-      id: 'github',
-      pushFiles: async (_r: string, spec: { files: readonly { path: string }[] }) => {
-        pushed.push(spec.files.map((f) => f.path));
-        return 'sha';
-      },
-    } as unknown as GitHost;
-    const guarded = guardWorkflows(host);
-    const spec = (...paths: string[]) => ({
-      branch: 'b',
-      base: 'main',
-      message: 'm',
-      files: paths.map((path) => ({ path, content: 'x' })),
+  it.each([
+    'x/../../.github/y',
+    '../.github/x',
+    'a/../../../.github/workflows/ci.yml',
+    'CODEOWNERS',
+    'docs/CODEOWNERS',
+    './docs/codeowners',
+  ])('refuses %s', (p) => expect(touchesWorkflows(p)).toBe(true));
+  it.each(['src/CODEOWNERS', 'docs/CODEOWNERS.md', 'a/../src/x.ts'])('allows %s', (p) =>
+    expect(touchesWorkflows(p)).toBe(false),
+  );
+
+  it('is backed by the host choke point: a tree write into .github, in any case, is refused before it is sent', () => {
+    const scope = { home: '/repos/a/b', base: 'main' };
+    const tree = (path: string) => ({
+      method: 'POST' as const,
+      path: '/repos/a/b/git/trees',
+      body: { base_tree: 't', tree: [{ path, mode: '100644', type: 'blob', content: 'x' }] },
     });
-    await expect(guarded.pushFiles('r', spec('src/a.ts', '.github/workflows/x.yml'))).rejects.toThrow(
-      /refused before push/,
-    );
-    expect(pushed).toEqual([]);
-    await guarded.pushFiles('r', spec('src/a.ts'));
-    expect(pushed).toEqual([['src/a.ts']]);
-    expect(guarded.id).toBe('github');
+    for (const path of ['.github/workflows/x.yml', '.GitHub/workflows/x.yml', 'a/.github/x'])
+      expect(writeProblem(GITHUB_WRITES, tree(path), scope), path).toMatch(/hidden/);
+    expect(writeProblem(GITHUB_WRITES, tree('src/a.ts'), scope)).toBeNull();
   });
 });
 
@@ -152,6 +187,24 @@ describe('the rubric', () => {
     );
   });
 
+  it('reads a bold verdict and a reply with CRLF line ends', () => {
+    expect(parseVerdict('ok\n**VERDICT: REJECT**').verdict).toBe('REJECT');
+    expect(parseVerdict('ok\n**VERDICT:** MERGE AS IS').verdict).toBe('MERGE AS IS');
+    expect(parseVerdict('ok\r\nVERDICT: REJECT\r\n').verdict).toBe('REJECT');
+    const crlf = 'e:\r\n```diff\r\n--- a/x\r\n+++ b/x\r\n-old\r\n+new\r\n```\r\nVERDICT: MERGE AFTER EDITS\r\n';
+    expect(parseVerdict(crlf)).toEqual({ verdict: 'MERGE AFTER EDITS', editLines: 2 });
+  });
+
+  it('does not count a block that quotes the original diff as edit lines', () => {
+    const original = 'diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new\n';
+    const quote = '```diff\n-old\n+new\n```';
+    const edit = '```diff\n-new\n+newer\n+more\n```';
+    expect(parseVerdict(`${quote}\n${edit}\nVERDICT: MERGE AFTER EDITS`, original).editLines).toBe(3);
+    expect(() => parseVerdict(`${quote}\nVERDICT: MERGE AFTER EDITS`, original)).toThrow(/no edit diff/);
+    const crlfQuote = '```diff\r\n-old\r\n+new\r\n```';
+    expect(() => parseVerdict(`${crlfQuote}\nVERDICT: MERGE AFTER EDITS`, original)).toThrow(/no edit diff/);
+  });
+
   it('does not read a quoted verdict inside prose', () => {
     expect(() => parseVerdict('I would say VERDICT: MERGE AS IS')).toThrow(JudgeUnparseable);
   });
@@ -183,17 +236,33 @@ describe('the judge packet', () => {
     expect(text).not.toMatch(/factory|baseline/i);
   });
 
-  it('refuses a packet whose diff names the branch, a label, a ticket id or an extra secret', () => {
-    expect(armLeaks('see aw/bench/t-0123abcd-r1')).toContain('a branch name');
-    expect(armLeaks('agent-works:fx')).toContain('an agent-works label');
-    expect(armLeaks('bench/t-0123abcd')).toContain('a bench ticket id');
+  it('refuses a diff that holds a trailer or a session line, and an extra secret', () => {
     expect(armLeaks('Co-Authored-By: x')).toContain('a co-author trailer');
+    expect(armLeaks('Claude-Session: https://x')).toContain('a session trailer');
+    expect(armLeaks('a <noreply@anthropic.com>')).toContain('the agent mail address');
+    expect(armLeaks('Generated with [Claude Code](x)')).toContain('a generated-by line');
     expect(armLeaks('plain diff +fix')).toEqual([]);
-    expect(() => buildPacket(packet('pr-1', { diff: '+ // aw/f1/t1' }))).toThrow(/show the arm/);
+    expect(() => buildPacket(packet('pr-1', { diff: '+ // aw/f1/t1' }), ['aw/f1/t1'])).toThrow(/show the arm/);
     expect(() => buildPacket(packet('pr-1', { issue: { title: 't', body: 'see PR #4242' } }), ['#4242'])).toThrow(
       /show the arm/,
     );
     expect(buildPacket(packet('pr-1'))).toMatchObject({ label: 'pr-1' });
+  });
+
+  it('judges an honest diff whose tests only look like branch names, and refuses the PR own branch', () => {
+    const honest =
+      "+    expect(namesOf('bench/t-0a1b2c3d-r1000').work).toBe('aw/bench/t-0a1b2c3d-r1000');\n+ 'aw/alpha/t1'";
+    expect(buildPacket(packet('pr-1', { diff: honest }), ['aw/f9/t-99999999-r1', 't-99999999'])).toMatchObject({
+      label: 'pr-1',
+    });
+    expect(() => buildPacket(packet('pr-1', { diff: honest }), ['aw/alpha/t1'])).toThrow(/aw\/alpha\/t1/);
+  });
+
+  it('turns a leak into an unreadable record for that packet alone', () => {
+    const made = packetOrUnreadable(packet('pr-9', { diff: '+ aw/f1/t1' }), ['aw/f1/t1']);
+    expect(isUnreadable(made)).toBe(true);
+    expect(made).toMatchObject({ label: 'pr-9', reason: expect.stringMatching(/^unreadable by leak/) });
+    expect(isUnreadable(packetOrUnreadable(packet('pr-8'), ['aw/f1/t1']))).toBe(false);
   });
 });
 
@@ -219,14 +288,29 @@ describe('judge calibration', () => {
 
   it.each(['seed-one', 'seed-two'])('voids the whole run when the judge passes the seeded PR %s', async (hit) => {
     const run = await runJudge(model({ [hit]: 'MERGE AS IS', 'real-one': 'MERGE AS IS' }), real, seeded);
-    expect(run.voided).toMatch(/passed 1 seeded-bad/);
+    expect(run.voided).toMatch(/did not reject 1 seeded-bad/);
     expect(run.judged).toEqual([]);
   });
 
-  it('does not void on MERGE AFTER EDITS for a seeded PR, only on MERGE AS IS', async () => {
+  it('voids on MERGE AFTER EDITS for a seeded PR too, since no machine decides whether the edit repairs it', async () => {
     const edit = (p: string) =>
       p.includes('seed-one') ? '```diff\n-a\n+b\n```\nVERDICT: MERGE AFTER EDITS' : 'VERDICT: REJECT';
-    expect((await runJudge(async (p) => edit(p), real, seeded)).voided).toBeNull();
+    const run = await runJudge(async (p) => edit(p), real, seeded);
+    expect(run.voided).toMatch(/pr-bbbb0001 \(MERGE AFTER EDITS\)/);
+  });
+
+  it('carries the unreadable real packets through the run and surfaces them', async () => {
+    const lost = [{ label: 'pr-aaaa0003', reason: 'unreadable by leak: x' }];
+    const run = await runJudge(model({}), real, seeded, Date, lost);
+    expect(run.unreadable).toEqual(lost);
+    expect(run.judged).toHaveLength(2);
+    const dup = [{ label: 'pr-aaaa0001', reason: 'x' }];
+    await expect(runJudge(model({}), real, seeded, Date, dup)).rejects.toThrow(/share a label/);
+  });
+
+  it('passes the packet diff to the verdict reader so a quoted diff is not an edit', async () => {
+    const reply = '```diff\n+real-one\n```\nVERDICT: MERGE AFTER EDITS';
+    await expect(judgeOne(async () => reply, packet('pr-q', { diff: '+real-one' }))).rejects.toThrow(/no edit diff/);
   });
 
   it('voids when a seeded reply cannot be read, and propagates an unreadable real one', async () => {
@@ -269,10 +353,54 @@ describe('judge calibration', () => {
     expect(args).toContain('--no-session-persistence');
   });
 
-  it('ships two seeded-bad PRs whose diffs name no arm', () => {
-    const seeds = JSON.parse(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')) as { diff: string }[];
+  it('ships two seeded-bad PRs that read like real ones: the task issue text, a ciFrom note, a diff git applies', () => {
+    const seeds = JSON.parse(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')) as Seed[];
     expect(seeds).toHaveLength(CALIBRATION_SIZE);
-    for (const s of seeds) expect(armLeaks(s.diff)).toEqual([]);
+    const list = loadFrozen(SETB);
+    const key = assignLabels(
+      seeds.map((s, i) => ({ task: s.task, arm: 'seeded' as const, pr: -(i + 1), readyHeadSha: 'c'.repeat(40) })),
+    );
+    const made = seededPackets(seeds, key, list);
+    for (const [i, p] of made.entries()) {
+      const seed = seeds.find((s) => key.find((k) => k.label === p.label)?.entry.task === s.task) as Seed;
+      const task = list.tasks.find((t) => t.id === seed.task);
+      expect(p.issue).toEqual({ title: task?.title, body: task?.body });
+      expect(p.ci).toEqual(
+        ciFrom(
+          'c'.repeat(40),
+          Array.from({ length: seed.checks }, () => ({
+            head_sha: 'c'.repeat(40),
+            status: 'completed',
+            conclusion: 'success',
+          })),
+        ),
+      );
+      expect(p.ci.note).toMatch(/^\d+ checks passed or were skipped$/);
+      expect(p.issue.title, String(i)).not.toMatch(/^#\d/);
+      expect(armLeaks(p.diff)).toEqual([]);
+    }
+  });
+
+  it('ships seeded diffs that git apply --check accepts on a checkout of the frozen base', () => {
+    const seeds = JSON.parse(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')) as Seed[];
+    const frozen = loadFrozen(SETB).frozenAtSha;
+    const hasBase = spawnSync('git', ['cat-file', '-e', `${frozen}^{commit}`], { cwd: ROOT }).status === 0;
+    for (const seed of seeds) {
+      const dir = tempDir('setb-seed');
+      const files = [...seed.diff.matchAll(/^diff --git a\/(\S+) b\//gm)].map((m) => m[1] as string);
+      expect(files.length).toBeGreaterThan(0);
+      for (const f of files) {
+        mkdirSync(dirname(join(dir, f)), { recursive: true });
+        writeFileSync(
+          join(dir, f),
+          hasBase ? execFileSync('git', ['show', `${frozen}:${f}`], { cwd: ROOT }) : readFileSync(join(ROOT, f)),
+        );
+      }
+      writeFileSync(join(dir, 'seed.patch'), seed.diff);
+      const ran = spawnSync('git', ['apply', '--check', 'seed.patch'], { cwd: dir, encoding: 'utf8' });
+      expect(ran.stderr, seed.task).toBe('');
+      expect(ran.status, seed.task).toBe(0);
+    }
   });
 });
 
@@ -335,7 +463,7 @@ describe('Set B outcome', () => {
   });
 
   it('reads check runs: skipped alone is not green, pending is not green, any bad conclusion is red', () => {
-    const r = (status: string, conclusion: string | null) => ({ status, conclusion });
+    const r = (status: string, conclusion: string | null, head_sha = READY) => ({ head_sha, status, conclusion });
     expect(ciFrom(READY, []).state).toBe('none');
     expect(ciFrom(READY, [r('completed', 'success'), r('completed', 'skipped')]).state).toBe('green');
     expect(ciFrom(READY, [r('completed', 'skipped')]).state).toBe('none');
@@ -343,6 +471,35 @@ describe('Set B outcome', () => {
     for (const c of ['failure', 'cancelled', 'timed_out', 'action_required'])
       expect(ciFrom(READY, [r('completed', 'success'), r('completed', c)]).state).toBe('red');
     expect(ciFrom(READY, [r('completed', null)]).state).toBe('red');
+  });
+
+  it('takes the CI sha from the runs, not from the sha it asked about', () => {
+    const r = (head_sha: string) => ({ head_sha, status: 'completed', conclusion: 'success' });
+    expect(ciFrom(READY, [r('b'.repeat(40))]).sha).toBe('b'.repeat(40));
+    expect(ciFrom(READY, [r(READY), r('b'.repeat(40))]).sha).toBe('mixed');
+    const stale = ciFrom(READY, [r('b'.repeat(40))]);
+    const row = gradeSetB(grading({ ci: stale }));
+    expect(row.outcome).toBe('fail');
+    expect(row.note).toMatch(/CI read at bbbbbbb/);
+  });
+
+  it('grades a PR the judge could not read as a fail and says why', () => {
+    const row = gradeSetB(grading({ judged: { label: 'pr-1', reason: 'unreadable by leak: x' } }));
+    expect(row).toMatchObject({ outcome: 'fail', editLines: 0, judgeMinutes: null });
+    expect(row.note).toMatch(/could not read it \(unreadable by leak/);
+  });
+
+  it('reads every page of the PR file list and both names of a rename', async () => {
+    const page = (n: number) =>
+      Array.from({ length: n === 1 ? PAGE : 1 }, (_, i) => ({
+        filename: n === 1 ? `src/f${i}.ts` : '.github/workflows/late.yml',
+      }));
+    const paths = await readPaths(async (n) => page(n));
+    expect(paths).toHaveLength(PAGE + 1);
+    expect(gradeSetB(grading({ paths })).note).toMatch(/touches \.github/);
+    expect(
+      await readPaths(async () => [{ filename: 'src/new.ts', previous_filename: '.github/workflows/old.yml' }]),
+    ).toEqual(['src/new.ts', '.github/workflows/old.yml']);
   });
 
   it('infers windows only from a measured calibration window', () => {
@@ -354,5 +511,43 @@ describe('Set B outcome', () => {
     const dir = tempDir('setb-window');
     writeFileSync(join(dir, 'w.json'), '{"tokensPerWindow": 0}');
     expect(() => readWindow(join(dir, 'w.json'))).toThrow(/positive/);
+  });
+});
+
+describe('the packet is built from the PR at the ready head and the frozen task', () => {
+  const READY = 'a'.repeat(40);
+  const calls: string[] = [];
+  const hub = (over: Partial<Hub> = {}): Hub => ({
+    pull: async () => ({
+      head: { sha: 'f'.repeat(40), ref: 'aw/f1/t-0123abcd-r1' },
+      base: { sha: 'e'.repeat(40) },
+      labels: [{ name: 'agent-works:f1' }],
+    }),
+    diff: async (_r, base, head) => {
+      calls.push(`${base}...${head}`);
+      return 'diff --git a/x b/x\n+fix';
+    },
+    ci: async (_r, sha) => ({ sha, state: 'green', note: '3 checks passed or were skipped' }),
+    ...over,
+  });
+  const task = loadFrozen(SETB).tasks[0] as ReturnType<typeof loadFrozen>['tasks'][number];
+  const entry = { task: task.id, arm: 'factory' as const, pr: 5, readyHeadSha: READY };
+
+  it('asks for the diff at the ready head even when the PR head has moved, and uses the task text', async () => {
+    const made = await fetchPacket(hub(), 'FiatFour/ai-office', entry, 'pr-1', task);
+    expect(calls).toEqual([`${'e'.repeat(40)}...${READY}`]);
+    expect(made).toMatchObject({ headSha: READY, issue: { title: task.title, body: task.body }, ci: { sha: READY } });
+  });
+
+  it('takes the secrets from the PR itself: its branch, its ticket id and its labels', async () => {
+    const pull = await hub().pull('r', 5);
+    expect(secretsOf(pull)).toEqual(['aw/f1/t-0123abcd-r1', 't-0123abcd', 'agent-works:f1']);
+    const leaky = hub({ diff: async () => 'diff --git a/x b/x\n+ // aw/f1/t-0123abcd-r1' });
+    expect(isUnreadable(await fetchPacket(leaky, 'r', entry, 'pr-1', task))).toBe(true);
+  });
+
+  it('keeps a CI result of another head, so grading can see it', async () => {
+    const stale = hub({ ci: async () => ({ sha: 'b'.repeat(40), state: 'green' as const, note: 'n' }) });
+    expect(await fetchPacket(stale, 'r', entry, 'pr-1', task)).toMatchObject({ ci: { sha: 'b'.repeat(40) } });
   });
 });

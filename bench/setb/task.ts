@@ -53,11 +53,11 @@ const parseTask = (raw: unknown): SetBTask => {
   if (typeof issue !== 'number' || !ISSUES.has(issue))
     throw new TaskRefused(`${where}: issue must be one of #7 to #24, #29, #30`);
   const files = strings(o, 'files', where);
-  for (const file of files) {
+  const testCommand = strings(o, 'testCommand', where);
+  for (const file of [...files, ...testCommand]) {
     const owner = ownerOf(file);
     if (owner !== null) throw new TaskRefused(`${where}: ${file} is owned by ${owner}, a wave 2 ticket`);
   }
-  const testCommand = strings(o, 'testCommand', where);
   if (DOCKER.test(testCommand.join(' '))) throw new TaskRefused(`${where}: the test command needs a container engine`);
   const check = CHECKS.find((c) => c === o.check);
   if (check === undefined) throw new TaskRefused(`${where}: check must be ${CHECKS.join(' or ')}`);

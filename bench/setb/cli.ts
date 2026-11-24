@@ -2,42 +2,61 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { runBinary } from '../../server/sandbox/engine.ts';
 import { ghReadPull } from '../merge-state.ts';
 import { TaskRefused } from '../model.ts';
+import { fetchPacket, ghHub, ghPullFiles, type Hub } from './fetch.ts';
 import { claudeModel, type Judged, runJudge } from './judge.ts';
 import { assignLabels, type Entry, type Sealed, sealedEntry } from './labels.ts';
-import { ghReadCi, gradeSetB, readWindow } from './outcome.ts';
-import { buildPacket, type Packet } from './packet.ts';
-import { loadFrozen, parseTaskList, SHA_FILE, shaOf, TASKS_FILE } from './task.ts';
+import { ciFrom, gradeSetB, readWindow } from './outcome.ts';
+import { buildPacket, isUnreadable, type Packet, type Unreadable } from './packet.ts';
+import { loadFrozen, parseTaskList, SHA_FILE, shaOf, TASKS_FILE, type TaskList } from './task.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = <T>(file: string): T => JSON.parse(readFileSync(file, 'utf8')) as T;
 
-interface Seed {
+export interface Seed {
   readonly task: string;
-  readonly issue: Packet['issue'];
+  readonly why: string;
   readonly diff: string;
-  readonly ci: Pick<Packet['ci'], 'state' | 'note'>;
+  readonly checks: number;
 }
 
-export const seededPackets = (seeds: readonly Seed[], key: readonly Sealed[]): Packet[] =>
+export const seededPackets = (seeds: readonly Seed[], key: readonly Sealed[], list: TaskList): Packet[] =>
   seeds.map((seed) => {
     const sealed = key.find((s) => s.entry.arm === 'seeded' && s.entry.task === seed.task);
     if (sealed === undefined) throw new TaskRefused(`no label for the seeded PR on ${seed.task}`);
+    const task = list.tasks.find((t) => t.id === seed.task);
+    if (task === undefined) throw new TaskRefused(`the seeded PR names ${seed.task}, which is not a Set B task`);
+    const sha = sealed.entry.readyHeadSha;
+    const runs = Array.from({ length: seed.checks }, () => ({
+      head_sha: sha,
+      status: 'completed',
+      conclusion: 'success',
+    }));
     return buildPacket({
       label: sealed.label,
-      headSha: sealed.entry.readyHeadSha,
-      issue: seed.issue,
+      headSha: sha,
+      issue: { title: task.title, body: task.body },
       diff: seed.diff,
-      ci: { sha: sealed.entry.readyHeadSha, ...seed.ci },
+      ci: ciFrom(sha, runs),
     });
   });
 
-const ghJson = async <T>(path: string): Promise<T> => {
-  const ran = await runBinary('gh', ['api', '-X', 'GET', path], { timeoutMs: 60_000 });
-  if (ran.code !== 0) throw new TaskRefused(`gh could not read ${path}: ${ran.err.trim().slice(-200)}`);
-  return JSON.parse(ran.out) as T;
+export const realPackets = async (
+  hub: Hub,
+  list: TaskList,
+  key: readonly Sealed[],
+): Promise<{ packets: Packet[]; unreadable: Unreadable[] }> => {
+  const packets: Packet[] = [];
+  const unreadable: Unreadable[] = [];
+  for (const sealed of key.filter((s) => s.entry.arm !== 'seeded')) {
+    const task = list.tasks.find((t) => t.id === sealed.entry.task);
+    if (task === undefined) throw new TaskRefused(`${sealed.label} names ${sealed.entry.task}, not a Set B task`);
+    const made = await fetchPacket(hub, list.repo, sealed.entry, sealed.label, task);
+    if (isUnreadable(made)) unreadable.push(made);
+    else packets.push(made);
+  }
+  return { packets, unreadable };
 };
 
 const main = async (argv: string[]): Promise<number> => {
@@ -48,7 +67,6 @@ const main = async (argv: string[]): Promise<number> => {
       dir: { type: 'string', default: HERE },
       entries: { type: 'string' },
       key: { type: 'string' },
-      packets: { type: 'string' },
       seeded: { type: 'string', default: join(HERE, 'calibration', 'seeded.json') },
       judged: { type: 'string' },
       label: { type: 'string' },
@@ -81,8 +99,11 @@ const main = async (argv: string[]): Promise<number> => {
     return 0;
   }
   if (command === 'label') {
+    const list = loadFrozen(values.dir);
     const entries = read<Entry[]>(need('entries'));
     const seeds = read<Seed[]>(values.seeded);
+    for (const e of [...entries, ...seeds])
+      if (!list.tasks.some((t) => t.id === e.task)) throw new TaskRefused(`${e.task} is not a Set B task`);
     const withSeeds: Entry[] = [
       ...entries,
       ...seeds.map((s, i) => ({ task: s.task, arm: 'seeded' as const, pr: -(i + 1), readyHeadSha: '0'.repeat(40) })),
@@ -95,37 +116,40 @@ const main = async (argv: string[]): Promise<number> => {
   if (command === 'judge') {
     if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1')
       throw new TaskRefused('not run, needs operator login confirmation');
+    const list = loadFrozen(values.dir);
     const key = read<Sealed[]>(need('key'));
-    const packets = read<Packet[]>(need('packets'));
-    const seeded = seededPackets(read<Seed[]>(values.seeded), key);
+    const { packets, unreadable } = await realPackets(ghHub, list, key);
+    const seeded = seededPackets(read<Seed[]>(values.seeded), key, list);
     const run = await runJudge(
       claudeModel(values.home === undefined ? {} : { configDir: resolve(values.home) }),
-      packets.map((p) => buildPacket(p)),
+      packets,
       seeded,
+      Date,
+      unreadable,
     );
     writeFileSync(need('out'), `${JSON.stringify(run, null, 2)}\n`);
-    console.log(run.voided === null ? `${run.judged.length} judged` : `VOID: ${run.voided}`);
+    console.log(
+      run.voided === null ? `${run.judged.length} judged, ${run.unreadable.length} unreadable` : `VOID: ${run.voided}`,
+    );
     return run.voided === null ? 0 : 4;
   }
   if (command === 'grade') {
     const key = read<Sealed[]>(need('key'));
     const entry = sealedEntry(key, need('label'));
     if (entry.arm === 'seeded') throw new TaskRefused('a seeded-bad PR is never graded');
-    const judged = read<{ judged: Judged[]; voided: string | null }>(need('judged'));
+    const judged = read<{ judged: Judged[]; unreadable: Unreadable[]; voided: string | null }>(need('judged'));
     if (judged.voided !== null) throw new TaskRefused(`the judge run is void: ${judged.voided}`);
-    const mine = judged.judged.find((j) => j.label === values.label);
+    const mine =
+      judged.judged.find((j) => j.label === values.label) ?? judged.unreadable.find((u) => u.label === values.label);
     if (mine === undefined) throw new TaskRefused(`no judgement for ${values.label}`);
     const list = loadFrozen(values.dir);
     const pull = await ghReadPull(list.repo, entry.pr);
-    const files = await ghJson<{ filename: string; previous_filename?: string }[]>(
-      `repos/${list.repo}/pulls/${entry.pr}/files?per_page=100`,
-    );
     const row = gradeSetB({
       entry: { ...entry, arm: entry.arm },
       judged: mine,
       pull,
-      ci: await ghReadCi(list.repo, entry.readyHeadSha),
-      paths: files.flatMap((f) => [f.filename, ...(f.previous_filename === undefined ? [] : [f.previous_filename])]),
+      ci: await ghHub.ci(list.repo, entry.readyHeadSha),
+      paths: await ghPullFiles(list.repo, entry.pr),
       wallMs: num(values['wall-ms']) ?? 0,
       tokens: values.tokens === undefined ? null : JSON.parse(values.tokens),
       operatorMinutes: num(values['operator-minutes']),

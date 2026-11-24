@@ -1,6 +1,6 @@
 import { runBinary } from '../../server/sandbox/engine.ts';
 import { TaskRefused } from '../model.ts';
-import { type Packet, renderPrompt } from './packet.ts';
+import { type Packet, renderPrompt, type Unreadable } from './packet.ts';
 import { type Judgement, parseVerdict } from './rubric.ts';
 
 export type Model = (prompt: string) => Promise<string>;
@@ -20,13 +20,14 @@ export const CALIBRATION_SIZE = 2;
 export interface JudgeRun {
   readonly voided: string | null;
   readonly judged: readonly Judged[];
+  readonly unreadable: readonly Unreadable[];
 }
 
 export const judgeOne = async (model: Model, packet: Packet, clock: Clock = Date): Promise<Judged> => {
   const started = clock.now();
   const reply = await model(renderPrompt(packet));
   return {
-    ...parseVerdict(reply),
+    ...parseVerdict(reply, packet.diff),
     label: packet.label,
     headSha: packet.headSha,
     judgeMinutes: (clock.now() - started) / 60_000,
@@ -38,11 +39,13 @@ export const runJudge = async (
   real: readonly Packet[],
   seeded: readonly Packet[],
   clock: Clock = Date,
+  unreadable: readonly Unreadable[] = [],
 ): Promise<JudgeRun> => {
   if (seeded.length !== CALIBRATION_SIZE)
     throw new TaskRefused(`calibration needs exactly ${CALIBRATION_SIZE} seeded-bad PRs, got ${seeded.length}`);
-  const labels = new Set([...real, ...seeded].map((p) => p.label));
-  if (labels.size !== real.length + seeded.length) throw new TaskRefused('two packets share a label');
+  const labels = new Set([...real, ...seeded, ...unreadable].map((p) => p.label));
+  if (labels.size !== real.length + seeded.length + unreadable.length)
+    throw new TaskRefused('two packets share a label');
   const batch = [...real, ...seeded].sort((a, b) => (a.label < b.label ? -1 : 1));
   const bad = new Set(seeded.map((p) => p.label));
   const all: Judged[] = [];
@@ -51,17 +54,22 @@ export const runJudge = async (
       all.push(await judgeOne(model, packet, clock));
     } catch (error) {
       if (bad.has(packet.label))
-        return { voided: `the judge could not be read on a seeded-bad PR: ${(error as Error).message}`, judged: [] };
+        return {
+          voided: `the judge could not be read on a seeded-bad PR: ${(error as Error).message}`,
+          judged: [],
+          unreadable: [],
+        };
       throw error;
     }
   }
-  const passed = all.filter((j) => bad.has(j.label) && j.verdict === 'MERGE AS IS');
+  const passed = all.filter((j) => bad.has(j.label) && j.verdict !== 'REJECT');
   if (passed.length > 0)
     return {
-      voided: `the judge passed ${passed.length} seeded-bad PR(s): ${passed.map((j) => j.label).join(', ')}`,
+      voided: `the judge did not reject ${passed.length} seeded-bad PR(s): ${passed.map((j) => `${j.label} (${j.verdict})`).join(', ')}`,
       judged: [],
+      unreadable: [],
     };
-  return { voided: null, judged: all.filter((j) => !bad.has(j.label)) };
+  return { voided: null, judged: all.filter((j) => !bad.has(j.label)), unreadable };
 };
 
 export interface ClaudeOptions {

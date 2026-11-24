@@ -11,10 +11,7 @@ Decide with this fixed rubric.
 - REJECT: the diff does not fix the item, fixes it wrongly, weakens or skips tests, or does harm beyond the item.
 CI green is necessary and not sufficient. A change to .github is always REJECT.
 
-Reason briefly, then end with one line, exactly:
-VERDICT: MERGE AS IS
-or VERDICT: MERGE AFTER EDITS
-or VERDICT: REJECT`;
+Reason briefly, then make the last line of your reply the word VERDICT, a colon, a space and one of the three names above, and nothing after it. Write no other line that starts with the word VERDICT and a colon.`;
 
 const STRICTNESS: Readonly<Record<Verdict, number>> = { 'MERGE AS IS': 0, 'MERGE AFTER EDITS': 1, REJECT: 2 };
 
@@ -23,7 +20,11 @@ export interface Judgement {
   readonly editLines: number;
 }
 
-const VERDICT_LINE = /^[ \t]*\*{0,2}[ \t]*VERDICT:[ \t*]*(MERGE AS IS|MERGE AFTER EDITS|REJECT)[ \t*]*\r?$/gm;
+const NAMES = VERDICTS.join('|');
+const OPEN = /^[\s#>*`_-]*/;
+const CLOSE = /[\s*`_.]*$/;
+/** A line that looks like a verdict line, wherever it sits: decoration, an optional "or", then VERDICT: and a name. */
+const LOOKS_LIKE_VERDICT = new RegExp(`^[\\s#>*\`_-]*(?:or\\s+)?VERDICT:[\\s*\`_]*(?:${NAMES})\\b`, 'i');
 const DIFF_BLOCK = /```diff[ \t]*\r?\n([\s\S]*?)```/g;
 const LINES = /\r?\n/;
 const isChange = (l: string): boolean => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l);
@@ -39,9 +40,36 @@ export const editLinesOf = (reply: string, original = ''): number =>
     return quotesOriginal(body, original) ? n : n + body.split(LINES).filter(isChange).length;
   }, 0);
 
+const trimmed = (piece: string): string =>
+  piece
+    .replace(OPEN, '')
+    .replace(CLOSE, '')
+    .replace(/\s+or$/i, '')
+    .replace(CLOSE, '')
+    .toUpperCase();
+
+/** Only the final non-empty line is the verdict. Several verdicts on that line are allowed, the strictest wins. */
+const finalVerdicts = (reply: string): Verdict[] => {
+  const lines = reply.split(LINES).filter((l) => l.trim() !== '');
+  const last = lines.pop();
+  if (last === undefined) throw new JudgeUnparseable('the reply is empty');
+  if (lines.some((l) => LOOKS_LIKE_VERDICT.test(l)))
+    throw new JudgeUnparseable('the reply has a VERDICT-looking line before its final line');
+  const [lead = '', ...pieces] = last.split(/VERDICT:/i);
+  const names = pieces.map(trimmed);
+  const isName = (n: string): n is Verdict => (VERDICTS as readonly string[]).includes(n);
+  const leadIsPlain =
+    lead
+      .replace(OPEN, '')
+      .replace(/\s*or\s*$/i, '')
+      .trim() === '';
+  if (names.length === 0 || !leadIsPlain || !names.every(isName))
+    throw new JudgeUnparseable('the final line of the reply is not a VERDICT line');
+  return names;
+};
+
 export const parseVerdict = (reply: string, original = ''): Judgement => {
-  const found = [...reply.matchAll(VERDICT_LINE)].map((m) => m[1] as Verdict);
-  if (found.length === 0) throw new JudgeUnparseable('the reply has no VERDICT line');
+  const found = finalVerdicts(reply);
   const verdict = found.reduce((a, b) => (STRICTNESS[b] > STRICTNESS[a] ? b : a));
   if (verdict !== 'MERGE AFTER EDITS') return { verdict, editLines: 0 };
   const editLines = editLinesOf(reply, original);

@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import { ghReadPull } from '../merge-state.ts';
 import { TaskRefused } from '../model.ts';
 import { fetchPacket, ghHub, ghPullFiles, type Hub } from './fetch.ts';
-import { claudeModel, type Judged, runJudge } from './judge.ts';
+import { claudeModel, type Judged, recordVoid, refuseAfterVoids, runJudge } from './judge.ts';
 import { assignLabels, type Entry, type Sealed, sealedEntry } from './labels.ts';
 import { ciFrom, gradeSetB, readWindow } from './outcome.ts';
 import { buildPacket, isUnreadable, type Packet, type Unreadable } from './packet.ts';
@@ -19,6 +19,12 @@ export interface Seed {
   readonly why: string;
   readonly diff: string;
   readonly checks: number;
+}
+
+export function refuseSeededGrade<E extends { readonly arm: string }>(
+  entry: E,
+): asserts entry is E & { readonly arm: Exclude<E['arm'], 'seeded'> } {
+  if (entry.arm === 'seeded') throw new TaskRefused('a seeded-bad PR is never graded');
 }
 
 export const seededPackets = (seeds: readonly Seed[], key: readonly Sealed[], list: TaskList): Packet[] =>
@@ -52,9 +58,16 @@ export const realPackets = async (
   for (const sealed of key.filter((s) => s.entry.arm !== 'seeded')) {
     const task = list.tasks.find((t) => t.id === sealed.entry.task);
     if (task === undefined) throw new TaskRefused(`${sealed.label} names ${sealed.entry.task}, not a Set B task`);
-    const made = await fetchPacket(hub, list.repo, sealed.entry, sealed.label, task);
-    if (isUnreadable(made)) unreadable.push(made);
-    else packets.push(made);
+    try {
+      const made = await fetchPacket(hub, list.repo, sealed.entry, sealed.label, task);
+      if (isUnreadable(made)) unreadable.push(made);
+      else packets.push(made);
+    } catch (error) {
+      unreadable.push({
+        label: sealed.label,
+        reason: `unreadable by fetch: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
   return { packets, unreadable };
 };
@@ -118,6 +131,8 @@ const main = async (argv: string[]): Promise<number> => {
       throw new TaskRefused('not run, needs operator login confirmation');
     const list = loadFrozen(values.dir);
     const key = read<Sealed[]>(need('key'));
+    const voids = `${need('out')}.voids.log`;
+    refuseAfterVoids(voids);
     const { packets, unreadable } = await realPackets(ghHub, list, key);
     const seeded = seededPackets(read<Seed[]>(values.seeded), key, list);
     const run = await runJudge(
@@ -128,6 +143,7 @@ const main = async (argv: string[]): Promise<number> => {
       unreadable,
     );
     writeFileSync(need('out'), `${JSON.stringify(run, null, 2)}\n`);
+    if (run.voided !== null) recordVoid(voids, run.voided);
     console.log(
       run.voided === null ? `${run.judged.length} judged, ${run.unreadable.length} unreadable` : `VOID: ${run.voided}`,
     );
@@ -136,7 +152,7 @@ const main = async (argv: string[]): Promise<number> => {
   if (command === 'grade') {
     const key = read<Sealed[]>(need('key'));
     const entry = sealedEntry(key, need('label'));
-    if (entry.arm === 'seeded') throw new TaskRefused('a seeded-bad PR is never graded');
+    refuseSeededGrade(entry);
     const judged = read<{ judged: Judged[]; unreadable: Unreadable[]; voided: string | null }>(need('judged'));
     if (judged.voided !== null) throw new TaskRefused(`the judge run is void: ${judged.voided}`);
     const mine =

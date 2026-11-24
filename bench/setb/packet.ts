@@ -25,6 +25,7 @@ const LEAKS: ReadonlyArray<readonly [string, RegExp]> = [
 export interface Unreadable {
   readonly label: string;
   readonly reason: string;
+  readonly attempts?: number;
 }
 
 export const armLeaks = (text: string, secrets: readonly string[] = []): string[] => [
@@ -49,8 +50,13 @@ export const packetOrUnreadable = (p: Packet, secrets: readonly string[] = []): 
 
 export const isUnreadable = (x: Packet | Unreadable): x is Unreadable => 'reason' in x;
 
-export const renderPrompt = (p: Packet): string =>
-  [
+/** A fence longer than any backtick run in the text, so the text cannot close it. */
+export const fenceFor = (text: string): string =>
+  '`'.repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+
+export const renderPrompt = (p: Packet): string => {
+  const fence = fenceFor(p.diff);
+  return [
     RUBRIC,
     '',
     `## Issue: ${p.issue.title}`,
@@ -63,7 +69,8 @@ export const renderPrompt = (p: Packet): string =>
     '',
     '## Diff',
     '',
-    '```diff',
+    `${fence}diff`,
     p.diff,
-    '```',
+    fence,
   ].join('\n');
+};

@@ -36,7 +36,15 @@ export const ghReadCi = async (repo: string, sha: string): Promise<Ci> => {
     timeoutMs: 60_000,
   });
   if (ran.code !== 0) throw new TaskRefused(`gh could not read the checks of ${sha}: ${ran.err.trim().slice(-200)}`);
-  const body = JSON.parse(ran.out) as { total_count: number; check_runs: CheckRun[] };
+  return ciOfBody(sha, JSON.parse(ran.out) as CheckRunsBody);
+};
+
+export interface CheckRunsBody {
+  readonly total_count: number;
+  readonly check_runs: readonly CheckRun[];
+}
+
+export const ciOfBody = (sha: string, body: CheckRunsBody): Ci => {
   if (body.total_count > body.check_runs.length)
     throw new TaskRefused(`${sha} has ${body.total_count} check runs, only ${body.check_runs.length} were read`);
   return ciFrom(sha, body.check_runs);

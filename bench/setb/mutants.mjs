@@ -105,7 +105,85 @@ const MUTANTS = [
   {
     name: 'rubric-quoted-verdict',
     claim: 'a verdict inside prose is not a verdict line',
-    edits: [[R, '/^[ \\t]*\\*{0,2}[ \\t]*VERDICT:', '/[ \\t]*\\*{0,2}[ \\t]*VERDICT:']],
+    edits: [[R, '!leadIsPlain || ', '']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-stray-verdict-line',
+    claim: 'a verdict-looking line before the final line, such as an echoed template, makes the reply unreadable',
+    edits: [[R, 'if (lines.some((l) => LOOKS_LIKE_VERDICT.test(l)))', 'if (false)']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-period-not-read',
+    claim: 'a final verdict line ending in a period is read',
+    edits: [[R, 'const CLOSE = /[\\s*`_.]*$/;', 'const CLOSE = /[\\s*`_]*$/;']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-template-line',
+    claim: 'the rubric itself holds no parseable verdict line',
+    edits: [[R, 'Reason briefly, then make', 'Reason briefly.\nVERDICT: MERGE AS IS\nThen make']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-unreadable-real-aborts',
+    claim: 'one unreadable real reply is recorded for that packet and the batch goes on',
+    edits: [[J, '    lost.push({', '    throw new Error(why);\n    lost.push({']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-attempts-over-cap',
+    claim: 'a packet gets at most MAX_ATTEMPTS calls',
+    edits: [[J, 'attempt <= maxAttempts;', 'attempt <= maxAttempts + 1;']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-uncapped',
+    claim: 'the third voided judge run ends the run',
+    edits: [[J, 'if (n >= MAX_VOIDS)', 'if (false)']],
+    tests: [SETB],
+  },
+  {
+    name: 'fetch-failure-aborts-batch',
+    claim: 'a gh failure on one packet is recorded as unreadable and the other packets are still read',
+    edits: [
+      [
+        'bench/setb/cli.ts',
+        '    } catch (error) {\n      unreadable.push({',
+        '    } catch (error) {\n      throw error;\n      unreadable.push({',
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'ci-over-100-read',
+    claim: 'more check runs than one page holds is refused, not graded on the first 100',
+    edits: [[O, 'if (body.total_count > body.check_runs.length)', 'if (false)']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-pr-graded',
+    claim: 'a seeded-bad PR is never graded',
+    edits: [['bench/setb/cli.ts', "if (entry.arm === 'seeded') throw", 'if (false) throw']],
+    tests: [SETB],
+  },
+  {
+    name: 'prompt-fence-short',
+    claim: 'a diff holding triple backticks cannot close the prompt fence',
+    edits: [[P, 'm[0].length + 1', '0']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-checks-unreal',
+    claim: 'a seeded PR shows the real check count of the frozen base, 18',
+    edits: [['bench/setb/calibration/seeded.json', '"checks": 18', '"checks": 9']],
+    tests: [SETB],
+  },
+  {
+    name: 'frozen-base-absent-silent',
+    claim: 'a clone without the frozen commit fails loudly unless it says it is shallow',
+    edits: [[T, "if (!has && env.AW_SHALLOW_CLONE !== '1')", 'if (false)']],
     tests: [SETB],
   },
   {
@@ -309,7 +387,7 @@ const MUTANTS = [
   {
     name: 'judge-unreadable-dropped',
     claim: 'an unreadable real packet is surfaced in the judge run',
-    edits: [['bench/setb/judge.ts', '!bad.has(j.label)), unreadable };', '!bad.has(j.label)), unreadable: [] };']],
+    edits: [['bench/setb/judge.ts', 'unreadable: [...unreadable, ...lost] };', 'unreadable: [] };']],
     tests: [SETB],
   },
   {
@@ -369,13 +447,20 @@ const MUTANTS = [
   {
     name: 'host-hidden-path-allowed',
     claim: 'the host refuses a tree write into .github before it is sent',
-    edits: [['server/githost/host.ts', "!segment.startsWith('.') &&", '']],
+    // Anchored on the signature, not the body, so a P3-5 edit inside filePathProblem does not break it.
+    edits: [
+      [
+        'server/githost/host.ts',
+        'export const filePathProblem = (path: unknown): string | null =>',
+        "export const filePathProblem = (path: unknown): string | null => (typeof path === 'string' ? null : 'x');\nconst unusedFilePathProblem = (path: unknown): string | null =>",
+      ],
+    ],
     tests: [SETB],
   },
   {
     name: 'rubric-bold-verdict',
     claim: 'a bold verdict line is read',
-    edits: [['bench/setb/rubric.ts', '\\*{0,2}[ \\t]*VERDICT:', '[ \\t]*VERDICT:']],
+    edits: [[R, 'const OPEN = /^[\\s#>*`_-]*/;', 'const OPEN = /^[\\s#>`_-]*/;']],
     tests: [SETB],
   },
   {

@@ -107,3 +107,13 @@ export const loadFrozen = (dir: string): TaskList => {
     );
   return parseTaskList(JSON.parse(bytes.toString('utf8')));
 };
+
+/** The seeded diffs are checked against the frozen commit. A clone without it fails loudly unless it says it is shallow. */
+export const requireFrozenBase = (
+  has: boolean,
+  env: Readonly<Record<string, string | undefined>>,
+  sha: string,
+): void => {
+  if (!has && env.AW_SHALLOW_CLONE !== '1')
+    throw new Error(`the frozen commit ${sha} is not in this clone; fetch full history, or set AW_SHALLOW_CLONE=1`);
+};

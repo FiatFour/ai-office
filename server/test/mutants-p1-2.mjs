@@ -1023,7 +1023,13 @@ const MUTANTS = [
   {
     name: 'r3-wildcard-item-allowable',
     claim: 'the website item for a wildcard CONNECT does not offer Allow',
-    edits: [['server/modes/cages.ts', 'allow: valid !== null', 'allow: true']],
+    edits: [
+      [
+        'server/modes/cages.ts',
+        'allow: (seenBefore?.allow ?? true) && valid !== null && denial',
+        'allow: (seenBefore?.allow ?? true) && denial',
+      ],
+    ],
     tests: [CAGES],
   },
   {

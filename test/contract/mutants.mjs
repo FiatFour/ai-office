@@ -11,6 +11,7 @@ const HOST = 'test/contract/githost.recorded.test.ts';
 const EXPECTED = 'test/contract/expected.test.ts';
 const SHARD = 'test/contract/shard.test.ts';
 const TABLE = 'test/contract/table.test.ts';
+const ENGINES = 'test/contract/engines.test.ts';
 const SANDBOX = 'test/contract/sandbox.real.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, test: string, caught: string[], table?: RegExp }>} */
@@ -198,6 +199,14 @@ const MUTANTS = [
     edits: [['scripts/contract-table.mjs', 'if (!STATUSES.includes(row.status))', 'if (false)']],
     test: TABLE,
     caught: ['fails a row whose status is neither pass, fail nor not-run'],
+  },
+  {
+    name: 'windows-mount-refusal-ignored',
+    claim:
+      'a daemon that rejects the Windows bind path makes the docker cell not run, with the daemon words as the reason',
+    edits: [['test/contract/engines.ts', '/invalid mount|mount path|invalid bind/i.test(text)', 'false && text']],
+    test: ENGINES,
+    caught: ['reads a daemon that cannot see the Windows path as a refusal'],
   },
   {
     name: 'registration-skips-a-case',

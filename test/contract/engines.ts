@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { Engine, type EngineName } from '../../server/sandbox/engine.ts';
 
 export interface Found {
@@ -24,6 +25,17 @@ export const find = async (name: EngineName, env: NodeJS.ProcessEnv = process.en
       engine: null,
       reason: `${name} ${version} runs ${kind === '' ? 'no' : kind} containers, and the cage image is linux`,
     };
+  if (process.platform === 'win32') {
+    const mount = await engine.run(
+      ['create', '--mount', `type=bind,src=${tmpdir()},dst=/m`, 'aw-no-such-image:0', 'true'],
+      { timeoutMs: 60_000 },
+    );
+    if (mountRefused(`${mount.out}${mount.err}`))
+      return {
+        engine: null,
+        reason: `${name} ${version} answers from a Linux daemon that cannot see Windows paths, and the driver binds the host path as given: ${firstLine(`${mount.out}${mount.err}`)}`,
+      };
+  }
   if (name === 'podman' && !info.rootless)
     return {
       engine: null,
@@ -36,3 +48,8 @@ export const kvmReason = (): string =>
   existsSync('/dev/kvm')
     ? '/dev/kvm is present, but krun cannot exec (fw-krun-exec), so the SandboxDriver contract cannot run on it; the P0-2 krun lanes cover it'
     : 'no /dev/kvm on this runner, so no krun microVM can start';
+
+const firstLine = (text: string): string => text.trim().split('\n')[0]?.trim() ?? '';
+
+/** The daemon rejects the bind before it looks for the image, so a missing image means the mount was accepted. */
+export const mountRefused = (text: string): boolean => /invalid mount|mount path|invalid bind/i.test(text);

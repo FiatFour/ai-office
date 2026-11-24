@@ -244,7 +244,7 @@ describe('the Claude Code runtime', () => {
         { path: 'a.ts', line: null, body: 'whole file' },
         { path: 'a.ts', line: null, body: 'zero line' },
         { path: 'a.ts', line: null, body: 'fraction' },
-        { path: 'a.ts', line: null, body: 'string line' },
+        { path: 'a.ts', line: 4, body: 'string line' },
         { path: null, line: 7, body: 'no path' },
         { path: null, line: null, body: 'general' },
         { path: null, line: null, body: '{"path":"a.ts","line":2}' },
@@ -296,6 +296,46 @@ describe('the Claude Code runtime', () => {
     const two = (v: string) => `\`\`\`json\n{"verdict":"${v}"}\n\`\`\``;
     expect(parseReview(`${two('approve')}\n${two('changes')}`).verdict).toBe('changes');
     expect(parseReview(`${two('changes')}\n${quoted}`).verdict).toBe('changes');
+  });
+
+  it('lets changes win when verdict blocks disagree, in either order and with three blocks', () => {
+    const block = (v: string, body = v) => `\`\`\`json\n${JSON.stringify({ verdict: v, body })}\n\`\`\``;
+    expect(parseReview(`${block('changes')}\nExample:\n${block('approve')}`)).toMatchObject({
+      verdict: 'changes',
+      body: 'changes',
+    });
+    expect(parseReview(`${block('approve')}\n${block('changes')}`).verdict).toBe('changes');
+    expect(parseReview(`${block('changes')}\n${block('comment')}\n${block('approve')}`).verdict).toBe('changes');
+    expect(parseReview(`${block('approve')}\n${block('comment')}`).verdict).toBe('comment');
+    expect(parseReview(`${block('changes', 'one')}\n${block('changes', 'two')}`).body).toBe('two');
+  });
+
+  it('carries a summary, a file name, a numeric string line and a body that is not a string', () => {
+    const review = (o: object) => parseReview(`\`\`\`json\n${JSON.stringify({ verdict: 'changes', ...o })}\n\`\`\``);
+    expect(review({ summary: 'the gist' }).body).toBe('the gist');
+    expect(review({ body: 'main', summary: 'gist' }).body).toBe('main');
+    expect(review({ body: '', summary: 'gist' }).body).toBe('gist');
+    expect(review({ body: ['a', 'b'] }).body).toBe('["a","b"]');
+    expect(review({ body: { x: 1 } }).body).toBe('{"x":1}');
+    expect(review({ body: 7 }).body).toBe('7');
+    expect(review({ comments: [{ file: 'a.ts', line: '2', body: 'x' }] }).comments).toEqual([
+      { path: 'a.ts', line: 2, body: 'x' },
+    ]);
+    expect(review({ comments: [{ path: 'p.ts', file: 'f.ts', line: ' 5 ', body: 'x' }] }).comments).toEqual([
+      { path: 'p.ts', line: 5, body: 'x' },
+    ]);
+    expect(review({ comments: [{ path: 'a.ts', line: '2x', body: 'x' }] }).comments[0]?.line).toBeNull();
+    expect(review({ comments: [{ path: 'a.ts', line: '0', body: 'x' }] }).comments[0]?.line).toBeNull();
+  });
+
+  it('scans many broken fenced blocks in linear time and still finds the verdict after them', () => {
+    const broken = '```json\n{"a": [1, 2,\n```\n'.repeat(20_000);
+    const unclosed = '```json\n{"a": "x\n'.repeat(20_000);
+    const real = '```json\n{"verdict":"changes","body":"ok"}\n```';
+    const started = performance.now();
+    expect(parseReview(`${broken}${unclosed}${real}`).verdict).toBe('changes');
+    expect(parseReview(`${'```json\n{"a":{'.repeat(20_000)}\n${real}`).verdict).toBe('changes');
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 
   it('shows the start of the reviewer text when no verdict block exists', () => {

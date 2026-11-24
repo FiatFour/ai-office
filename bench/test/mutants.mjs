@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inShard, parseArgs } from '../../scripts/shard.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SETUP = 'bench/test/task-setup.test.ts';
@@ -1446,8 +1447,11 @@ const vitest = (tests) =>
     env: { ...process.env },
   });
 
-const only = process.argv.slice(2);
-const selected = MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name));
+const { names: only, shard } = parseArgs(process.argv.slice(2));
+const selected = inShard(
+  MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name)),
+  shard,
+);
 for (const name of only)
   if (!MUTANTS.some((mutant) => mutant.name === name)) throw new Error(`no mutant is named ${name}`);
 const lines = [];

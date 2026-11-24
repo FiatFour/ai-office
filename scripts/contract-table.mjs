@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 export const DRIVERS = ['docker', 'podman', 'krun', 'github-recorded', 'github-live', 'gitlab-recorded', 'gitlab-live'];
 export const OSES = ['linux', 'macos', 'windows'];
+const STATUSES = ['pass', 'fail', 'not-run', 'expected'];
 
 /** @typedef {{ driver: string, os: string, case: string | null, status: 'pass' | 'fail' | 'not-run' | 'expected', reason: string | null }} Row */
 
@@ -27,6 +28,13 @@ export const tabulate = (rows, { drivers = DRIVERS, oses = OSES } = {}) => {
   }
   /** @type {string[]} */
   const problems = [];
+  for (const row of rows) {
+    const what = `${row.driver} on ${row.os}${row.case === null ? '' : ` case ${row.case}`}`;
+    if (!DRIVERS.includes(row.driver)) problems.push(`${what} names a driver the table does not know`);
+    else if (!OSES.includes(row.os)) problems.push(`${what} names an OS the table does not know`);
+    if (!STATUSES.includes(row.status))
+      problems.push(`${what} has status ${JSON.stringify(row.status)}, which is not pass, fail or not-run`);
+  }
   /** @param {string} driver @param {string} os */
   const text = (driver, os) => {
     const where = `${driver} on ${os}`;

@@ -1,7 +1,10 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the strings are source text being mutated
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inShard, parseArgs } from '../../scripts/shard.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const STORE = 'server/test/store.test.ts';
@@ -1107,7 +1110,11 @@ const MUTANTS = [
 
 class PatternMissing extends Error {}
 
-const only = process.argv.slice(2);
+const { names: only, shard } = parseArgs(process.argv.slice(2));
+const chosen = inShard(
+  MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name)),
+  shard,
+);
 /** @param {string[]} tests */
 const vitest = (tests) =>
   spawnSync('pnpm', ['vitest', 'run', ...tests], {
@@ -1125,7 +1132,7 @@ const log = (line) => {
   lines.push(line);
 };
 
-const baseline = vitest([...new Set(MUTANTS.flatMap((m) => m.tests))]);
+const baseline = vitest([...new Set(chosen.flatMap((m) => m.tests))]);
 log(`baseline ${baseline.status === 0 ? 'PASS' : 'FAIL'}`);
 if (baseline.status !== 0) {
   console.error(baseline.stdout.slice(-2000));
@@ -1133,8 +1140,7 @@ if (baseline.status !== 0) {
 }
 
 let bad = 0;
-for (const mutant of MUTANTS) {
-  if (only.length > 0 && !only.includes(mutant.name)) continue;
+for (const mutant of chosen) {
   const originals = new Map();
   try {
     for (const [file, find, replace] of mutant.edits) {
@@ -1159,5 +1165,10 @@ for (const mutant of MUTANTS) {
     for (const [path, text] of originals) writeFileSync(path, text);
   }
 }
-writeFileSync(process.env.MUTANT_OUT ?? '/tmp/mutants-p1-2.txt', `${lines.join('\n')}\n`);
+lines.push(`caught ${chosen.length - bad}/${chosen.length}`);
+console.log(lines.at(-1));
+writeFileSync(
+  process.env.MUTANT_OUT ?? join(mkdtempSync(join(tmpdir(), 'mutants-p1-2-')), 'mutants.txt'),
+  `${lines.join('\n')}\n`,
+);
 process.exit(bad === 0 ? 0 : 1);

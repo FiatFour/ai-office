@@ -81,6 +81,27 @@ jobs:
           node-version: "lts/*"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Run a Linux docker daemon in WSL 2 for docker.exe
+        if: ${{ matrix.cell == 'windows' }}
+        run: |
+          docker info --format 'runner daemon OSType: {{.OSType}}'
+          wsl --install -d Debian --no-launch --web-download
+          wsl -d Debian -u root -- sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null'
+          wsl -d Debian -u root -- sh -c 'systemctl stop docker.service docker.socket 2>/dev/null || service docker stop; rm -f /var/run/docker.pid'
+          Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'sh', '-c', '"dockerd -H unix:///var/run/docker.sock -H tcp://127.0.0.1:2375 --tls=false > /var/log/dockerd.log 2>&1"'
+          $env:DOCKER_HOST = 'tcp://127.0.0.1:2375'
+          $deadline = (Get-Date).AddMinutes(2)
+          while ($true) {
+            docker.exe info *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            if ((Get-Date) -gt $deadline) {
+              wsl -d Debian -u root -- sh -c 'tail -40 /var/log/dockerd.log; ss -ltn'
+              throw 'the WSL docker daemon did not answer docker.exe within 2 minutes'
+            }
+            Start-Sleep -Seconds 2
+          }
+          docker.exe info --format 'WSL daemon OSType: {{.OSType}}, kernel {{.KernelVersion}}'
+          "DOCKER_HOST=$env:DOCKER_HOST" >> $env:GITHUB_ENV
       - name: What this runner offers
         run: |
           foreach ($tool in 'docker', 'podman') {
@@ -150,9 +171,13 @@ jobs:
           if ($status -ne 0) { throw "a contract mutant survived or could not be applied" }
 
   bench-mutants:
-    name: bench mutants (the whole suite, every mutant caught)
+    name: bench mutants (shard ${{ matrix.shard }} of 3, every mutant caught)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -164,10 +189,34 @@ jobs:
       - name: Break each guard in turn and require a test to fail
         run: |
           $env:MUTANT_OUT = Join-Path $env:RUNNER_TEMP 'mutants.txt'
-          node bench/test/mutants.mjs
+          node bench/test/mutants.mjs --shard ${{ matrix.shard }}/3
           $status = $LASTEXITCODE
           Get-Content $env:MUTANT_OUT | Select-Object -Last 1 | Add-Content $env:GITHUB_STEP_SUMMARY
           if ($status -ne 0) { throw "a bench mutant survived or could not be applied" }
+
+  mutants-p1-2:
+    name: mutants p1-2 (shard ${{ matrix.shard }} of 2, every mutant caught)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Break each guard in turn and require a test to fail
+        run: |
+          $env:MUTANT_OUT = Join-Path $env:RUNNER_TEMP 'mutants-p1-2.txt'
+          node server/test/mutants-p1-2.mjs --shard ${{ matrix.shard }}/2
+          $status = $LASTEXITCODE
+          Get-Content $env:MUTANT_OUT | Select-Object -Last 1 | Add-Content $env:GITHUB_STEP_SUMMARY
+          if ($status -ne 0) { throw "a P1-2 mutant survived or could not be applied" }
 
   perf:
     name: perf (cold and warm install, lint, typecheck, light test suite)

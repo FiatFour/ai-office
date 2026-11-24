@@ -4,10 +4,13 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inShard, parseArgs } from '../../scripts/shard.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const HOST = 'test/contract/githost.recorded.test.ts';
 const EXPECTED = 'test/contract/expected.test.ts';
+const SHARD = 'test/contract/shard.test.ts';
+const TABLE = 'test/contract/table.test.ts';
 const SANDBOX = 'test/contract/sandbox.real.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, test: string, caught: string[], table?: RegExp }>} */
@@ -147,6 +150,56 @@ const MUTANTS = [
     table: /github-recorded on linux never ran/,
   },
   {
+    name: 'poll-uppercases-the-reviewer',
+    claim: 'a poll reports the reviewer login exactly as the host spelled it',
+    edits: [
+      [
+        'server/githost/host.ts',
+        'reviews: [...latest.values()].map((review) => ({ reviewer: review.reviewer,',
+        'reviews: [...latest.values()].map((review) => ({ reviewer: review.reviewer.toUpperCase(),',
+      ],
+    ],
+    test: HOST,
+    caught: ['review-carries-reviewer-commit-and-host-time'],
+  },
+  {
+    name: 'shard-drops-a-mutant',
+    claim: 'every mutant runs in exactly one shard',
+    edits: [
+      ['scripts/shard.mjs', 'position % shard.total === shard.index - 1', 'position % shard.total === shard.index'],
+    ],
+    test: SHARD,
+    caught: ['cover every mutant exactly once across the shards'],
+  },
+  {
+    name: 'shard-past-the-end-accepted',
+    claim: 'a shard index above the shard count is refused',
+    edits: [['scripts/shard.mjs', 'if (index > total) throw', 'if (false) throw']],
+    test: SHARD,
+    caught: ['refuses a shard that is missing, malformed, zero or past the end'],
+  },
+  {
+    name: 'table-ignores-unknown-driver',
+    claim: 'a row for a driver the table does not know fails the table',
+    edits: [['scripts/contract-table.mjs', 'if (!DRIVERS.includes(row.driver))', 'if (false)']],
+    test: TABLE,
+    caught: ['fails a row that names a driver the table does not know'],
+  },
+  {
+    name: 'table-ignores-unknown-os',
+    claim: 'a row for an OS the table does not know fails the table',
+    edits: [['scripts/contract-table.mjs', 'else if (!OSES.includes(row.os))', 'else if (false)']],
+    test: TABLE,
+    caught: ['fails a row that names an OS the table does not know'],
+  },
+  {
+    name: 'table-ignores-unknown-status',
+    claim: 'a row whose status is not pass, fail or not-run fails the table',
+    edits: [['scripts/contract-table.mjs', 'if (!STATUSES.includes(row.status))', 'if (false)']],
+    test: TABLE,
+    caught: ['fails a row whose status is neither pass, fail nor not-run'],
+  },
+  {
     name: 'registration-skips-a-case',
     claim: 'a case wrapped in it.skip fails the table',
     edits: [
@@ -162,8 +215,11 @@ const MUTANTS = [
   },
 ];
 
-const only = process.argv.slice(2);
-const selected = MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name));
+const { names: only, shard } = parseArgs(process.argv.slice(2));
+const selected = inShard(
+  MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name)),
+  shard,
+);
 for (const name of only)
   if (!MUTANTS.some((mutant) => mutant.name === name)) throw new Error(`no mutant is named ${name}`);
 

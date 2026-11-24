@@ -471,7 +471,13 @@ const MUTANTS = [
   {
     name: 'v-review-line-zero',
     claim: 'a review comment line must be at least 1',
-    edits: [['server/agents/runtime.ts', '(c.line as number) < 1 ||', '']],
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        'Number.isSafeInteger(c.line) && (c.line as number) >= 1 ?',
+        'Number.isSafeInteger(c.line) ?',
+      ],
+    ],
     tests: [AGENTS],
   },
   {

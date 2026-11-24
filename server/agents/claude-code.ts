@@ -46,7 +46,9 @@ export const parseStream = (raw: string): { text: string; usage: Usage } => {
   const result = lines.findLast((line) => line.type === 'result');
   if (result === undefined) throw new AgentFailed('claude printed no result line');
   if (result.is_error === true || result.subtype !== 'success')
-    throw new AgentFailed(`claude ended with ${result.subtype ?? 'an error'}`);
+    throw new AgentFailed(
+      `claude ended with ${result.subtype ?? 'an error'}${result.is_error === true && result.result ? `: ${result.result.slice(0, 200)}` : ''}`,
+    );
   const usage = result.usage ?? {};
   const served = lines
     .flatMap((line) => (Array.isArray(line.message?.content) ? (line.message.content as { type?: unknown }[]) : []))

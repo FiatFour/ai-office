@@ -113,6 +113,7 @@ type Job =
   | { readonly kind: 'brief'; readonly box: Box & { pr: string }; readonly change: Change };
 
 export const REVIEW_MARK = /^<!-- agent-works:review worker=(\S+) verdict=(approve|changes|comment) -->$/m;
+const REVIEW_MARKS = new RegExp(REVIEW_MARK.source, 'gm');
 const reviewMarker = (worker: string, verdict: Verdict) =>
   `<!-- agent-works:review worker=${worker} verdict=${verdict} -->`;
 const changeRef = (repo: string, number: number) => `${repo.toLowerCase()}#${number}`;
@@ -247,7 +248,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         .map((c) => ({ ...c, body: unquote(c.body) }));
       const carried = reviews
         .filter((r) => r.commitId === head && r.reviewer.toLowerCase() === reviewer)
-        .map((r) => ({ r, text: r.body.replace(REVIEW_MARK, '').replace(DROPPED_MARK, '\n').trim() }))
+        .map((r) => ({ r, text: r.body.replace(REVIEW_MARKS, '').replaceAll(DROPPED_MARK, '\n').trim() }))
         .filter(({ text }) => text !== '')
         .map(
           ({ r, text }): CommentFact => ({

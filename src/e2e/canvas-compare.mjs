@@ -24,6 +24,40 @@ export const COMMITTED_COMPARE = join(ROOT, 'docs', 'review', 'P1-3-review-canva
 export const COMMITTED_HEAT = join(ROOT, 'docs', 'review', 'P1-3-review-pixel-heatmap.png');
 export const COMMITTED_GRID = join(ROOT, 'docs', 'review', 'P1-3-review-pixel-regions.md');
 
+/**
+ * What one artboard compare reads and writes. `body` and `adr` are the docs that must repeat the differences table, `warn` is the one colour pinned for Main.
+ * @typedef {{ name: string, differences: string, body: string | null, adr: string | null, compare: string, heat: string, grid: string, minEntries: number, pinWarn: boolean }} Spec
+ */
+/** @type {Spec} */
+export const MAIN_SPEC = {
+  name: 'Main',
+  differences: DIFFERENCES,
+  body: PR_BODY,
+  adr: ADR,
+  compare: COMMITTED_COMPARE,
+  heat: COMMITTED_HEAT,
+  grid: COMMITTED_GRID,
+  minEntries: 40,
+  pinWarn: true,
+};
+
+/**
+ * The spec for a screen ticket: its own differences file and committed images under `dir`, no PR body or ADR table to keep in step.
+ * @param {{ name: string, dir: string, minEntries?: number }} options
+ * @returns {Spec}
+ */
+export const artboardSpec = ({ name, dir, minEntries = 1 }) => ({
+  name,
+  differences: join(dir, `${name}-differences.md`),
+  body: null,
+  adr: null,
+  compare: join(dir, `${name}-canvas-compare.png`),
+  heat: join(dir, `${name}-pixel-heatmap.png`),
+  grid: join(dir, `${name}-pixel-regions.md`),
+  minEntries,
+  pinWarn: false,
+});
+
 export const STATUSES = ['fixed', 'changed', 'not-built', 'conflict'];
 export const BLOCK = /<!-- differences:start -->\n([\s\S]*?)\n?<!-- differences:end -->/;
 const COMPARE = { width: 1440, pane: 720, paneHeight: 450, legend: 150 };
@@ -31,7 +65,7 @@ const STRIPS = { canvas: [255, 0, 230], built: [0, 230, 255] };
 const SHARED_FAMILIES = ['text', 'paint', 'font', 'role', 'class', 'anim'];
 
 /** @typedef {{ id: string, status: string, canvas: string, built: string, text: string, covers: string[], regions: string[] }} Entry */
-/** @typedef {{ text: string, canvasText: string, builtText: string, canvasInv: Record<string, string>, builtInv: Record<string, string>, grid: number[][], body: string, adr: string, warn: string | null }} Inputs */
+/** @typedef {{ text: string, canvasText: string, builtText: string, canvasInv: Record<string, string>, builtInv: Record<string, string>, grid: number[][], body: string | null, adr: string | null, warn?: string | null, minEntries?: number }} Inputs */
 
 export const markdown = (/** @type {Entry[]} */ diffs) =>
   [
@@ -99,11 +133,22 @@ const anchors = (/** @type {import('playwright').Page} */ page, /** @type {strin
   }, probes);
 
 /** @param {Inputs} input */
-export const verifyEntries = ({ text, canvasText, builtText, canvasInv, builtInv, grid, body, adr, warn }) => {
+export const verifyEntries = ({
+  text,
+  canvasText,
+  builtText,
+  canvasInv,
+  builtInv,
+  grid,
+  body,
+  adr,
+  warn,
+  minEntries = 40,
+}) => {
   const problems = [];
   const diffs = parseDifferences(text);
   const ids = diffs.map((d) => d.id);
-  if (diffs.length < 40) problems.push(`only ${diffs.length} differences listed`);
+  if (diffs.length < minEntries) problems.push(`only ${diffs.length} differences listed`);
   if (new Set(ids).size !== ids.length) problems.push('duplicate ids');
   for (const d of diffs) if (!STATUSES.includes(d.status)) problems.push(`${d.id}: status ${d.status}`);
   for (const d of diffs) {
@@ -121,11 +166,13 @@ export const verifyEntries = ({ text, canvasText, builtText, canvasInv, builtInv
     ['the PR body source', body],
     ['ADR 0005', adr],
   ]) {
+    if (doc === null) continue;
     for (const id of ids) if (!new RegExp(`\\b${id}\\b`).test(doc)) problems.push(`${id} is not in ${name}`);
     if (BLOCK.exec(doc)?.[1] !== markdown(diffs))
       problems.push(`the table in ${name} is stale, run node src/scripts/differences.mjs`);
   }
-  if (warn !== 'rgb(255, 202, 40)') problems.push(`N NEED YOU colour is ${warn}, the canvas has #ffca28`);
+  if (warn !== undefined && warn !== 'rgb(255, 202, 40)')
+    problems.push(`N NEED YOU colour is ${warn}, the canvas has #ffca28`);
 
   problems.push(...checkCoverage(diffInventory(canvasInv, builtInv), canvasInv, builtInv, diffs));
   for (const region of diffs.flatMap((d) => d.regions))
@@ -252,8 +299,8 @@ const mutate = {
   ) => text.replace(`${id} | ${from} |`, `${id} | ${to} |`),
 };
 
-/** @param {Inputs} base */
-const negatives = (base) => {
+/** @param {Inputs} base @param {boolean} strict a Main compare fails when an entry kind is missing, another screen skips the cases it cannot build */
+const negatives = (base, strict) => {
   const entries = parseDifferences(base.text);
   const covering = entries.filter((d) => d.covers.length > 0);
   const notBuilt = covering.find((d) => d.status === 'not-built');
@@ -267,9 +314,11 @@ const negatives = (base) => {
   const kept = new Set(diff.changed);
   const stillChanged = covering.find((d) => d.status !== 'fixed' && d.covers.some((key) => kept.has(key)));
   const builtOnly = covering.find((d) => d.status === 'changed' && d.covers.some((key) => extra.has(key)));
-  if (!(notBuilt && fixed && notBuiltText && fixedText && first && second && builtOnly))
-    throw new Error('lane 9 needs entries of every status');
-  const staleTable = base.body.replace(/\| not-built \|/, '| fixed |');
+  if (!(notBuilt && fixed && notBuiltText && fixedText && first && second && builtOnly)) {
+    if (strict) throw new Error('lane 9 needs entries of every status');
+    return [];
+  }
+  const staleTable = (base.body ?? '').replace(/\| not-built \|/, '| fixed |');
   /** @type {Array<[string, string, Partial<Inputs>]>} */
   const cases = [
     ['an entry deleted', 'uncovered', { text: mutate.deleteEntry(base.text, first.id) }],
@@ -315,8 +364,10 @@ const negatives = (base) => {
           .join('\n'),
       },
     ],
-    ['the PR body table stale', 'the table in the PR body source is stale', { body: staleTable }],
-    ['the ADR table stale', 'the table in ADR 0005 is stale', { adr: staleTable }],
+    ...(base.body === null
+      ? []
+      : [['the PR body table stale', 'the table in the PR body source is stale', { body: staleTable }]]),
+    ...(base.adr === null ? [] : [['the ADR table stale', 'the table in ADR 0005 is stale', { adr: staleTable }]]),
     [
       'a not-built text on the built floor',
       'is on the built floor, not "not-built"',
@@ -327,7 +378,9 @@ const negatives = (base) => {
       'is missing from the built floor, not "fixed"',
       { builtText: base.builtText.split(fixedText.canvas.toLowerCase()).join('') },
     ],
-    ['the NEED YOU colour changed', 'N NEED YOU colour', { warn: 'rgb(255, 138, 128)' }],
+    ...(base.warn === undefined
+      ? []
+      : [['the NEED YOU colour changed', 'N NEED YOU colour', { warn: 'rgb(255, 138, 128)' }]]),
   ];
   return cases.map(([name, expect, change]) => ({ name, expect, input: { ...base, ...change } }));
 };
@@ -335,12 +388,13 @@ const negatives = (base) => {
 /**
  * @param {import('playwright').Browser} browser
  * @param {import('playwright').Page} builtPage
- * @param {{ inventory: Record<string, string>, text: string }} demo
+ * @param {{ inventory: Record<string, string>, text: string }} demo extra built inventory and text the page does not show itself (empty for a screen with no demo)
+ * @param {Spec} [spec]
  */
-export const canvasCompare = async (browser, builtPage, demo) => {
+export const canvasCompare = async (browser, builtPage, demo, spec = MAIN_SPEC) => {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const canvasPage = await ctx.newPage();
-  await renderCanvas(canvasPage, OUT);
+  await renderCanvas(canvasPage, OUT, spec.name);
   const canvasInv = await collect(canvasPage);
   const builtInv = merge(await collect(builtPage), only(demo.inventory, SHARED_FAMILIES));
   writeFileSync(join(OUT, 'inventory-canvas.json'), `${JSON.stringify(canvasInv, null, 1)}\n`);
@@ -359,16 +413,29 @@ export const canvasCompare = async (browser, builtPage, demo) => {
   const gridText = `${gridMarkdown(grid)}\n`;
   writeFileSync(join(OUT, 'pixel-regions.md'), gridText);
 
-  const text = readFileSync(DIFFERENCES, 'utf8').replace(/\r\n/g, '\n');
+  const text = readFileSync(spec.differences, 'utf8').replace(/\r\n/g, '\n');
   const diffs = parseDifferences(text);
   const read = (/** @type {string} */ file) =>
     existsSync(file) ? readFileSync(file, 'utf8').replace(/\r\n/g, '\n') : '';
-  const warn = await builtPage.evaluate(() => {
-    const node = document.querySelector('.warn');
-    return node === null ? null : getComputedStyle(node).color;
-  });
+  const warn = spec.pinWarn
+    ? await builtPage.evaluate(() => {
+        const node = document.querySelector('.warn');
+        return node === null ? null : getComputedStyle(node).color;
+      })
+    : undefined;
   /** @type {Inputs} */
-  const input = { text, canvasText, builtText, canvasInv, builtInv, grid, body: read(PR_BODY), adr: read(ADR), warn };
+  const input = {
+    text,
+    canvasText,
+    builtText,
+    canvasInv,
+    builtInv,
+    grid,
+    body: spec.body === null ? null : read(spec.body),
+    adr: spec.adr === null ? null : read(spec.adr),
+    warn,
+    minEntries: spec.minEntries,
+  };
   const problems = verifyEntries(input);
 
   const onCanvas = await anchors(
@@ -416,20 +483,20 @@ export const canvasCompare = async (browser, builtPage, demo) => {
 
   const layout = await readLayout(composer, compare);
   problems.push(...layoutProblems(layout, 'comparison image'));
-  if (!existsSync(COMMITTED_COMPARE) || statSync(COMMITTED_COMPARE).size < 50_000)
-    problems.push('docs/review/P1-3-review-canvas-compare.png is missing or tiny');
+  if (!existsSync(spec.compare) || statSync(spec.compare).size < 50_000)
+    problems.push(`${spec.compare} is missing or tiny`);
   else {
-    problems.push(...layoutProblems(await readLayout(composer, COMMITTED_COMPARE), 'committed comparison image'));
-    const drift = (await pixelGrid(composer, COMMITTED_COMPARE, compare)).grid.flat().filter((v) => v > 60).length;
+    problems.push(...layoutProblems(await readLayout(composer, spec.compare), 'committed comparison image'));
+    const drift = (await pixelGrid(composer, spec.compare, compare)).grid.flat().filter((v) => v > 60).length;
     if (drift > GRID.cols * GRID.rows * 0.1)
       problems.push(
         `the committed comparison image differs from a fresh one in ${drift} cells, run with WRITE_REVIEW_IMAGE=1`,
       );
   }
-  if (!existsSync(COMMITTED_HEAT) || statSync(COMMITTED_HEAT).size < 3000)
+  if (!existsSync(spec.heat) || statSync(spec.heat).size < 3000)
     problems.push('the committed pixel heatmap is missing');
   if (
-    read(COMMITTED_GRID)
+    read(spec.grid)
       .split('\n')
       .filter((line) => line.startsWith('| R')).length !== GRID.rows
   )
@@ -444,7 +511,7 @@ export const canvasCompare = async (browser, builtPage, demo) => {
   ])
     if (!found.some((problem) => problem.includes(expect)))
       problems.push(`negative test "${name}" did not fail on "${expect}"`);
-  const negativeRuns = negatives(input);
+  const negativeRuns = negatives(input, spec.pinWarn);
   for (const { name, expect, input: mutated } of negativeRuns)
     if (!verifyEntries(mutated).some((problem) => problem.includes(expect)))
       problems.push(`negative test "${name}" did not fail on "${expect}"`);
@@ -459,9 +526,9 @@ export const canvasCompare = async (browser, builtPage, demo) => {
     `${diffs.map((d) => `${d.id} ${d.status} ${d.text}`).join('\n')}\n${numbers}\n`,
   );
   if (process.env.WRITE_REVIEW_IMAGE === '1') {
-    copyFileSync(compare, COMMITTED_COMPARE);
-    copyFileSync(heat, COMMITTED_HEAT);
-    writeFileSync(COMMITTED_GRID, gridText);
+    copyFileSync(compare, spec.compare);
+    copyFileSync(heat, spec.heat);
+    writeFileSync(spec.grid, gridText);
   }
   await ctx.close();
 

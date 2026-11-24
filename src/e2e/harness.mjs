@@ -12,13 +12,13 @@ mkdirSync(OUT, { recursive: true });
 const BIN = join(ROOT, 'bin', 'agent-works.ts');
 
 /**
- * @param {{ demo?: boolean, port: number, intervalMs?: number }} options
+ * @param {{ demo?: boolean, port: number, intervalMs?: number, args?: string[] }} options `args` go to `serve` after the port and home, for example a mode and its config
  */
-export const startHq = async ({ demo = false, port, intervalMs = 1500 }) => {
+export const startHq = async ({ demo = false, port, intervalMs = 1500, args: extra = [] }) => {
   const home = mkdtempSync(join(tmpdir(), 'aw-e2e-'));
   const args = demo
     ? [BIN, '--demo', '--no-open', '--port', String(port)]
-    : [BIN, 'serve', '--port', String(port), '--home', home];
+    : [BIN, 'serve', '--port', String(port), '--home', home, ...extra];
   const child = spawn(process.execPath, args, {
     env: { ...process.env, AGENT_WORKS_HOME: home, AGENT_WORKS_DEMO_INTERVAL_MS: String(intervalMs) },
     stdio: 'ignore',
@@ -108,7 +108,7 @@ export const moods = (/** @type {import('playwright').Page} */ page) =>
 
 export const AXE = join(ROOT, 'src', 'node_modules', 'axe-core', 'axe.min.js');
 
-const NEEDS_CHIP = { fg: '#f5f3ec', bg: '#ef5350', ratio: 3.14 };
+export const NEEDS_CHIP = { fg: '#f5f3ec', bg: '#ef5350', ratio: 3.14 };
 
 /**
  * The one named exception to the 4.5 to 1 contrast gate: the canvas "Needs you" chip
@@ -140,6 +140,10 @@ export const runAxe = async (page, label) => {
     violations: nodes(out.violations, (rule, node) => !isNeedsChip(rule, node)),
     exceptions: nodes(out.violations, isNeedsChip),
     incomplete: nodes(out.incomplete, () => true),
+    blocking: nodes(
+      out.violations.filter((/** @type {any} */ rule) => rule.impact === 'serious' || rule.impact === 'critical'),
+      (rule, node) => !isNeedsChip(rule, node),
+    ),
   };
 };
 

@@ -1,0 +1,285 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "ActionItems.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Action items",
+      "w": 1440,
+      "x": 1520,
+      "y": 1100
+    },
+    "AgentSheet.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Worker file",
+      "w": 1440,
+      "x": 1520,
+      "y": 0
+    },
+    "Boards.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Production boards",
+      "w": 1440,
+      "x": 3040,
+      "y": 1100
+    },
+    "Debug.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Debug",
+      "w": 1440,
+      "x": 4560,
+      "y": 2200
+    },
+    "Main.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Factory floor (HQ)",
+      "w": 1440,
+      "x": 0,
+      "y": 0
+    },
+    "PRs.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "QC gate \u00b7 PRs",
+      "w": 1440,
+      "x": 0,
+      "y": 2200
+    },
+    "PartySelect.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Start the line \u2014 staff your factory",
+      "w": 1429,
+      "x": 3040,
+      "y": 0
+    },
+    "Settings.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Settings \u00b7 Team",
+      "w": 1440,
+      "x": 3040,
+      "y": 2200
+    },
+    "Terminal.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Terminal",
+      "w": 1440,
+      "x": 1520,
+      "y": 2200
+    },
+    "Title.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Title screen",
+      "w": 1440,
+      "x": 0,
+      "y": 1100
+    },
+    "Settings-Workflow.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Settings \u00b7 Workflow",
+      "w": 1440,
+      "x": 0,
+      "y": 3500
+    },
+    "Settings-Stack.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Settings \u00b7 Stack",
+      "w": 1440,
+      "x": 1520,
+      "y": 3500
+    },
+    "Settings-MCP.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Settings \u00b7 MCP",
+      "w": 1440,
+      "x": 3040,
+      "y": 3500
+    },
+    "Settings-Sandbox.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Settings \u00b7 Sandbox",
+      "w": 1440,
+      "x": 4560,
+      "y": 3500
+    },
+    "Settings-Boards.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Settings \u00b7 Boards",
+      "w": 1440,
+      "x": 6080,
+      "y": 3500
+    },
+    "Settings-Project.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Settings \u00b7 Project",
+      "w": 1440,
+      "x": 7600,
+      "y": 3500
+    },
+    "Settings-Lines.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Settings \u00b7 Lines",
+      "w": 1440,
+      "x": 9120,
+      "y": 3500
+    },
+    "Park.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Industrial park (all factories)",
+      "w": 1440,
+      "x": 0,
+      "y": 4760
+    },
+    "Repos.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Repo depot (all repos)",
+      "w": 1440,
+      "x": 1520,
+      "y": 4760
+    },
+    "Docs.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Blueprint room (docs)",
+      "w": 1440,
+      "x": 6080,
+      "y": 2200
+    },
+    "Inbox.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Inbox (all factories)",
+      "w": 1440,
+      "x": 3040,
+      "y": 4760
+    },
+    "NewOrder.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "New order (feature / defect)",
+      "w": 1440,
+      "x": 7600,
+      "y": 2200
+    },
+    "MergeBrief.dc.html": {
+      "expand": "fill",
+      "h": 980,
+      "is_interactive": true,
+      "title": "Merge brief (before you merge)",
+      "w": 1440,
+      "x": 9120,
+      "y": 2200
+    },
+    "Preflight.dc.html": {
+      "expand": "fill",
+      "h": 1700,
+      "is_interactive": true,
+      "title": "Preflight check (before the line starts)",
+      "w": 1440,
+      "x": 4560,
+      "y": 0
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-11-15T10:05:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "title": {
+      "kind": "title1",
+      "maxW": 6000,
+      "text": "Agent Works \u2014 Code factory",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "settings": {
+      "kind": "title1",
+      "maxW": 8000,
+      "text": "Settings tabs",
+      "x": 0,
+      "y": 3230,
+      "w": 240
+    },
+    "multi": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Factories and repos",
+      "x": 0,
+      "y": 4520,
+      "w": 240
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "AgentSheet.dc.html",
+    "PartySelect.dc.html",
+    "Preflight.dc.html",
+    "Title.dc.html",
+    "ActionItems.dc.html",
+    "Boards.dc.html",
+    "PRs.dc.html",
+    "Terminal.dc.html",
+    "Settings.dc.html",
+    "Debug.dc.html",
+    "Settings-Workflow.dc.html",
+    "Settings-Stack.dc.html",
+    "Settings-MCP.dc.html",
+    "Settings-Sandbox.dc.html",
+    "Settings-Boards.dc.html",
+    "Settings-Project.dc.html",
+    "Settings-Lines.dc.html",
+    "Park.dc.html",
+    "Repos.dc.html",
+    "Docs.dc.html",
+    "Inbox.dc.html",
+    "NewOrder.dc.html",
+    "MergeBrief.dc.html"
+  ],
+  "pages": [],
+  "title": "AI Agent Office",
+  "noteOrder": ["title", "settings", "multi"]
+}

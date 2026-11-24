@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Worker file — Byte</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&amp;family=Pixelify+Sans:wght@400;600;700&amp;family=VT323&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#1f2328}
+a{color:#ffca28}a:hover{color:#ffe082}
+button{font-family:inherit}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #ffca28;outline-offset:2px}
+@keyframes blink{0%{opacity:1}50%{opacity:0}100%{opacity:1}}
+@keyframes bob{0%{transform:translateY(0)}50%{transform:translateY(-4px)}100%{transform:translateY(0)}}
+.blink{animation:blink 1s steps(1) infinite}
+.bob{animation:bob 1.2s steps(2) infinite}
+@media (prefers-reduced-motion: reduce){.blink,.bob{animation:none}}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #1f2328; color: #f5f3ec; font-family: 'Pixelify Sans', system-ui, sans-serif; font-size: 16px; box-sizing: border-box; padding: 20px">
+<div style="max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px">
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px">
+<a href="Main.dc.html" style="display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; background: #454b55; color: #f5f3ec; text-decoration: none; border: 3px solid #15181c; box-shadow: inset -3px -3px 0 #2f343b">← Back to factory floor</a>
+<div style="font-family: 'Press Start 2P', monospace; font-size: 11px; color: #c9cdd4">WORKER FILE</div>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+
+<!-- LEFT: portrait + stats -->
+<aside style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+<section aria-label="Agent profile" style="background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; padding: 18px; display: flex; flex-direction: column; align-items: center; gap: 14px">
+<div style="width: 100%; height: 200px; background-color: #d6d0bf; background-image: repeating-linear-gradient(90deg, rgba(0,0,0,0.14) 0 2px, transparent 2px 40px), repeating-linear-gradient(0deg, rgba(0,0,0,0.14) 0 2px, transparent 2px 40px); border: 3px solid #15181c; display: flex; align-items: center; justify-content: center">
+<div class="bob" style="display: flex">
+<svg width="144" height="144" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+<rect x="4" y="1" width="8" height="3" fill="#4a2f27"></rect><rect x="3" y="2" width="1" height="4" fill="#4a2f27"></rect><rect x="12" y="2" width="1" height="4" fill="#4a2f27"></rect><rect x="4" y="3" width="8" height="5" fill="#e0a878"></rect><rect x="4" y="3" width="8" height="1" fill="#4a2f27"></rect><rect x="6" y="5" width="1" height="1" fill="#1f2328"></rect><rect x="9" y="5" width="1" height="1" fill="#1f2328"></rect><rect x="7" y="7" width="2" height="1" fill="#b5654a"></rect><rect x="3" y="8" width="10" height="5" fill="#2fbf71"></rect><rect x="7" y="8" width="2" height="2" fill="#f5f3ec"></rect><rect x="2" y="9" width="1" height="3" fill="#e0a878"></rect><rect x="13" y="9" width="1" height="3" fill="#e0a878"></rect><rect x="5" y="13" width="2" height="3" fill="#3a3355"></rect><rect x="9" y="13" width="2" height="3" fill="#3a3355"></rect>
+<rect x="3" y="0" width="10" height="3" fill="#ffca28"></rect><rect x="4" y="0" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="2" y="3" width="12" height="1" fill="#c79a00"></rect><rect x="3" y="11" width="10" height="1" fill="#fff59d"></rect></svg>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+<h1 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 20px; color: #ffca28">BYTE</h1>
+<div style="font-size: 16px; color: #c9cdd4">Developer · Claude Code · Docker sandbox</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center">
+<span style="font-size: 13px; font-weight: 700; color: #1f2328; background: #66bb6a; padding: 2px 8px">CODING</span>
+<span style="font-size: 13px; font-weight: 700; color: #1f2328; background: #9aa1ab; padding: 2px 8px">IN CAGE 1</span>
+<span style="font-size: 13px; font-weight: 700; color: #1f2328; background: #ffca28; padding: 2px 8px">LV 4</span>
+</div>
+</div>
+</section>
+
+<section aria-label="Stats" style="background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 11px">STATS</h2>
+<sc-for list="{{stats}}" as="st" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 15px"><span>{{st.label}}</span><span style="color: #c9cdd4">{{st.value}}</span></div>
+<div style="height: 14px; background: #15181c; box-shadow: 0 0 0 2px #6b7280"><div style="height: 100%; width: {{st.w}}; background: {{st.color}}; box-shadow: inset 0 -4px 0 rgba(0,0,0,0.25)"></div></div>
+</div>
+</sc-for>
+</section>
+
+<section aria-label="Equipped skills" style="background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 11px">TOOL BELT</h2>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+<sc-for list="{{skills}}" as="sk" hint-placeholder-count="8">
+<div title="{{sk.name}}" style="aspect-ratio: 1; background: #1f2328; border: 3px solid {{sk.border}}; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px">
+<span style="width: 18px; height: 18px; background: {{sk.color}}; box-shadow: inset -4px -4px 0 rgba(0,0,0,0.3)"></span>
+<span style="font-size: 12px; text-align: center; color: {{sk.text}}">{{sk.name}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+</aside>
+
+<!-- RIGHT: tabs -->
+<main style="flex: 999 1 640px; min-width: 0; background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; display: flex; flex-direction: column">
+<div role="tablist" aria-label="Agent panels" style="display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 12px 0; border-bottom: 4px solid #15181c">
+<sc-for list="{{tabs}}" as="tb" hint-placeholder-count="5">
+<button type="button" role="tab" aria-selected="{{tb.sel}}" onClick="{{tb.pick}}" style="min-height: 44px; padding: 0 16px; background: {{tb.bg}}; color: {{tb.fg}}; font-size: 16px; font-weight: 700; border: 3px solid #15181c; border-bottom: none; cursor: pointer">{{tb.label}}</button>
+</sc-for>
+</div>
+
+<!-- Terminal -->
+<sc-if value="{{isTerm}}" hint-placeholder-val="{{ true }}">
+<div style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 14px; color: #c9cdd4"><span>Live session · tmux pane byte:0</span><span>sandbox: sbx-byte · ~/work/my-app</span></div>
+<div style="background: #15181c; border: 3px solid #000; min-height: 480px; padding: 14px 16px; font-family: 'VT323', monospace; font-size: 21px; line-height: 1.2; color: #d6ffe4; display: flex; flex-direction: column; gap: 2px; overflow-x: auto">
+<sc-for list="{{term}}" as="ln" hint-placeholder-count="14">
+<div style="color: {{ln.c}}; white-space: pre">{{ln.t}}</div>
+</sc-for>
+<div><span style="color: #ffca28">❯</span> <span class="blink">█</span></div>
+</div>
+</div>
+</sc-if>
+
+<!-- Shell -->
+<sc-if value="{{isShell}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-size: 14px; color: #c9cdd4">You are inside Byte's sandbox. Commands run as the agent user.</div>
+<div style="background: #15181c; border: 3px solid #000; min-height: 420px; padding: 14px 16px; font-family: 'VT323', monospace; font-size: 21px; line-height: 1.2; color: #d6ffe4; white-space: pre; overflow-x: auto">agent@sbx-byte:~/work/my-app$ git status
+On branch task/03-clerk-sign-in
+Changes not staged for commit:
+  modified:   app/sign-in/page.tsx
+  modified:   tests/sign-in.spec.ts
+agent@sbx-byte:~/work/my-app$ </div>
+<form style="display: flex; gap: 8px">
+<label for="cmd" style="position: absolute; left: -9999px">Command</label>
+<input id="cmd" type="text" placeholder="Type a command…" style="flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; background: #1f2328; color: #f5f3ec; font-family: 'VT323', monospace; font-size: 20px; border: 3px solid #6b7280">
+<button type="button" style="min-height: 44px; padding: 0 16px; background: #66bb6a; color: #1f2328; font-weight: 700; font-size: 16px; border: 3px solid #15181c; cursor: pointer">Run</button>
+</form>
+</div>
+</sc-if>
+
+<!-- Quest -->
+<sc-if value="{{isQuest}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+<div style="background: #f4e7c5; color: #2a1d10; border: 4px solid #7a5236; box-shadow: 6px 6px 0 #15181c; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<div style="font-family: 'Press Start 2P', monospace; font-size: 10px; color: #7a5236">WORK ORDER #03 · FROM DISPATCH</div>
+<h2 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 16px; line-height: 1.5">Add sign-in page with Clerk</h2>
+<p style="margin: 0; font-size: 17px; line-height: 1.4">Create /sign-in using Clerk's hosted components, protect /dashboard, and add a test that a signed-out user gets redirected.</p>
+<div style="font-weight: 700">Done when:</div>
+<ul style="margin: 0; padding-left: 20px; font-size: 16px; line-height: 1.6">
+<li>/sign-in renders and signs a test user in</li>
+<li>/dashboard redirects signed-out users</li>
+<li>CI passes and one PR is open against main</li>
+</ul>
+<div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 15px"><span>Reward: <strong>+1 PR</strong></span><span>Branch: <strong>task/03-clerk-sign-in</strong></span></div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 10px">
+<sc-for list="{{questSteps}}" as="qs" hint-placeholder-count="4">
+<div style="flex: 1 1 140px; display: flex; align-items: center; gap: 8px; padding: 10px; background: #1f2328; border: 3px solid {{qs.color}}; font-size: 15px"><span style="width: 12px; height: 12px; background: {{qs.color}}"></span>{{qs.label}}</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<!-- Messages -->
+<sc-if value="{{isMsg}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<sc-for list="{{msgs}}" as="m" hint-placeholder-count="4">
+<div style="display: flex; justify-content: {{m.align}}">
+<div style="max-width: 70%; background: {{m.bg}}; color: {{m.fg}}; border: 3px solid #15181c; box-shadow: 3px 3px 0 #15181c; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px">
+<span style="font-family: 'Press Start 2P', monospace; font-size: 9px">{{m.from}} · {{m.t}}</span>
+<span style="font-size: 16px; line-height: 1.35">{{m.text}}</span>
+</div>
+</div>
+</sc-for>
+<form style="display: flex; gap: 8px; margin-top: 8px">
+<label for="msg" style="position: absolute; left: -9999px">Message to Byte</label>
+<input id="msg" type="text" placeholder="Message Byte…" style="flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; background: #1f2328; color: #f5f3ec; font-family: inherit; font-size: 16px; border: 3px solid #6b7280">
+<button type="button" style="min-height: 44px; padding: 0 16px; background: #ffca28; color: #1f2328; font-weight: 700; font-size: 16px; border: 3px solid #15181c; cursor: pointer">Send</button>
+</form>
+</div>
+</sc-if>
+
+<!-- Websites -->
+<sc-if value="{{isWeb}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-size: 14px; color: #c9cdd4">Every website Byte tried to reach. Blocked by default until you allow it.</div>
+<div style="overflow-x: auto">
+<table style="width: 100%; border-collapse: collapse; font-size: 16px">
+<thead><tr style="text-align: left; color: #c9cdd4; font-size: 14px"><th style="padding: 8px; border-bottom: 3px solid #15181c">Website</th><th style="padding: 8px; border-bottom: 3px solid #15181c">Tries</th><th style="padding: 8px; border-bottom: 3px solid #15181c">Status</th><th style="padding: 8px; border-bottom: 3px solid #15181c"><span style="position: absolute; left: -9999px">Action</span></th></tr></thead>
+<tbody>
+<sc-for list="{{sites}}" as="s" hint-placeholder-count="5">
+<tr><td style="padding: 8px; font-family: 'VT323', monospace; font-size: 20px; border-bottom: 2px solid #23272d">{{s.host}}</td><td style="padding: 8px; border-bottom: 2px solid #23272d">{{s.n}}</td><td style="padding: 8px; border-bottom: 2px solid #23272d"><span style="font-size: 12px; font-weight: 700; color: #1f2328; background: {{s.color}}; padding: 1px 6px">{{s.status}}</span></td><td style="padding: 8px; border-bottom: 2px solid #23272d; text-align: right"><button type="button" onClick="{{s.toggle}}" style="min-height: 36px; padding: 0 12px; background: #454b55; color: #f5f3ec; font-size: 14px; border: 3px solid #15181c; cursor: pointer">{{s.action}}</button></td></tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+</div>
+</sc-if>
+</main>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":980}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tab: 'term', allowed: { 'registry.npmjs.org': true, 'clerk.com': true } };
+  }
+  renderVals() {
+    var self = this;
+    var tab = this.state.tab;
+    var defs = [['term', 'Terminal'], ['shell', 'Shell'], ['quest', 'Work order'], ['web', 'Sandbox'], ['msg', 'Messages · 1']];
+    var tabs = defs.map(function (d) {
+      var on = d[0] === tab;
+      return { label: d[1], sel: on ? 'true' : 'false', bg: on ? '#ffca28' : '#454b55', fg: on ? '#1f2328' : '#f5f3ec', pick: function () { self.setState({ tab: d[0] }); } };
+    });
+    var al = this.state.allowed;
+    var hosts = [['registry.npmjs.org', 41], ['clerk.com', 6], ['api.clerk.com', 3], ['fonts.googleapis.com', 2], ['telemetry.example.io', 1]];
+    var sites = hosts.map(function (h) {
+      var ok = !!al[h[0]];
+      return { host: h[0], n: h[1], status: ok ? 'ALLOWED' : 'BLOCKED', color: ok ? '#66bb6a' : '#ef5350', action: ok ? 'Block' : 'Allow', toggle: function () { var a = Object.assign({}, self.state.allowed); a[h[0]] = !ok; self.setState({ allowed: a }); } };
+    });
+    return {
+      tabs: tabs,
+      isTerm: tab === 'term', isShell: tab === 'shell', isQuest: tab === 'quest', isMsg: tab === 'msg', isWeb: tab === 'web',
+      stats: [
+        { label: 'Energy (context left)', value: '62%', w: '62%', color: '#66bb6a' },
+        { label: 'Tests passing', value: '11 / 14', w: '79%', color: '#42a5f5' },
+        { label: 'Quest progress', value: '3 of 4 steps', w: '75%', color: '#ffca28' },
+        { label: 'PRs merged (XP)', value: '2', w: '40%', color: '#b06cff' }
+      ],
+      skills: [
+        { name: 'Next.js', color: '#f5f3ec', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'Clerk', color: '#7c5cff', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'Supabase', color: '#2fbf71', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'Stripe', color: '#42a5f5', border: '#6b7280', text: '#c9cdd4' },
+        { name: 'Testing', color: '#ff9f43', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'Git + gh/glab', color: '#ef5350', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'Go', color: '#00add8', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'Kafka', color: '#ffca28', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'IBM MQ', color: '#4589ff', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'Oracle', color: '#c74634', border: '#ffca28', text: '#f5f3ec' },
+        { name: 'Empty', color: '#2f343b', border: '#454b55', text: '#9aa1ab' },
+        { name: 'Empty', color: '#2f343b', border: '#454b55', text: '#9aa1ab' }
+      ],
+      term: [
+        { t: '● Reading app/layout.tsx', c: '#c9cdd4' },
+        { t: '● Edit app/sign-in/page.tsx  (+38 −0)', c: '#66bb6a' },
+        { t: '● Edit middleware.ts  (+12 −2)', c: '#66bb6a' },
+        { t: '● Bash: pnpm test sign-in', c: '#ffca28' },
+        { t: '   ✓ renders the sign-in form', c: '#d6ffe4' },
+        { t: '   ✓ protects /dashboard', c: '#d6ffe4' },
+        { t: '   ✗ signs in a test user — missing CLERK_SECRET_KEY', c: '#ff8a8a' },
+        { t: '● Asked HQ for CLERK_SECRET_KEY (action item sent)', c: '#42a5f5' },
+        { t: '● Writing a mock for the sign-in test meanwhile…', c: '#c9cdd4' },
+        { t: '● Edit tests/sign-in.spec.ts  (+21 −4)', c: '#66bb6a' },
+        { t: '● Bash: git commit -m "feat: clerk sign-in page"', c: '#ffca28' },
+        { t: '   [task/03-clerk-sign-in 4f2a91c] 3 files changed', c: '#d6ffe4' }
+      ],
+      questSteps: [
+        { label: 'Read the codebase', color: '#66bb6a' },
+        { label: 'Build the page', color: '#66bb6a' },
+        { label: 'Tests pass', color: '#ffca28' },
+        { label: 'Open PR', color: '#6b7280' }
+      ],
+      msgs: [
+        { from: 'CAPTAIN', t: '16:20', text: 'Work order T-03 is yours. Keep it to one PR, and don’t touch billing.', align: 'flex-start', bg: '#42a5f5', fg: '#1f2328' },
+        { from: 'BYTE', t: '16:38', text: 'Sign-in page is up. One test needs CLERK_SECRET_KEY, so I asked HQ for it.', align: 'flex-end', bg: '#454b55', fg: '#f5f3ec' },
+        { from: 'PIXEL', t: '16:42', text: 'I changed the navbar in PR #14. Rebase before you open yours?', align: 'flex-start', bg: '#ff9f43', fg: '#1f2328' },
+        { from: 'BYTE', t: '16:43', text: 'Will do after #14 merges.', align: 'flex-end', bg: '#454b55', fg: '#f5f3ec' }
+      ],
+      sites: sites
+    };
+  }
+}
+</script>
+</body>
+</html>

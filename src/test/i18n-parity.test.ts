@@ -1,12 +1,22 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { i18n, initI18n, langFromLocale, persistLang, pickLang, STORAGE_KEY } from '../floor/i18n.ts';
+import {
+  buildResources,
+  i18n,
+  initI18n,
+  langFromLocale,
+  persistLang,
+  pickLang,
+  STORAGE_KEY,
+  type Tree,
+} from '../floor/i18n.ts';
 import { ACTION_KINDS, MOODS, PANEL } from '../floor/model.ts';
-import en from '../locales/en.json' with { type: 'json' };
-import th from '../locales/th.json' with { type: 'json' };
+import en from '../locales/en/floor.json' with { type: 'json' };
+import th from '../locales/th/floor.json' with { type: 'json' };
 
-type Tree = { readonly [key: string]: string | Tree };
+const SRC = join(import.meta.dirname, '..');
+const LOCALES = join(SRC, 'locales');
 
 export const flatten = (tree: Tree, prefix = ''): Record<string, string> =>
   Object.fromEntries(
@@ -76,9 +86,77 @@ export const parityProblems = (a: Tree, b: Tree, langs: readonly [string, string
   ];
 };
 
+export type Locales = Readonly<Record<'en' | 'th', Readonly<Record<string, Tree>>>>;
+
+export const localeProblems = (locales: Locales): string[] => {
+  const [left, right] = [Object.keys(locales.en), Object.keys(locales.th)];
+  return [
+    ...left.filter((name) => !right.includes(name)).map((name) => `${name}: no th file`),
+    ...right.filter((name) => !left.includes(name)).map((name) => `${name}: no en file`),
+    ...left
+      .filter((name) => right.includes(name))
+      .flatMap((name) =>
+        parityProblems(locales.en[name] ?? {}, locales.th[name] ?? {}).map((problem) => `${name}: ${problem}`),
+      ),
+  ];
+};
+
+const readLocales = (): Locales => {
+  const read = (lang: string): Record<string, Tree> =>
+    Object.fromEntries(
+      readdirSync(join(LOCALES, lang))
+        .filter((file) => file.endsWith('.json'))
+        .map((file) => [file.slice(0, -5), JSON.parse(readFileSync(join(LOCALES, lang, file), 'utf8')) as Tree]),
+    );
+  return { en: read('en'), th: read('th') };
+};
+
+const screenIds = (): string[] => {
+  const dir = join(SRC, 'screens');
+  return existsSync(dir) ? readdirSync(dir).filter((name) => existsSync(join(dir, name, 'screen.tsx'))) : [];
+};
+
+const sourceFiles = (): string[] => {
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(dir, entry.name)) : entry.name.endsWith('.tsx') ? [join(dir, entry.name)] : [],
+    );
+  return [join(SRC, 'floor'), join(SRC, 'screens')].filter(existsSync).flatMap(walk);
+};
+
 describe('locale files', () => {
-  it('en.json and th.json have the same keys, the same placeholders and no empty text', () => {
+  it('every namespace has the same keys, the same placeholders and no empty text in en and th', () => {
+    expect(localeProblems(readLocales())).toEqual([]);
+  });
+
+  it('floor.json is a namespace of both languages', () => {
     expect(parityProblems(en, th)).toEqual([]);
+    expect(Object.keys(readLocales().en)).toContain('floor');
+  });
+
+  it('fails on a key dropped from one namespace, and on a namespace with only one language', () => {
+    const full = { en: { floor: en, orders: { a: 'x' } }, th: { floor: th, orders: { a: 'ก' } } };
+    expect(localeProblems(full)).toEqual([]);
+    expect(localeProblems({ ...full, th: { ...full.th, orders: {} } })).toEqual([
+      'orders: missing from the second file: a',
+    ]);
+    expect(localeProblems({ ...full, en: { floor: en } })).toEqual(['orders: no en file']);
+    expect(localeProblems({ ...full, th: { floor: th } })).toEqual(['orders: no th file']);
+  });
+
+  it('every screen has a locale namespace of its own name in both languages', () => {
+    const locales = readLocales();
+    for (const id of screenIds()) {
+      expect(Object.keys(locales.en)).toContain(id);
+      expect(Object.keys(locales.th)).toContain(id);
+    }
+  });
+
+  it('builds resources as <namespace>.<key> from locales/<lang>/<namespace>.json', () => {
+    expect(buildResources({ '../locales/en/floor.json': { a: 'x' }, '../locales/th/orders.json': { b: 'y' } })).toEqual(
+      { en: { translation: { floor: { a: 'x' } } }, th: { translation: { orders: { b: 'y' } } } },
+    );
+    expect(() => buildResources({ '../locales/en.json': {} })).toThrow('not a locale file');
   });
 
   it('the check fails on a key missing from either file', () => {
@@ -124,9 +202,9 @@ describe('locale files', () => {
 
   it('the shipped locale files hold the plural forms their language needs', () => {
     const forms = (tree: Tree) => Object.keys(flatten(tree)).filter((key) => PLURAL.test(key));
-    expect(forms(en)).toContain('floor.hud.boxesTotal_other');
-    expect(forms(en)).toContain('floor.hud.boxesTotal_one');
-    expect(forms(th)).toContain('floor.hud.boxesTotal_other');
+    expect(forms(en)).toContain('hud.boxesTotal_other');
+    expect(forms(en)).toContain('hud.boxesTotal_one');
+    expect(forms(th)).toContain('hud.boxesTotal_other');
   });
 
   it('the check fails on a placeholder one language lost, and on empty text', () => {
@@ -141,25 +219,26 @@ describe('locale files', () => {
       ...PANEL.map((station) => `floor.station.${station}`),
       ...ACTION_KINDS.map((kind) => `floor.actions.kind.${kind}`),
     ];
-    expect(wanted.filter((key) => !keys.includes(key))).toEqual([]);
+    expect(wanted.filter((key) => !keys.includes(key.replace(/^floor\./, '')))).toEqual([]);
   });
 
-  it('every key a component asks for exists in both files', () => {
-    const dir = join(import.meta.dirname, '../floor');
-    const source = readdirSync(dir)
-      .filter((name) => name.endsWith('.tsx'))
-      .map((name) => readFileSync(join(dir, name), 'utf8'))
+  it('every key a component asks for exists in both files of its namespace', () => {
+    const source = sourceFiles()
+      .map((file) => readFileSync(file, 'utf8'))
       .join('\n');
-    const asked = [...source.matchAll(/\bt\('(floor\.[\w.]+)'/g)].map((match) => match[1] ?? '');
-    expect(asked.length).toBeGreaterThan(20);
-    const have = Object.keys(withoutPlurals(flatten(en)));
-    expect(asked.filter((key) => !have.includes(key))).toEqual([]);
-    expect(asked.filter((key) => !(key in withoutPlurals(flatten(th))))).toEqual([]);
+    const asked = [...source.matchAll(/\bt\('([\w-]+)\.([\w.]+)'/g)].map((match) => [match[1] ?? '', match[2] ?? '']);
+    expect(asked.filter(([namespace]) => namespace === 'floor').length).toBeGreaterThan(20);
+    const locales = readLocales();
+    const missing = (lang: 'en' | 'th') =>
+      asked
+        .filter(([namespace, key]) => !((key ?? '') in withoutPlurals(flatten(locales[lang][namespace ?? ''] ?? {}))))
+        .map(([namespace, key]) => `${lang}: ${namespace}.${key}`);
+    expect([...missing('en'), ...missing('th')]).toEqual([]);
   });
 
   it('says Demo data in the chip and the Debug mode line, as the canvas does', () => {
-    expect(en.floor.hud.demo).toBe('Demo data');
-    expect(en.floor.debug.modeDemo).toBe(en.floor.hud.demo);
+    expect(en.hud.demo).toBe('Demo data');
+    expect(en.debug.modeDemo).toBe(en.hud.demo);
   });
 
   it('keeps technical terms in English inside Thai text', () => {
@@ -201,6 +280,6 @@ describe('language choice', () => {
     await initI18n('th');
     i18n.addResourceBundle('en', 'translation', { probe: 'english only' });
     expect(i18n.t('probe', { lng: 'th' })).toBe('english only');
-    expect(i18n.t('floor.hud.demo', { lng: 'th' })).toBe(th.floor.hud.demo);
+    expect(i18n.t('floor.hud.demo', { lng: 'th' })).toBe(th.hud.demo);
   });
 });

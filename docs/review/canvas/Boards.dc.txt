@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Works — production boards</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&amp;family=Silkscreen&amp;family=Press+Start+2P&amp;family=VT323&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#1f2328}
+a{color:#ffca28}a:hover{color:#f5f3ec}
+button,select{font-family:inherit}
+button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #ffca28;outline-offset:2px}
+@keyframes bob{0%{transform:translateY(0)}50%{transform:translateY(-1px)}100%{transform:translateY(0)}}
+@keyframes jump{0%{transform:translateY(0)}30%{transform:translateY(-3px)}60%{transform:translateY(0)}100%{transform:translateY(0)}}
+@keyframes blink{0%{opacity:1}50%{opacity:0.15}100%{opacity:1}}
+@keyframes tA{0%{opacity:1}50%{opacity:0}100%{opacity:1}}
+@keyframes tB{0%{opacity:0}50%{opacity:1}100%{opacity:0}}
+@keyframes zz{0%{transform:translate(0,0);opacity:0}20%{opacity:1}100%{transform:translate(4px,-8px);opacity:0}}
+@keyframes rise{0%{transform:translateY(3px);opacity:0}15%{opacity:1}80%{opacity:1}100%{transform:translateY(-10px);opacity:0}}
+@keyframes walkx{0%{transform:translateX(0)}45%{transform:translateX(176px)}55%{transform:translateX(176px)}100%{transform:translateX(0)}}
+@keyframes belt{0%{transform:translateX(0)}100%{transform:translateX(30px)}}
+@keyframes press{0%{transform:translateY(0)}50%{transform:translateY(3px)}100%{transform:translateY(0)}}
+@keyframes pop{0%{transform:translate(-50%,-6px);opacity:0}10%{transform:translate(-50%,0);opacity:1}100%{transform:translate(-50%,0);opacity:1}}
+.bob{animation:bob .8s steps(2) infinite}
+.jump{animation:jump .8s steps(4) infinite}
+.blink{animation:blink 1s steps(1) infinite}
+.typeA{animation:tA .3s steps(1) infinite}
+.typeB{animation:tB .3s steps(1) infinite}
+.hide{opacity:0}
+.zz{animation:zz 2s steps(8) infinite}
+.rise{animation:rise 2.6s steps(12) infinite}
+.walkx{animation:walkx 14s steps(70) infinite}
+.belt{animation:belt 2.4s steps(15) infinite}
+.press{animation:press 1.2s steps(2) infinite}
+.pop{animation:pop .5s steps(5) both}
+@media (prefers-reduced-motion: reduce){.bob,.jump,.blink,.typeA,.typeB,.zz,.rise,.walkx,.belt,.press,.pop{animation:none}.typeB{opacity:0}}
+@media (max-width: 1000px){.hud{position:static !important;transform:none !important;width:auto !important;max-width:none !important;margin:8px 8px 0 !important}}
+</style>
+</helmet>
+<div style="position: relative; min-height: 100vh; background: #1f2328; color: #f5f3ec; font-family: 'Pixelify Sans', system-ui, sans-serif; font-size: 14px">
+<div aria-hidden="true" style="position: absolute; left: 0; right: 0; top: 0">
+<svg viewBox="0 0 480 270" width="100%" shape-rendering="crispEdges" aria-hidden="true" style="display: block; image-rendering: pixelated">
+<defs>
+<pattern id="yard" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="#5a5f66"></rect><rect x="3" y="5" width="1" height="1" fill="#666b73"></rect><rect x="11" y="12" width="1" height="1" fill="#4e535a"></rect></pattern>
+<pattern id="grass" width="12" height="12" patternUnits="userSpaceOnUse"><rect width="12" height="12" fill="#4a8c3f"></rect><rect x="2" y="3" width="1" height="1" fill="#5fa552"></rect><rect x="8" y="8" width="1" height="1" fill="#3d7a34"></rect></pattern>
+<pattern id="floor" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="#d6d0bf"></rect><rect width="16" height="1" fill="#c4bdaa"></rect><rect width="1" height="16" fill="#c4bdaa"></rect><rect x="6" y="9" width="1" height="1" fill="#cbc4b1"></rect></pattern>
+<pattern id="mesh" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="transparent"></rect><rect width="1" height="1" fill="#6b7280" opacity="0.35"></rect><rect x="2" y="2" width="1" height="1" fill="#6b7280" opacity="0.35"></rect></pattern>
+<pattern id="roof" width="6" height="14" patternUnits="userSpaceOnUse"><rect width="6" height="14" fill="#8a929c"></rect><rect width="2" height="14" fill="#9aa2ac"></rect><rect x="5" width="1" height="14" fill="#6f7680"></rect></pattern>
+<pattern id="haz" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#ffca28"></rect><rect width="4" height="8" fill="#15181c" transform="skewX(-30)"></rect></pattern>
+<pattern id="belt" width="6" height="10" patternUnits="userSpaceOnUse"><rect width="6" height="10" fill="#3a3f4a"></rect><rect width="1" height="10" fill="#2a2e36"></rect></pattern>
+<symbol id="tree" viewBox="0 0 14 16" width="14" height="16"><rect x="3" y="0" width="8" height="2" fill="#2f7a2b"></rect><rect x="1" y="2" width="12" height="7" fill="#3e9a38"></rect><rect x="0" y="4" width="14" height="4" fill="#3e9a38"></rect><rect x="2" y="2" width="4" height="2" fill="#6cc160"></rect><rect x="2" y="9" width="10" height="2" fill="#2f7a2b"></rect><rect x="6" y="11" width="2" height="3" fill="#6b4220"></rect><rect x="2" y="14" width="10" height="2" fill="#000" opacity="0.2"></rect></symbol>
+<symbol id="crate" viewBox="0 0 12 9" width="12" height="9"><rect width="12" height="9" fill="#8d6e63"></rect><rect x="1" y="1" width="10" height="7" fill="#c49a6c"></rect><rect x="1" y="4" width="10" height="1" fill="#8d6e63"></rect></symbol>
+</defs>
+
+<!-- yard -->
+<rect width="480" height="270" fill="url(#yard)"></rect>
+<rect x="0" y="0" width="480" height="20" fill="url(#grass)"></rect><rect x="0" y="258" width="480" height="12" fill="url(#grass)"></rect>
+<use href="#tree" x="100" y="3"></use><use href="#tree" x="150" y="3"></use><use href="#tree" x="206" y="3"></use><use href="#tree" x="262" y="3"></use><use href="#tree" x="318" y="3"></use><use href="#tree" x="372" y="3"></use>
+<use href="#tree" x="120" y="255"></use><use href="#tree" x="200" y="255"></use><use href="#tree" x="280" y="255"></use><use href="#tree" x="350" y="255"></use>
+<rect x="20" y="40" width="1" height="200" fill="#ffca28" opacity="0.6"></rect><rect x="458" y="40" width="1" height="200" fill="#ffca28" opacity="0.6"></rect>
+<rect x="0" y="150" width="92" height="18" fill="#6b7078"></rect><rect x="0" y="158" width="92" height="1" fill="#ffca28"></rect>
+
+<!-- building shell -->
+<rect x="90" y="24" width="304" height="230" fill="#15181c"></rect>
+<rect x="93" y="27" width="298" height="18" fill="url(#roof)"></rect>
+<rect x="186" y="29" width="112" height="13" fill="#15181c"></rect><rect x="187" y="30" width="110" height="11" fill="#ffca28"></rect>
+<text x="242" y="38" text-anchor="middle" font-family="Silkscreen" font-size="6" fill="#15181c">AGENT WORKS · 01</text>
+<rect x="96" y="45" width="292" height="206" fill="url(#floor)"></rect>
+<rect x="90" y="150" width="6" height="18" fill="url(#floor)"></rect>
+
+
+<!-- dispatch office (lead) -->
+<rect x="98" y="48" width="44" height="54" fill="#cfe6f2"></rect><rect x="98" y="48" width="44" height="54" fill="url(#mesh)" opacity="0.4"></rect>
+<rect x="98" y="48" width="44" height="2" fill="#546e7a"></rect><rect x="98" y="100" width="44" height="2" fill="#546e7a"></rect><rect x="98" y="48" width="2" height="54" fill="#546e7a"></rect><rect x="140" y="48" width="2" height="54" fill="#546e7a"></rect>
+<rect x="112" y="100" width="14" height="2" fill="#cfe6f2"></rect>
+<rect x="101" y="51" width="38" height="14" fill="#15181c"></rect><rect x="102" y="52" width="36" height="12" fill="#f5f3ec"></rect>
+<text x="120" y="56.4" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#c62828">ORDERS</text>
+<rect x="104" y="58" width="5" height="3" fill="#9aa1ab"></rect><rect x="110" y="58" width="5" height="3" fill="#42a5f5"></rect><rect x="116" y="58" width="5" height="3" fill="#ef5350"></rect><rect x="122" y="58" width="5" height="3" fill="#ffca28"></rect><rect x="128" y="58" width="5" height="3" fill="#66bb6a"></rect><rect x="134" y="58" width="3" height="3" fill="#66bb6a"></rect>
+<rect x="104" y="72" width="32" height="6" fill="#78909c"></rect><rect x="104" y="77" width="32" height="1.5" fill="#455a64"></rect>
+<rect x="107" y="67" width="10" height="6" fill="#15181c"></rect><rect x="108" y="68" width="8" height="4" fill="#0d1a24"></rect><rect x="109" y="69" width="5" height="1" fill="#42a5f5"></rect>
+<rect x="124" y="67" width="10" height="6" fill="#15181c"></rect><rect x="125" y="68" width="8" height="4" fill="#0d1a24"></rect><rect class="blink" x="126" y="69" width="5" height="1" fill="#66bb6a"></rect>
+<text x="120" y="98.6" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#455a64">DISPATCH</text>
+
+<!-- break room -->
+<rect x="145" y="48" width="63" height="54" fill="#e8d9c4"></rect>
+<rect x="145" y="48" width="63" height="2" fill="#6b7280"></rect><rect x="145" y="48" width="2" height="54" fill="#6b7280"></rect><rect x="206" y="48" width="2" height="54" fill="#6b7280"></rect>
+<rect x="149" y="52" width="9" height="15" fill="#c62828"></rect><rect x="150" y="54" width="7" height="6" fill="#90caf9"></rect><rect x="151" y="62" width="2" height="2" fill="#ffca28"></rect><rect x="154" y="62" width="2" height="2" fill="#66bb6a"></rect>
+<rect x="161" y="52" width="8" height="10" fill="#9aa1ab"></rect><rect x="163" y="54" width="4" height="3" fill="#15181c"></rect>
+<rect x="152" y="91" width="50" height="6" fill="#26a69a"></rect><rect x="152" y="89" width="50" height="3" fill="#00796b"></rect>
+<text x="176.5" y="100.4" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#5d4037">BREAK +ENERGY</text>
+
+<!-- firewall -->
+<rect x="211" y="48" width="57" height="54" fill="#3a2a2e"></rect>
+<rect x="211" y="48" width="57" height="2" fill="#ef5350"></rect><rect x="211" y="100" width="57" height="2" fill="#ef5350"></rect><rect x="211" y="48" width="2" height="54" fill="#ef5350"></rect><rect x="266" y="48" width="2" height="54" fill="#ef5350"></rect>
+<rect x="213" y="50" width="53" height="7" fill="#15181c"></rect><text x="239.5" y="55.4" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#ef5350">FIREWALL</text>
+<rect x="216" y="60" width="9" height="6" fill="#66bb6a"></rect><text x="220.5" y="64.4" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">git</text>
+<rect x="254" y="60" width="9" height="6" fill="#66bb6a"></rect><text x="258.5" y="64.4" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">npm</text>
+<rect x="216" y="70" width="4" height="24" fill="#454b55"></rect><rect x="259" y="70" width="4" height="24" fill="#454b55"></rect>
+<rect class="blink" x="220" y="74" width="39" height="1" fill="#ff5252"></rect><rect x="220" y="80" width="39" height="1" fill="#ff5252"></rect><rect class="blink" x="220" y="86" width="39" height="1" fill="#ff5252"></rect><rect x="220" y="92" width="39" height="1" fill="#ff5252"></rect>
+<g class="blink"><rect x="224" y="82" width="7" height="6" fill="#ef5350"></rect><rect x="227" y="83" width="1" height="2.5" fill="#f5f3ec"></rect></g>
+<g class="blink"><rect x="236" y="88" width="7" height="6" fill="#ef5350"></rect><rect x="239" y="89" width="1" height="2.5" fill="#f5f3ec"></rect></g>
+<g class="blink"><rect x="248" y="76" width="7" height="6" fill="#ef5350"></rect><rect x="251" y="77" width="1" height="2.5" fill="#f5f3ec"></rect></g>
+<text x="239.5" y="99.6" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#ffb3b3">3 BLOCKED · 2 ALLOWED</text>
+
+<!-- PR rack -->
+<rect x="271" y="48" width="48" height="54" fill="#cbc4b1"></rect>
+<text x="295" y="54" text-anchor="middle" font-family="Silkscreen" font-size="3.2" fill="#454b55">PR RACK</text>
+<rect x="274" y="57" width="42" height="2" fill="#e65100"></rect><rect x="274" y="76" width="42" height="2" fill="#e65100"></rect>
+<rect x="276" y="61" width="9" height="7" fill="#66bb6a"></rect><text x="280.5" y="66" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">#11</text>
+<rect x="287" y="61" width="9" height="7" fill="#66bb6a"></rect><text x="291.5" y="66" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">#12</text>
+<rect class="blink" x="298" y="61" width="9" height="7" fill="#ffca28"></rect><text x="302.5" y="66" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">#14</text>
+<rect x="276" y="69" width="9" height="6" fill="#9aa1ab"></rect><text x="280.5" y="73.6" text-anchor="middle" font-family="VT323" font-size="4" fill="#15181c">#15</text>
+<text class="rise" x="295" y="92" text-anchor="middle" font-family="Press Start 2P" font-size="4" fill="#66bb6a" stroke="#15181c" stroke-width="0.6" paint-order="stroke">+50 XP</text>
+
+<!-- shipping dock -->
+<rect x="322" y="48" width="64" height="196" fill="#b9b4a6"></rect>
+<rect x="322" y="48" width="2" height="196" fill="#6b7280"></rect>
+<rect x="386" y="80" width="5" height="70" fill="#9aa1ab"></rect><rect x="386" y="80" width="5" height="70" fill="url(#roof)" opacity="0.6"></rect>
+<rect x="326" y="52" width="56" height="6" fill="url(#haz)"></rect>
+<text x="354" y="64" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#15181c">SHIPPING</text>
+<rect x="335" y="72" width="38" height="78" fill="#15181c"></rect><rect x="337" y="74" width="34" height="64" fill="#eceff1"></rect><rect x="337" y="138" width="34" height="11" fill="#1565c0"></rect><rect x="341" y="140" width="26" height="4" fill="#90caf9"></rect>
+<text x="354" y="81" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#15181c">v0.1</text>
+<use href="#crate" x="340" y="85"></use><use href="#crate" x="356" y="85"></use><use href="#crate" x="340" y="96"></use><use href="#crate" x="356" y="96"></use>
+<rect x="340" y="107" width="12" height="9" fill="none" stroke="#9aa1ab" stroke-width="0.6" stroke-dasharray="1 1"></rect><rect x="356" y="107" width="12" height="9" fill="none" stroke="#9aa1ab" stroke-width="0.6" stroke-dasharray="1 1"></rect>
+<text x="354" y="128" text-anchor="middle" font-family="Silkscreen" font-size="3.4" fill="#454b55">4 / 9 LOADED</text>
+<rect x="326" y="160" width="56" height="34" fill="#cbc4b1"></rect>
+<text x="354" y="167" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#454b55">SHIPMENTS</text>
+<rect x="329" y="171" width="5" height="4" fill="#ff77a8" stroke="#15181c" stroke-width="0.4"></rect><text x="336" y="174.6" font-family="VT323" font-size="4" fill="#15181c">S-1 sign-in · L1+L3</text>
+<rect x="329" y="180" width="5" height="4" fill="#26c6da" stroke="#15181c" stroke-width="0.4"></rect><text x="336" y="183.6" font-family="VT323" font-size="4" fill="#15181c">S-2 webhook · L2</text>
+<text x="354" y="191" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#454b55">truck waits for all PRs</text>
+<rect x="326" y="230" width="56" height="10" fill="url(#haz)"></rect>
+
+<!-- production lines -->
+<g opacity="1"><rect x="100" y="108" width="40" height="40" fill="#b9b4a6"></rect><rect x="100" y="108" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="100" y="108" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="146" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="108" width="2" height="40" fill="#6b7280"></rect>
+<rect x="138" y="108" width="2" height="40" fill="#6b7280"></rect><rect x="138" y="122" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="137" y="119" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="137.5" y="119.5" width="2" height="2" fill="#66bb6a"></rect>
+<text x="120.0" y="144.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 1 · BYTE</text></g>
+<g opacity="0"><rect x="104" y="140.5" width="32" height="5" fill="#15181c"></rect><text x="120.0" y="144.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · BYTE</text></g>
+<rect x="106" y="118" width="26" height="5" fill="#8d6e63"></rect><rect x="106" y="122" width="26" height="1.2" fill="#5d4037"></rect><rect x="114" y="104" width="10" height="7" fill="#15181c"></rect><rect x="115" y="105" width="8" height="5" fill="#0d1a24"></rect><rect x="116" y="106" width="5" height="1" fill="#66bb6a"></rect><rect class="blink" x="116" y="108" width="4" height="1" fill="#66bb6a"></rect>
+<g opacity="1"><rect x="143" y="108" width="40" height="40" fill="#b9b4a6"></rect><rect x="143" y="108" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="143" y="108" width="40" height="2" fill="#6b7280"></rect><rect x="143" y="146" width="40" height="2" fill="#6b7280"></rect><rect x="143" y="108" width="2" height="40" fill="#6b7280"></rect>
+<rect x="181" y="108" width="2" height="40" fill="#6b7280"></rect><rect x="181" y="122" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="180" y="119" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="180.5" y="119.5" width="2" height="2" fill="#ffca28"></rect>
+<text x="163.0" y="144.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 2 · PIXEL</text></g>
+<g opacity="0"><rect x="147" y="140.5" width="32" height="5" fill="#15181c"></rect><text x="163.0" y="144.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · PIXEL</text></g>
+<rect x="149" y="118" width="26" height="5" fill="#8d6e63"></rect><rect x="149" y="122" width="26" height="1.2" fill="#5d4037"></rect><rect x="157" y="104" width="10" height="7" fill="#15181c"></rect><rect x="158" y="105" width="8" height="5" fill="#0d1a24"></rect><rect x="159" y="106" width="5" height="1" fill="#ffca28"></rect><rect x="159" y="108" width="4" height="1" fill="#ffca28"></rect><rect x="158" y="124" width="8" height="7" fill="#454b55"></rect><rect x="159" y="125" width="6" height="4" fill="#6b7280"></rect>
+<rect x="186" y="122" width="138" height="12" fill="#15181c"></rect><rect x="187" y="123" width="136" height="10" fill="url(#belt)"></rect>
+<rect x="186" y="114" width="44" height="7" fill="#15181c"></rect><rect x="187" y="115" width="6" height="5" fill="#ffca28"></rect>
+<text x="195" y="119" font-family="Silkscreen" font-size="3.2" fill="#f5f3ec">L1 my-app-web</text>
+<g opacity="1"><rect x="100" y="152" width="40" height="40" fill="#b9b4a6"></rect><rect x="100" y="152" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="100" y="152" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="190" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="152" width="2" height="40" fill="#6b7280"></rect>
+<rect x="138" y="152" width="2" height="40" fill="#6b7280"></rect><rect x="138" y="166" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="137" y="163" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="137.5" y="163.5" width="2" height="2" fill="#ef5350"></rect>
+<text x="120.0" y="188.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 3 · NOVA</text></g>
+<g opacity="0"><rect x="104" y="184.5" width="32" height="5" fill="#15181c"></rect><text x="120.0" y="188.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · NOVA</text></g>
+<rect x="106" y="162" width="26" height="5" fill="#8d6e63"></rect><rect x="106" y="166" width="26" height="1.2" fill="#5d4037"></rect><rect x="114" y="148" width="10" height="7" fill="#15181c"></rect><rect class="blink" x="115" y="149" width="8" height="5" fill="#7f1d1d"></rect><rect x="118.5" y="149.5" width="1" height="2.5" fill="#f5f3ec"></rect>
+<g opacity="1"><rect x="143" y="152" width="40" height="40" fill="#b9b4a6"></rect><rect x="143" y="152" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="143" y="152" width="40" height="2" fill="#6b7280"></rect><rect x="143" y="190" width="40" height="2" fill="#6b7280"></rect><rect x="143" y="152" width="2" height="40" fill="#6b7280"></rect>
+<rect x="181" y="152" width="2" height="40" fill="#6b7280"></rect><rect x="181" y="166" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="180" y="163" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="180.5" y="163.5" width="2" height="2" fill="#9aa1ab"></rect>
+<text x="163.0" y="188.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 4 · ECHO</text></g>
+<g opacity="0"><rect x="147" y="184.5" width="32" height="5" fill="#15181c"></rect><text x="163.0" y="188.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · ECHO</text></g>
+<rect x="149" y="162" width="26" height="5" fill="#8d6e63"></rect><rect x="149" y="166" width="26" height="1.2" fill="#5d4037"></rect><rect x="157" y="148" width="10" height="7" fill="#15181c"></rect><rect x="158" y="149" width="8" height="5" fill="#0d1a24"></rect><rect x="159" y="150" width="5" height="1" fill="#454b55"></rect><rect x="159" y="152" width="4" height="1" fill="#454b55"></rect><rect x="158" y="168" width="8" height="7" fill="#454b55"></rect><rect x="159" y="169" width="6" height="4" fill="#6b7280"></rect>
+<rect x="186" y="166" width="138" height="12" fill="#15181c"></rect><rect x="187" y="167" width="136" height="10" fill="url(#belt)"></rect>
+<rect x="186" y="158" width="44" height="7" fill="#15181c"></rect><rect x="187" y="159" width="6" height="5" fill="#42a5f5"></rect>
+<text x="195" y="163" font-family="Silkscreen" font-size="3.2" fill="#f5f3ec">L2 my-app-api</text>
+<g opacity="1"><rect x="100" y="196" width="40" height="40" fill="#b9b4a6"></rect><rect x="100" y="196" width="40" height="40" fill="url(#mesh)"></rect>
+<rect x="100" y="196" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="234" width="40" height="2" fill="#6b7280"></rect><rect x="100" y="196" width="2" height="40" fill="#6b7280"></rect>
+<rect x="138" y="196" width="2" height="40" fill="#6b7280"></rect><rect x="138" y="210" width="2" height="12" fill="#b9b4a6"></rect>
+<rect x="137" y="207" width="3" height="3" fill="#15181c"></rect><rect class="blink" x="137.5" y="207.5" width="2" height="2" fill="#66bb6a"></rect>
+<text x="120.0" y="232.5" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#454b55">CAGE 5 · TEMP-1</text></g>
+<g opacity="0"><rect x="104" y="228.5" width="32" height="5" fill="#15181c"></rect><text x="120.0" y="232.1" text-anchor="middle" font-family="Silkscreen" font-size="2.8" fill="#90caf9">SUBAGENT · TEMP-1</text></g>
+<rect x="106" y="206" width="26" height="5" fill="#8d6e63"></rect><rect x="106" y="210" width="26" height="1.2" fill="#5d4037"></rect><rect x="114" y="192" width="10" height="7" fill="#15181c"></rect><rect x="115" y="193" width="8" height="5" fill="#0d1a24"></rect><rect x="116" y="194" width="5" height="1" fill="#66bb6a"></rect><rect class="blink" x="116" y="196" width="4" height="1" fill="#66bb6a"></rect>
+<rect x="143" y="198" width="38" height="36" fill="#cbc4b1"></rect><rect x="143" y="198" width="38" height="36" fill="url(#mesh)"></rect>
+<rect x="146" y="203" width="32" height="9" fill="#ff7043"></rect><text x="162" y="209.4" text-anchor="middle" font-family="Silkscreen" font-size="3.4" fill="#15181c">TEMP BAY</text>
+<text x="162" y="219" text-anchor="middle" font-family="VT323" font-size="3.8" fill="#454b55">hired for L3 · 4m</text>
+<text x="162" y="225" text-anchor="middle" font-family="VT323" font-size="3.8" fill="#454b55">leaves after 15m idle</text>
+<rect x="186" y="210" width="138" height="12" fill="#15181c"></rect><rect x="187" y="211" width="136" height="10" fill="url(#belt)"></rect>
+<rect x="186" y="202" width="44" height="7" fill="#15181c"></rect><rect x="187" y="203" width="6" height="5" fill="#b06cff"></rect>
+<text x="195" y="207" font-family="Silkscreen" font-size="3.2" fill="#f5f3ec">L3 shared-contracts ⇄</text>
+<g opacity="1"><g class="blink"><rect x="232" y="179" width="22" height="7" fill="#ef5350"></rect><text x="243" y="184" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#f5f3ec">BLOCKED</text></g></g><g opacity="0"><g class="blink"><rect x="230" y="179" width="26" height="7" fill="#ffa726"></rect><text x="243" y="184" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#15181c">ASKS YOU</text></g></g>
+
+<!-- boxes on the belts (tag = shipment) -->
+<g class="blink"><rect x="187" y="112" width="22" height="6" fill="#ef5350"></rect><text x="198" y="116.6" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#f5f3ec">HOTFIX</text></g>
+<g class="jump"><rect x="188" y="124" width="9" height="8" fill="#ef5350"></rect><rect x="188" y="127.5" width="9" height="1" fill="#b71c1c"></rect><text x="192.5" y="129.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">D1</text></g>
+<g class="belt">
+<g><rect x="204" y="124" width="9" height="8" fill="#42a5f5"></rect><rect x="204" y="127.5" width="9" height="1" fill="#1565c0"></rect><text x="208.5" y="129.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">T3</text><rect x="209" y="123" width="4" height="3" fill="#ff77a8" stroke="#15181c" stroke-width="0.4"></rect></g>
+<g><rect x="208" y="212" width="9" height="8" fill="#42a5f5"></rect><rect x="208" y="215.5" width="9" height="1" fill="#1565c0"></rect><text x="212.5" y="217.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">C2</text><rect x="213" y="211" width="4" height="3" fill="#ff77a8" stroke="#15181c" stroke-width="0.4"></rect></g>
+</g>
+<g class="jump"><rect x="196" y="168" width="9" height="8" fill="#ef5350"></rect><rect x="196" y="171.5" width="9" height="1" fill="#b71c1c"></rect><text x="200.5" y="173.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">T6</text><rect x="201" y="167" width="4" height="3" fill="#26c6da" stroke="#15181c" stroke-width="0.4"></rect></g>
+<g><rect x="286" y="124" width="9" height="8" fill="#ffca28"></rect><rect x="286" y="127.5" width="9" height="1" fill="#c79a00"></rect><text x="290.5" y="129.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">T5</text></g>
+<g><rect x="238" y="212" width="9" height="8" fill="#9aa1ab"></rect><rect x="238" y="215.5" width="9" height="1" fill="#6b7280"></rect><text x="242.5" y="217.6" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">C1</text></g>
+
+<!-- shared stations across all lines -->
+<rect x="250" y="106" width="3" height="128" fill="#455a64"></rect><rect x="264" y="106" width="3" height="128" fill="#455a64"></rect><rect x="250" y="104" width="17" height="4" fill="#ffa726"></rect>
+<text x="258.5" y="241" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#e65100">TEST</text>
+<rect class="blink" x="253" y="127" width="11" height="1" fill="#ff7043"></rect><rect x="253" y="171" width="11" height="1" fill="#ff7043"></rect><rect class="blink" x="253" y="215" width="11" height="1" fill="#ff7043"></rect>
+<rect x="276" y="104" width="22" height="5" fill="#15181c"></rect><rect x="277" y="105" width="20" height="3" fill="#ffca28"></rect>
+<rect x="277" y="108" width="2" height="126" fill="#c79a00"></rect><rect x="295" y="108" width="2" height="126" fill="#c79a00"></rect>
+<g class="press"><rect x="288" y="117" width="4" height="5" fill="#455a64"></rect></g>
+<rect x="299" y="110" width="4" height="10" fill="#15181c"></rect><rect class="blink" x="300" y="111" width="2" height="2" fill="#ef5350"></rect><rect x="300" y="114" width="2" height="2" fill="#5d4037"></rect><rect x="300" y="117" width="2" height="2" fill="#66bb6a"></rect>
+<text x="287" y="241" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#c79a00">QC</text>
+<rect x="305" y="106" width="14" height="4" fill="#2e7d32"></rect><rect x="305" y="106" width="2" height="128" fill="#2e7d32"></rect><rect x="317" y="106" width="2" height="128" fill="#2e7d32"></rect>
+<g class="press"><rect x="309" y="121" width="6" height="3" fill="#66bb6a"></rect><rect x="309" y="165" width="6" height="3" fill="#66bb6a"></rect><rect x="309" y="209" width="6" height="3" fill="#66bb6a"></rect></g>
+<text x="312" y="241" text-anchor="middle" font-family="Silkscreen" font-size="3" fill="#2e7d32">MERGE</text>
+<text x="205" y="244" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#bdb6a2">3 LINES · 1 FACTORY</text>
+
+<!-- WORKERS -->
+<g transform="translate(114,80)">
+<g opacity="0"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="bob">
+<rect x="1" y="-2" width="8" height="2" fill="#f5f3ec"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#9aa1ab"></rect><rect x="4" y="-2" width="2" height="2" fill="#ef5350"></rect><rect x="9" y="4" width="3" height="4" fill="#8d6e63"></rect><rect x="9.5" y="4.6" width="2" height="3" fill="#f5f3ec"></rect>
+<rect x="1" y="1" width="1" height="2" fill="#4a2f27"></rect><rect x="8" y="1" width="1" height="2" fill="#4a2f27"></rect>
+<rect x="2" y="1" width="6" height="4" fill="#f2c79b"></rect>
+<rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="#d97757"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="typeA" x="0" y="6" width="1" height="3" fill="#f2c79b"></rect><rect class="typeA" x="9" y="6" width="1" height="3" fill="#f2c79b"></rect>
+<rect class="typeB" x="0" y="5" width="1" height="3" fill="#f2c79b"></rect><rect class="typeB" x="9" y="7" width="1" height="3" fill="#f2c79b"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV7</tspan> CAPTAIN</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="17.04" height="1.4" fill="#66bb6a"></rect>
+<g opacity="1"><rect x="11" y="-3" width="11" height="6" fill="#f5f3ec"></rect><rect x="11" y="-3" width="11" height="0.6" fill="#15181c"></rect><rect x="11" y="2.4" width="11" height="0.6" fill="#15181c"></rect><rect class="blink" x="13" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect x="16" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect class="blink" x="19" y="-0.5" width="1" height="1" fill="#15181c"></rect></g>
+</g>
+<g transform="translate(114,126)">
+<g opacity="0"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="bob">
+<rect x="1" y="-2" width="8" height="2" fill="#ffca28"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect>
+<rect x="1" y="1" width="1" height="2" fill="#4a2f27"></rect><rect x="8" y="1" width="1" height="2" fill="#4a2f27"></rect>
+<rect x="2" y="1" width="6" height="4" fill="#e0a878"></rect>
+<rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="#2fbf71"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="typeA" x="0" y="6" width="1" height="3" fill="#e0a878"></rect><rect class="typeA" x="9" y="6" width="1" height="3" fill="#e0a878"></rect>
+<rect class="typeB" x="0" y="5" width="1" height="3" fill="#e0a878"></rect><rect class="typeB" x="9" y="7" width="1" height="3" fill="#e0a878"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV4</tspan> BYTE</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="14.88" height="1.4" fill="#66bb6a"></rect>
+<g opacity="1"><rect x="11" y="-3" width="11" height="6" fill="#f5f3ec"></rect><rect x="11" y="-3" width="11" height="0.6" fill="#15181c"></rect><rect x="11" y="2.4" width="11" height="0.6" fill="#15181c"></rect><rect class="blink" x="13" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect x="16" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect class="blink" x="19" y="-0.5" width="1" height="1" fill="#15181c"></rect></g>
+</g>
+<g transform="translate(114,170)">
+<g opacity="0"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="jump">
+<rect x="1" y="-2" width="8" height="2" fill="#ffca28"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect>
+<rect x="1" y="1" width="1" height="2" fill="#1b1730"></rect><rect x="8" y="1" width="1" height="2" fill="#1b1730"></rect>
+<rect x="2" y="1" width="6" height="4" fill="#c68642"></rect>
+<rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="#5ab0ff"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="" x="0" y="6" width="1" height="3" fill="#c68642"></rect><rect class="" x="9" y="6" width="1" height="3" fill="#c68642"></rect>
+<rect class="hide" x="0" y="5" width="1" height="3" fill="#c68642"></rect><rect class="hide" x="9" y="7" width="1" height="3" fill="#c68642"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV3</tspan> NOVA</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="5.28" height="1.4" fill="#ef5350"></rect>
+<g opacity="1"><g class="jump"><rect x="1.5" y="-25" width="7" height="9" fill="#15181c"></rect><rect x="2.5" y="-24" width="5" height="7" fill="#ffca28"></rect><rect x="4.5" y="-23" width="1" height="3.5" fill="#15181c"></rect><rect x="4.5" y="-18.6" width="1" height="1" fill="#15181c"></rect></g></g>
+</g>
+<g transform="translate(188,76)">
+<g opacity="0"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="">
+<rect x="1" y="-2" width="8" height="2" fill="#ffca28"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect>
+<rect x="1" y="1" width="1" height="2" fill="#9b9b9b"></rect><rect x="8" y="1" width="1" height="2" fill="#9b9b9b"></rect>
+<rect x="2" y="1" width="6" height="4" fill="#f2c79b"></rect>
+<rect x="3" y="3.4" width="1" height="0.5" fill="#1f2328"></rect><rect x="6" y="3.4" width="1" height="0.5" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="#b06cff"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="" x="0" y="6" width="1" height="3" fill="#f2c79b"></rect><rect class="" x="9" y="6" width="1" height="3" fill="#f2c79b"></rect>
+<rect class="hide" x="0" y="5" width="1" height="3" fill="#f2c79b"></rect><rect class="hide" x="9" y="7" width="1" height="3" fill="#f2c79b"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV2</tspan> ECHO</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="24" height="1.4" fill="#66bb6a"></rect>
+<g opacity="1"><text class="zz" x="10" y="-1" font-family="Press Start 2P" font-size="4" fill="#f5f3ec" stroke="#15181c" stroke-width="0.6" paint-order="stroke">z</text><text class="zz" x="13" y="-4" font-family="Press Start 2P" font-size="5" fill="#f5f3ec" stroke="#15181c" stroke-width="0.6" paint-order="stroke" style="animation-delay: 1s">Z</text></g>
+</g>
+<g transform="translate(114,214)">
+<g opacity="0"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="bob">
+<rect x="1" y="-2" width="8" height="2" fill="#ff7043"></rect><rect x="2" y="-2" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="0" y="0" width="10" height="1" fill="#bf360c"></rect><rect x="3" y="-2" width="4" height="1" fill="#15181c"></rect>
+<rect x="1" y="1" width="1" height="2" fill="#6d4c41"></rect><rect x="8" y="1" width="1" height="2" fill="#6d4c41"></rect>
+<rect x="2" y="1" width="6" height="4" fill="#e0a878"></rect>
+<rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="4" y="4" width="2" height="0.6" fill="#b5654a"></rect>
+<rect x="1" y="5" width="8" height="4" fill="#78909c"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect class="typeA" x="0" y="6" width="1" height="3" fill="#e0a878"></rect><rect class="typeA" x="9" y="6" width="1" height="3" fill="#e0a878"></rect>
+<rect class="typeB" x="0" y="5" width="1" height="3" fill="#e0a878"></rect><rect class="typeB" x="9" y="7" width="1" height="3" fill="#e0a878"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-14" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-9.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV1</tspan> TEMP-1</text>
+<rect x="-7" y="-7.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-7.6" width="21.12" height="1.4" fill="#66bb6a"></rect>
+<g opacity="1"><rect x="11" y="-3" width="11" height="6" fill="#f5f3ec"></rect><rect x="11" y="-3" width="11" height="0.6" fill="#15181c"></rect><rect x="11" y="2.4" width="11" height="0.6" fill="#15181c"></rect><rect class="blink" x="13" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect x="16" y="-0.5" width="1" height="1" fill="#15181c"></rect><rect class="blink" x="19" y="-0.5" width="1" height="1" fill="#15181c"></rect></g>
+</g>
+
+<!-- Pixel carries PR #14 to QC -->
+<g transform="translate(268,136)">
+<g opacity="0"><ellipse class="blink" cx="5" cy="13.5" rx="8" ry="2.2" fill="#ffca28"></ellipse></g>
+<ellipse cx="5" cy="13.3" rx="5" ry="1.4" fill="#000" opacity="0.28"></ellipse>
+<g class="bob">
+<rect x="1" y="-9" width="8" height="6" fill="#8d6e63"></rect><rect x="2" y="-8" width="6" height="4" fill="#ffca28"></rect><text x="5" y="-5" text-anchor="middle" font-family="VT323" font-size="3.6" fill="#15181c">#14</text>
+<rect x="1" y="-2" width="8" height="2" fill="#ffca28"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect>
+<rect x="1" y="1" width="1" height="2" fill="#e2557a"></rect><rect x="8" y="1" width="1" height="2" fill="#e2557a"></rect>
+<rect x="2" y="1" width="6" height="4" fill="#f2c79b"></rect><rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect>
+<rect x="1" y="5" width="8" height="4" fill="#ff9f43"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect>
+<rect x="0" y="-3" width="1" height="8" fill="#f2c79b"></rect><rect x="9" y="-3" width="1" height="8" fill="#f2c79b"></rect>
+<rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="2" y="12" width="2" height="1" fill="#5d4037"></rect><rect x="6" y="12" width="2" height="1" fill="#5d4037"></rect>
+</g>
+<rect x="-9" y="-19" width="28" height="8" fill="#15181c" opacity="0.85"></rect>
+<text x="5" y="-14.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#f5f3ec"><tspan fill="#ffca28">LV5</tspan> PIXEL</text>
+<rect x="-7" y="-12.6" width="24" height="1.4" fill="#454b55"></rect><rect x="-7" y="-12.6" width="9.6" height="1.4" fill="#ffca28"></rect>
+</g>
+
+<!-- run mode overlays -->
+<g opacity="0">
+<rect x="95" y="45" width="49" height="2" fill="#42a5f5"></rect><rect x="95" y="45" width="2" height="194" fill="#42a5f5"></rect><rect x="142" y="45" width="2" height="57" fill="#42a5f5"></rect><rect x="142" y="100" width="43" height="2" fill="#42a5f5"></rect><rect x="183" y="100" width="2" height="139" fill="#42a5f5"></rect><rect x="95" y="237" width="90" height="2" fill="#42a5f5"></rect>
+<rect x="99" y="103" width="56" height="5" fill="#42a5f5"></rect><text x="127" y="106.9" text-anchor="middle" font-family="Silkscreen" font-size="2.9" fill="#15181c">SHARED CAGE · CAPTAIN + 5</text>
+</g>
+<g opacity="0">
+<rect x="211" y="48" width="57" height="54" fill="#2f343b"></rect>
+<rect x="211" y="48" width="57" height="2" fill="#ffa726"></rect><rect x="211" y="100" width="57" height="2" fill="#ffa726"></rect>
+<text x="239.5" y="70" text-anchor="middle" font-family="Silkscreen" font-size="4" fill="#9aa1ab">FIREWALL</text>
+<rect x="215" y="74" width="49" height="9" fill="#ffa726"></rect><text x="239.5" y="80.4" text-anchor="middle" font-family="Silkscreen" font-size="3.6" fill="#15181c">OFF · NO SANDBOX</text>
+<text x="239.5" y="91" text-anchor="middle" font-family="VT323" font-size="4" fill="#c9cdd4">agents use this computer</text>
+</g>
+
+</svg>
+<div style="position: absolute; inset: 0; background: rgba(21,24,28,0.62)"></div>
+</div>
+<div style="position: relative; padding: 8px; display: flex; flex-direction: column; gap: 10px">
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 5px 8px; background: rgba(31,35,40,0.96); border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55, inset 0 -5px 0 0 #ffca28">
+<a href="Park.dc.html" aria-label="Industrial park: all factories" style="display: flex; align-items: center; gap: 8px; text-decoration: none; color: #f5f3ec">
+<svg width="26" height="26" viewBox="0 0 10 10" shape-rendering="crispEdges" aria-hidden="true"><rect x="0" y="4" width="10" height="6" fill="#ffca28"></rect><rect x="1" y="1" width="2" height="4" fill="#ffca28"></rect><rect x="4" y="2" width="2" height="3" fill="#ffca28"></rect><rect x="7" y="0" width="2" height="5" fill="#ffca28"></rect><rect x="1" y="6" width="2" height="2" fill="#15181c"></rect><rect x="4" y="6" width="2" height="2" fill="#15181c"></rect><rect x="7" y="6" width="2" height="2" fill="#15181c"></rect></svg>
+<b style="font-family: 'Silkscreen', monospace; font-size: 17px; white-space: nowrap; color: #ffca28">AGENT WORKS</b>
+</a>
+<span style="font-size: 11px; font-weight: 700; padding: 0 5px; background: #ffca28; color: #15181c; border: 2px solid #15181c">Demo data</span>
+<a href="Park.dc.html" aria-label="Switch factory. Current: my-app. 2 items need you in other factories" style="display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 8px; background: #15181c; color: #f5f3ec; text-decoration: none; border: 2px solid #454b55; font-size: 13px; white-space: nowrap"><span style="font-family: 'Silkscreen', monospace; font-size: 10px; color: #9aa1ab">FACTORY</span><b>my-app</b><span style="font-family: 'VT323', monospace; font-size: 15px; color: #9aa1ab">3 lines</span><span title="Waiting on you in other factories" style="font-size: 10px; font-weight: 700; padding: 0 4px; background: #ef5350; color: #f5f3ec">+2 elsewhere</span><span aria-hidden="true">▾</span></a>
+<div style="flex: 1"></div>
+<div title="Each agent works in its own sandbox cage" style="display: flex; align-items: center; gap: 6px; padding: 3px 8px; background: #15181c; border: 2px solid #454b55; font-size: 12px; white-space: nowrap">Sandbox cages · <b>6</b> running<span class="blink" style="width: 8px; height: 8px; background: #66bb6a"></span></div>
+<nav aria-label="HQ menu" style="display: flex; flex-wrap: wrap; gap: 4px">
+<a href="NewOrder.dc.html" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">+ New order</a>
+<a href="PartySelect.dc.html" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Setup · 1</a>
+<a href="Preflight.dc.html" title="Checks this factory needs before the line starts" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Preflight · 4 ✕</a>
+<a href="ActionItems.dc.html" title="Everything waiting on you" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Action items · 7</a>
+<a href="Boards.dc.html" aria-current="page" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #ffca28; color: #15181c; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #c79a00; cursor: pointer">Boards</a>
+<a href="Docs.dc.html" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Docs · 9</a>
+<a href="PRs.dc.html" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">PRs / MRs · 3</a>
+<a href="Terminal.dc.html" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Terminal</a>
+<a href="Settings.dc.html" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Settings</a>
+<a href="Debug.dc.html" title="Debug panel (D)" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">Debug</a>
+</nav>
+</header><div style="display: flex; justify-content: flex-end">
+<section aria-label="PRODUCTION BOARDS" style="width: min(1040px, 100%); background: #2f343b; border: 3px solid #15181c; box-shadow: inset 0 0 0 2px #454b55; display: flex; flex-direction: column">
+<div style="height: 6px; background: repeating-linear-gradient(135deg, #ffca28 0 8px, #15181c 8px 16px)"></div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 3px solid #15181c">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+<h1 style="margin: 0; font-family: 'Silkscreen', monospace; font-size: 20px; font-weight: 400; color: #ffca28">PRODUCTION BOARDS</h1>
+<span style="font-size: 13px; color: #c9cdd4">One box = one task = one branch = one PR. The lead keeps these up to date.</span>
+</div>
+<a href="Main.dc.html" aria-label="Close and return to the factory floor" style="width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: #454b55; color: #f5f3ec; font-size: 15px; text-decoration: none; border: 2px solid #15181c">✕</a>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 3px solid #15181c">
+<sc-for list="{{boards}}" as="b" hint-placeholder-count="3">
+<button type="button" aria-pressed="{{b.pressed}}" onClick="{{b.pick}}" style="min-height: 34px; padding: 0 10px; background: {{b.bg}}; color: {{b.fg}}; font-size: 13px; font-weight: 700; border: 2px solid #15181c; cursor: pointer">{{b.title}} <span style="font-weight: 400">· {{b.status}}</span></button>
+</sc-for>
+<span style="flex: 1"></span>
+<a href="NewOrder.dc.html" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #ffca28; color: #15181c; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #c79a00; cursor: pointer">+ New order</a>
+<button type="button" style="display: inline-flex; align-items: center; justify-content: center; min-height: 32px; padding: 0 8px; background: #454b55; color: #f5f3ec; font-size: 12px; font-weight: 700; text-decoration: none; border: 2px solid #15181c; box-shadow: inset -2px -2px 0 #2f343b; cursor: pointer">+ New board</button>
+</div>
+<div style="padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 3px solid #15181c">
+<div style="display: flex; justify-content: space-between; font-size: 13px"><span style="color: #c9cdd4">{{board.goal}}</span><b style="color: #ffca28">{{board.shipped}} / {{board.total}} shipped</b></div>
+<div style="height: 12px; background: #15181c; border: 2px solid #15181c"><div style="height: 100%; width: {{board.pct}}; background: #66bb6a; box-shadow: inset 0 -3px 0 #388e3c"></div></div>
+</div>
+<div style="padding: 12px; overflow-x: auto">
+<div style="display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 8px; min-width: 780px">
+<sc-for list="{{cols}}" as="col" hint-placeholder-count="5">
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 6px; background: #23272d; border: 2px solid #15181c; border-top: 6px solid {{col.c}}; min-height: 360px">
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 2px 4px"><span style="font-family: 'Silkscreen', monospace; font-size: 12px; color: {{col.c}}">{{col.name}}</span><span style="font-family: 'Press Start 2P', monospace; font-size: 9px; color: #c9cdd4">{{col.n}}</span></div>
+<sc-for list="{{col.cards}}" as="cd" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; gap: 5px; padding: 7px 8px; background: #f5f3ec; color: #1f2328; border: 2px solid #15181c; box-shadow: 2px 2px 0 #15181c">
+<div style="display: flex; align-items: center; gap: 6px"><span style="font-family: 'VT323', monospace; font-size: 16px; color: #6b7280">{{cd.id}}</span><span style="flex: 1"></span><sc-if value="{{cd.isRush}}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; padding: 0 4px; background: #ef5350; color: #f5f3ec">HOTFIX</span></sc-if><sc-if value="{{cd.isDefect}}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; padding: 0 4px; background: #ffa726; color: #15181c">DEFECT {{cd.sev}}</span></sc-if><sc-if value="{{cd.blocked}}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; font-weight: 700; padding: 0 4px; background: #ef5350; color: #f5f3ec">BLOCKED</span></sc-if><sc-if value="{{cd.hasPr}}" hint-placeholder-val="{{ false }}"><span style="font-family: 'VT323', monospace; font-size: 15px; padding: 0 4px; background: #e3e6ea; border: 1px solid #9aa1ab">{{cd.pr}}</span></sc-if></div>
+<b style="font-size: 14px; line-height: 1.25">{{cd.title}}</b>
+<sc-if value="{{cd.hasWho}}" hint-placeholder-val="{{ true }}"><div style="display: flex; align-items: center; gap: 5px; font-size: 12px; color: #454b55"><svg width="14" height="20" viewBox="0 -2 10 15" shape-rendering="crispEdges" aria-hidden="true"><rect x="1" y="-2" width="8" height="2" fill="{{cd.p.hat}}"></rect><rect x="0" y="0" width="10" height="1" fill="#c79a00"></rect><rect x="1" y="1" width="1" height="2" fill="{{cd.p.hair}}"></rect><rect x="8" y="1" width="1" height="2" fill="{{cd.p.hair}}"></rect><rect x="2" y="1" width="6" height="4" fill="{{cd.p.skin}}"></rect><rect x="3" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="6" y="3" width="1" height="1" fill="#1f2328"></rect><rect x="1" y="5" width="8" height="4" fill="{{cd.p.shirt}}"></rect><rect x="1" y="7" width="8" height="0.8" fill="#fff59d"></rect><rect x="2" y="9" width="2" height="3" fill="#3a3f4a"></rect><rect x="6" y="9" width="2" height="3" fill="#3a3f4a"></rect></svg>{{cd.p.name}}<span style="font-family: 'VT323', monospace; font-size: 14px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{cd.branch}}</span></div></sc-if>
+</div>
+</sc-for>
+<sc-if value="{{col.isEmpty}}" hint-placeholder-val="{{ false }}"><span style="padding: 10px 4px; font-size: 12px; color: #9aa1ab; text-align: center; border: 2px dashed #454b55">Station is clear</span></sc-if>
+</div>
+</sc-for>
+</div>
+</div>
+</section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":980}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { board: 's1' }; }
+  renderVals() {
+    var self = this; var s = this.state;
+    var PEOPLE = {
+      captain: { name: 'Captain', hat: '#f5f3ec', hair: '#4a2f27', skin: '#f2c79b', shirt: '#d97757' },
+      byte: { name: 'Byte', hat: '#ffca28', hair: '#4a2f27', skin: '#e0a878', shirt: '#2fbf71' },
+      pixel: { name: 'Pixel', hat: '#ffca28', hair: '#e2557a', skin: '#f2c79b', shirt: '#ff9f43' },
+      nova: { name: 'Nova', hat: '#ffca28', hair: '#1b1730', skin: '#c68642', shirt: '#5ab0ff' },
+      echo: { name: 'Echo', hat: '#ffca28', hair: '#9b9b9b', skin: '#f2c79b', shirt: '#b06cff' },
+      temp1: { name: 'TEMP-1', hat: '#ff7043', hair: '#6d4c41', skin: '#e0a878', shirt: '#78909c' },
+      qc: { name: 'QC gate', hat: '#ffca28', hair: '#455a64', skin: '#9aa1ab', shirt: '#ffca28' }
+    };
+    var COLS = [['order', 'ORDER', '#9aa1ab'], ['code', 'CODE', '#42a5f5'], ['test', 'TEST', '#ffa726'], ['qc', 'QC', '#ffca28'], ['ship', 'SHIPPED', '#66bb6a']];
+    var B = {
+      s1: { title: 'Sprint 1', status: 'active', goal: 'Auth + billing for the v0.1 release', tasks: [
+        { id: 'D-1', title: 'Pricing shows USD for Thai users', col: 'code', who: 'pixel', branch: 'aw/my-app/d-1-thb-currency', defect: 'S2', rush: true },
+        { id: 'T-08', title: 'Account settings page', col: 'order' }, { id: 'T-09', title: 'Email receipts', col: 'order' },
+        { id: 'T-03', title: 'Clerk sign-in page', col: 'code', who: 'byte', branch: 't-03-clerk-sign-in', pr: '#15' },
+        { id: 'T-06', title: 'Stripe checkout webhook', col: 'code', who: 'nova', branch: 't-06-stripe-webhook', blocked: true },
+        { id: 'T-05', title: 'Pricing page layout', col: 'qc', who: 'pixel', branch: 't-05-pricing-page', pr: '#14' },
+        { id: 'T-01', title: 'Project skeleton', col: 'ship', who: 'byte', branch: 't-01-skeleton', pr: '#9' },
+        { id: 'T-02', title: 'Supabase schema', col: 'ship', who: 'echo', branch: 't-02-schema', pr: '#10' },
+        { id: 'T-04', title: 'Navbar + base layout', col: 'ship', who: 'pixel', branch: 't-04-navbar', pr: '#11' },
+        { id: 'T-07', title: 'Landing hero', col: 'ship', who: 'nova', branch: 't-07-hero', pr: '#12' } ] },
+      bl: { title: 'Backlog', status: 'planned', goal: 'Ideas the lead will pull into the next sprint', tasks: [
+        { id: 'B-01', title: 'Admin dashboard', col: 'order' }, { id: 'B-02', title: 'Audit log', col: 'order' }, { id: 'B-03', title: 'Kafka event export', col: 'order' },
+        { id: 'B-04', title: 'Rate limiting', col: 'order' }, { id: 'B-05', title: 'Dark mode', col: 'order' } ] },
+      s0: { title: 'Sprint 0', status: 'done', goal: 'Repo setup and tooling', tasks: [
+        { id: 'S-01', title: 'Repo + README', col: 'ship', who: 'captain', branch: 's-01-readme', pr: '#3' },
+        { id: 'S-02', title: 'CI pipeline', col: 'ship', who: 'byte', branch: 's-02-ci', pr: '#5' },
+        { id: 'S-03', title: 'Lint + format', col: 'ship', who: 'echo', branch: 's-03-lint', pr: '#6' } ] }
+    };
+    var cur = B[s.board];
+    var cols = COLS.map(function (c) {
+      var cards = cur.tasks.filter(function (t) { return t.col === c[0]; }).map(function (t) {
+        return Object.assign({}, t, { isDefect: !!t.defect, sev: t.defect || '', isRush: !!t.rush, p: PEOPLE[t.who || 'captain'], hasWho: !!t.who, hasPr: !!t.pr, pr: t.pr || '', branch: t.branch || '', blocked: !!t.blocked });
+      });
+      return { name: c[1], c: c[2], cards: cards, n: cards.length, isEmpty: cards.length === 0 };
+    });
+    var shipped = cur.tasks.filter(function (t) { return t.col === 'ship'; }).length;
+    var boards = ['s1', 'bl', 's0'].map(function (k) { var on = k === s.board; return { title: B[k].title, status: B[k].status, pressed: on ? 'true' : 'false', bg: on ? '#ffca28' : '#454b55', fg: on ? '#15181c' : '#f5f3ec', pick: function () { self.setState({ board: k }); } }; });
+    return { boards: boards, cols: cols, board: { goal: cur.goal, shipped: shipped, total: cur.tasks.length, pct: Math.round(shipped / cur.tasks.length * 100) + '%' } };
+  }
+}
+</script>
+</body>
+</html>

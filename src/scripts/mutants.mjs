@@ -13,8 +13,11 @@ const I18N = 'src/floor/i18n.ts';
 const DIFFS = 'docs/review/P1-3-canvas-differences.md';
 const INVENTORY = 'src/scripts/inventory.mjs';
 const CC = 'src/e2e/canvas-compare.mjs';
+const GATES = 'src/e2e/gates.mjs';
+const HARNESS = 'src/e2e/harness.mjs';
+const SCREENS = 'src/floor/screens.ts';
 
-/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
+/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
 const MUTANTS = [
   {
     name: 'belt-is-code',
@@ -228,19 +231,19 @@ const MUTANTS = [
   {
     name: 'locale-key-missing-th',
     claim: 'a key missing from th.json is caught',
-    edits: [['src/locales/th.json', '"empty": "ไม่มีอะไรรอคุณ",\n', '']],
+    edits: [['src/locales/th/floor.json', '"empty": "ไม่มีอะไรรอคุณ",\n', '']],
   },
   {
     name: 'locale-key-missing-en',
     claim: 'a key missing from en.json is caught',
-    edits: [['src/locales/en.json', '"empty": "Nothing is waiting on you.",\n', '']],
+    edits: [['src/locales/en/floor.json', '"empty": "Nothing is waiting on you.",\n', '']],
   },
   {
     name: 'locale-placeholder-lost',
     claim: 'a placeholder lost in one language is caught',
     edits: [
       [
-        'src/locales/th.json',
+        'src/locales/th/floor.json',
         '"openActionItems": "{{name}} รอคุณอยู่ เปิด Action items"',
         '"openActionItems": "รอคุณอยู่ เปิด Action items"',
       ],
@@ -249,7 +252,7 @@ const MUTANTS = [
   {
     name: 'locale-stamp-translated',
     claim: 'an English stamp must not enter the locale files',
-    edits: [['src/locales/en.json', '"delivered": "Shipment delivered"', '"delivered": "SHIPPED"']],
+    edits: [['src/locales/en/floor.json', '"delivered": "Shipment delivered"', '"delivered": "SHIPPED"']],
   },
 
   {
@@ -312,7 +315,7 @@ const MUTANTS = [
   {
     name: 'locale-demo-mode-wording',
     claim: 'the Debug mode line says Demo data as on the canvas',
-    edits: [['src/locales/en.json', '"modeDemo": "Demo data"', '"modeDemo": "Demo replay"']],
+    edits: [['src/locales/en/floor.json', '"modeDemo": "Demo data"', '"modeDemo": "Demo replay"']],
   },
   {
     name: 'codeOf-no-upper',
@@ -448,23 +451,23 @@ const MUTANTS = [
   {
     name: 'locale-plural-other-missing-en',
     claim: 'a plural form missing from en.json is caught',
-    edits: [['src/locales/en.json', '"boxesTotal_other": "{{count}} boxes",\n', '']],
+    edits: [['src/locales/en/floor.json', '"boxesTotal_other": "{{count}} boxes",\n', '']],
   },
   {
     name: 'locale-plural-other-missing-th',
     claim: 'a plural form missing from th.json is caught',
-    edits: [['src/locales/th.json', '"boxesTotal_other": "{{count}} กล่อง",\n', '']],
+    edits: [['src/locales/th/floor.json', '"boxesTotal_other": "{{count}} กล่อง",\n', '']],
   },
   {
     name: 'locale-plural-lost-count',
     claim: 'a plural form without {{count}} is caught',
-    edits: [['src/locales/en.json', '"boxesTotal_one": "{{count}} box"', '"boxesTotal_one": "one box"']],
+    edits: [['src/locales/en/floor.json', '"boxesTotal_one": "{{count}} box"', '"boxesTotal_one": "one box"']],
   },
   {
     name: 'locale-demo-chip-wording',
     claim: 'the demo chip says Demo data as on the canvas',
     tier: 'e2e',
-    edits: [['src/locales/en.json', '"demo": "Demo data"', '"demo": "Demo replay"']],
+    edits: [['src/locales/en/floor.json', '"demo": "Demo data"', '"demo": "Demo replay"']],
   },
   {
     name: 'scene-firewall-label-no-bar',
@@ -770,6 +773,80 @@ const MUTANTS = [
     tier: 'lane9',
     edits: [[INVENTORY, "for (const name of anims) put('anim', name);", '']],
   },
+  {
+    name: 'gates-contrast-skipped',
+    claim: 'the contrast gate fails text under 4.5 to 1',
+    tier: 'gates',
+    edits: [[GATES, 'if (ratio >= MIN_CONTRAST) continue;', 'if (ratio >= 0) continue;']],
+  },
+  {
+    name: 'gates-contrast-bar-lowered',
+    claim: 'the contrast bar is 4.5 to 1',
+    tier: 'gates',
+    edits: [[GATES, 'export const MIN_CONTRAST = 4.5;', 'export const MIN_CONTRAST = 2;']],
+  },
+  {
+    name: 'gates-contrast-alpha-ignored',
+    claim: 'the contrast gate blends translucent text and backgrounds',
+    tier: 'gates',
+    edits: [[GATES, 'const alpha = (over[3] ?? 255) / 255;', 'const alpha = 1;']],
+  },
+  {
+    name: 'gates-motion-not-sampled',
+    claim: 'the reduced-motion gate counts running animations',
+    tier: 'gates',
+    edits: [[GATES, "a.playState === 'running'", "a.playState === 'never'"]],
+  },
+  {
+    name: 'gates-motion-ignores-smil',
+    claim: 'the reduced-motion gate counts SVG animation elements',
+    tier: 'gates',
+    edits: [[GATES, '...(smil > 0 ?', '...(smil > 1e9 ?']],
+  },
+  {
+    name: 'gates-axe-not-blocking',
+    claim: 'the axe gate fails on serious and critical findings',
+    tier: 'gates',
+    edits: [[HARNESS, "rule.impact === 'serious' || rule.impact === 'critical'", "rule.impact === 'none'"]],
+  },
+  {
+    name: 'gates-raw-key-blind',
+    claim: 'the key gate fails on a raw locale key on screen',
+    tier: 'gates',
+    edits: [[GATES, "namespaces.includes(RAW_KEY.exec(text)?.[1] ?? '')", 'false']],
+  },
+  {
+    name: 'css-reduced-motion-rule-dropped',
+    claim: 'prefers-reduced-motion stops the belt animation',
+    tier: 'gates',
+    edits: [
+      [
+        'src/floor/floor.css',
+        '  .belt {\n    animation: none;',
+        '  .belt {\n    animation: belt 0.6s steps(6) infinite;',
+      ],
+    ],
+  },
+  {
+    name: 'i18n-namespace-not-wrapped',
+    claim: 'a locale file becomes the subtree named after the file',
+    edits: [[I18N, '[namespace]: tree', '...tree']],
+  },
+  {
+    name: 'screens-id-not-checked',
+    claim: 'a screen exports the id of its directory',
+    edits: [[SCREENS, 'module.screen.id !== dir', 'false']],
+  },
+  {
+    name: 'screens-route-prefix',
+    claim: 'a screen route matches the whole hash',
+    edits: [[SCREENS, '(screen) => hash ===', '(screen) => hash.length > 0 ||']],
+  },
+  {
+    name: 'screens-duplicate-allowed',
+    claim: 'two screens cannot share an id',
+    edits: [[SCREENS, 'if (seen.has(dir)) throw', 'if (false) throw']],
+  },
 ];
 
 const only = process.argv.slice(2);
@@ -814,6 +891,13 @@ const lane9 = async () => {
     OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-lane9'),
   });
   return result.status === 0 ? null : (result.stdout.match(/FAIL lane 9[^\n]{0,160}/) ?? ['lane 9 crashed'])[0];
+};
+const gates = async () => {
+  const result = await run('node', ['src/e2e/gates.mjs'], 200_000, {
+    ...process.env,
+    OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-gates'),
+  });
+  return result.status === 0 ? null : (result.stdout.match(/FAIL lane 11[^\n]{0,160}/) ?? ['gates crashed'])[0];
 };
 const vitest = () => run('pnpm', ['vitest', 'run', ...SUITE], 300_000);
 
@@ -865,7 +949,10 @@ for (const mutant of MUTANTS) {
     }
     let how = null;
     if (mutant.tier === 'lane9') how = await lane9();
-    else {
+    else if (mutant.tier === 'gates') {
+      if (mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
+      how = (await vitest()).status !== 0 ? 'unit tests' : await gates();
+    } else {
       how = (await vitest()).status !== 0 ? 'unit tests' : null;
       if (how === null && mutant.tier === 'e2e') how = await lanes();
     }
@@ -875,7 +962,7 @@ for (const mutant of MUTANTS) {
     );
   } finally {
     for (const [path, bytes] of originals) writeFileSync(path, bytes);
-    if (mutant.tier === 'e2e') await build();
+    if (mutant.tier === 'e2e' || mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
   }
 }
 const orphans = windows ? [] : demoChildren().filter((pid) => !before.has(pid));

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Start the line — staff your factory</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&amp;family=Pixelify+Sans:wght@400;600;700&amp;family=VT323&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#1f2328}
+a{color:#ffca28}a:hover{color:#ffe082}
+button{font-family:inherit}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #ffca28;outline-offset:2px}
+@keyframes bob{0%{transform:translateY(0)}50%{transform:translateY(-4px)}100%{transform:translateY(0)}}
+@keyframes blink{0%{opacity:1}50%{opacity:0.35}100%{opacity:1}}
+.bob{animation:bob 1.2s steps(2) infinite}
+.blink{animation:blink 1.2s steps(1) infinite}
+@media (prefers-reduced-motion: reduce){.bob,.blink{animation:none}}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #1f2328; background-image: radial-gradient(#2f343b 1px, transparent 1px); background-size: 24px 24px; color: #f5f3ec; font-family: 'Pixelify Sans', system-ui, sans-serif; font-size: 16px; box-sizing: border-box; padding: 28px 20px">
+<div style="max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px">
+
+<header style="display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center">
+<div style="font-family: 'Press Start 2P', monospace; font-size: 12px; color: #c9cdd4">NEW SHIFT</div>
+<h1 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 28px; line-height: 1.4; color: #ffca28; text-shadow: 4px 4px 0 #15181c">STAFF YOUR FACTORY</h1>
+<div style="font-size: 17px; color: #c9cdd4">Pick a lead, hire workers, stock the skill store. Then start the line.</div>
+</header>
+
+<!-- project name -->
+<section style="background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; padding: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px">
+<label for="proj" style="font-family: 'Press Start 2P', monospace; font-size: 11px">1 · NAME YOUR FACTORY</label>
+<input id="proj" type="text" value="my-app" style="flex: 1 1 260px; min-width: 0; min-height: 48px; padding: 0 14px; background: #1f2328; color: #f5f3ec; font-family: 'Press Start 2P', monospace; font-size: 14px; border: 3px solid #6b7280">
+<span style="font-size: 15px; color: #c9cdd4">Repo: ~/code/my-app · github.com/you/my-app</span>
+</section>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch">
+
+<!-- lead -->
+<section aria-label="Choose lead" style="flex: 1 1 360px; min-width: 0; background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 11px">2 · CHOOSE YOUR LEAD</h2>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<sc-for list="{{leads}}" as="ld" hint-placeholder-count="2">
+<button type="button" onClick="{{ld.pick}}" aria-pressed="{{ld.pressed}}" style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px 10px; background: #1f2328; color: #f5f3ec; border: 4px solid {{ld.ring}}; box-shadow: {{ld.glow}}; cursor: pointer">
+<div class="{{ld.anim}}" style="display: flex">
+<svg width="96" height="96" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+<rect x="4" y="0" width="1" height="1" fill="#ffca28"></rect><rect x="7" y="0" width="2" height="1" fill="#ffca28"></rect><rect x="11" y="0" width="1" height="1" fill="#ffca28"></rect><rect x="4" y="1" width="8" height="1" fill="#ffca28"></rect>
+<rect x="4" y="2" width="8" height="2" fill="{{ld.hair}}"></rect><rect x="3" y="2" width="1" height="4" fill="{{ld.hair}}"></rect><rect x="12" y="2" width="1" height="4" fill="{{ld.hair}}"></rect><rect x="4" y="3" width="8" height="5" fill="{{ld.skin}}"></rect><rect x="4" y="3" width="8" height="1" fill="{{ld.hair}}"></rect><rect x="6" y="5" width="1" height="1" fill="#1f2328"></rect><rect x="9" y="5" width="1" height="1" fill="#1f2328"></rect><rect x="7" y="7" width="2" height="1" fill="#b5654a"></rect><rect x="3" y="8" width="10" height="5" fill="{{ld.shirt}}"></rect><rect x="7" y="8" width="2" height="2" fill="#f5f3ec"></rect><rect x="2" y="9" width="1" height="3" fill="{{ld.skin}}"></rect><rect x="13" y="9" width="1" height="3" fill="{{ld.skin}}"></rect><rect x="5" y="13" width="2" height="3" fill="#3a3355"></rect><rect x="9" y="13" width="2" height="3" fill="#3a3355"></rect>
+<rect x="3" y="0" width="10" height="3" fill="#f5f3ec"></rect><rect x="7" y="0" width="2" height="3" fill="#ef5350"></rect><rect x="2" y="3" width="12" height="1" fill="#9aa1ab"></rect><rect x="3" y="11" width="10" height="1" fill="#fff59d"></rect></svg>
+</div>
+<span style="font-family: 'Press Start 2P', monospace; font-size: 11px">{{ld.name}}</span>
+<span style="font-size: 14px; color: #c9cdd4">{{ld.desc}}</span>
+<span style="font-size: 13px; font-weight: 700; color: #1f2328; background: {{ld.tagBg}}; padding: 2px 8px">{{ld.tag}}</span>
+</button>
+</sc-for>
+</div>
+<div style="font-size: 15px; color: #c9cdd4; line-height: 1.4">The lead plans the sprint, writes work orders and sends them down the line. It never writes to main and never merges.</div>
+</section>
+
+<!-- workers -->
+<section aria-label="Hire workers" style="flex: 1 1 460px; min-width: 0; background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px">
+<h2 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 11px">3 · HIRE WORKERS</h2>
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" aria-label="Fewer workers" onClick="{{dec}}" style="width: 44px; height: 44px; background: #454b55; color: #f5f3ec; font-size: 22px; font-weight: 700; border: 3px solid #15181c; cursor: pointer">−</button>
+<span style="min-width: 54px; text-align: center; font-family: 'Press Start 2P', monospace; font-size: 14px">{{count}}/6</span>
+<button type="button" aria-label="More workers" onClick="{{inc}}" style="width: 44px; height: 44px; background: #ffca28; color: #1f2328; font-size: 22px; font-weight: 700; border: 3px solid #15181c; cursor: pointer">+</button>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+<sc-for list="{{slots}}" as="sl" hint-placeholder-count="6">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px; background: #1f2328; border: 3px {{sl.borderStyle}} {{sl.border}}; min-height: 150px; box-sizing: border-box; justify-content: center">
+<sc-if value="{{sl.filled}}" hint-placeholder-val="{{ true }}">
+<svg width="56" height="56" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true"><rect x="4" y="1" width="8" height="3" fill="{{sl.hair}}"></rect><rect x="3" y="2" width="1" height="4" fill="{{sl.hair}}"></rect><rect x="12" y="2" width="1" height="4" fill="{{sl.hair}}"></rect><rect x="4" y="3" width="8" height="5" fill="{{sl.skin}}"></rect><rect x="4" y="3" width="8" height="1" fill="{{sl.hair}}"></rect><rect x="6" y="5" width="1" height="1" fill="#1f2328"></rect><rect x="9" y="5" width="1" height="1" fill="#1f2328"></rect><rect x="3" y="8" width="10" height="5" fill="{{sl.shirt}}"></rect><rect x="5" y="13" width="2" height="3" fill="#3a3355"></rect><rect x="9" y="13" width="2" height="3" fill="#3a3355"></rect><rect x="3" y="0" width="10" height="3" fill="#ffca28"></rect><rect x="4" y="0" width="3" height="1" fill="#ffffff" opacity="0.45"></rect><rect x="2" y="3" width="12" height="1" fill="#c79a00"></rect><rect x="3" y="11" width="10" height="1" fill="#fff59d"></rect></svg>
+<span style="font-family: 'Press Start 2P', monospace; font-size: 9px">{{sl.name}}</span>
+<button type="button" onClick="{{sl.flip}}" aria-label="Runtime for {{sl.name}}: {{sl.runtime}}. Switch" style="min-height: 32px; padding: 0 10px; background: {{sl.rtBg}}; color: #1f2328; font-size: 13px; font-weight: 700; border: 2px solid #15181c; cursor: pointer">{{sl.runtime}} ⇄</button>
+</sc-if>
+<sc-if value="{{sl.empty}}" hint-placeholder-val="{{ false }}">
+<span style="font-family: 'Press Start 2P', monospace; font-size: 18px; color: #6b7280">?</span>
+<span style="font-size: 13px; color: #9aa1ab">Empty cage</span>
+</sc-if>
+</div>
+</sc-for>
+</div>
+<div style="font-size: 15px; color: #c9cdd4">Each worker gets its own cage: a copy of the repo inside its own Docker sandbox.</div>
+</section>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch">
+<!-- stack -->
+<section aria-label="Equip stack" style="flex: 1 1 460px; min-width: 0; background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 11px">4 · STOCK THE SKILL STORE</h2>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+<sc-for list="{{stack}}" as="sk" hint-placeholder-count="6">
+<button type="button" onClick="{{sk.toggle}}" aria-pressed="{{sk.pressed}}" style="display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 8px 10px; background: #1f2328; color: {{sk.fg}}; border: 3px solid {{sk.border}}; cursor: pointer; text-align: left">
+<span style="width: 22px; height: 22px; flex: none; background: {{sk.color}}; box-shadow: inset -5px -5px 0 rgba(0,0,0,0.3)"></span>
+<span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 16px; font-weight: 700">{{sk.name}}</span><span style="font-size: 12px; color: #c9cdd4">{{sk.state}}</span></span>
+</button>
+</sc-for>
+</div>
+<div style="font-size: 15px; color: #c9cdd4">Stocked tools give every worker the official skills and open those docs sites through the cage.</div>
+</section>
+
+<!-- preflight -->
+<section aria-label="Pre-flight checklist" style="flex: 1 1 360px; min-width: 0; background: #2f343b; border: 4px solid #15181c; box-shadow: inset 4px 4px 0 #454b55, inset -4px -4px 0 #23272d; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-family: 'Press Start 2P', monospace; font-size: 11px">5 · SAFETY CHECK</h2>
+<sc-for list="{{checks}}" as="ck" hint-placeholder-count="5">
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; background: #1f2328">
+<div style="display: flex; align-items: center; gap: 10px"><span style="font-family: 'Press Start 2P', monospace; font-size: 10px; width: 22px; color: {{ck.color}}">{{ck.mark}}</span><span style="flex: 1">{{ck.label}}</span></div>
+<sc-if value="{{ck.bad}}" hint-placeholder-val="{{ false }}"><div style="margin-left: 32px; font-family: 'VT323', monospace; font-size: 19px; color: #ffca28">Fix: {{ck.fix}}</div></sc-if>
+</div>
+</sc-for>
+</section>
+</div>
+
+<!-- start -->
+<div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 8px 0 20px">
+<a href="Main.dc.html" class="blink" style="display: inline-flex; align-items: center; justify-content: center; min-height: 64px; padding: 0 40px; background: #66bb6a; color: #1f2328; font-family: 'Press Start 2P', monospace; font-size: 18px; text-decoration: none; border: 4px solid #15181c; box-shadow: inset -5px -5px 0 #388e3c, 6px 6px 0 #15181c">▶ START THE LINE</a>
+<div style="font-size: 15px; color: #c9cdd4">{{summary}}</div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":980}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { lead: 'claude', count: 4, rt: { 0: 'Claude', 1: 'Codex', 2: 'Claude', 3: 'Codex', 4: 'Claude', 5: 'Codex' }, stack: { 'Next.js': true, 'Go': true, 'Kafka': true, 'IBM MQ': true, 'Oracle': true, 'Clerk': true, 'Supabase': true, 'Stripe': true } };
+  }
+  renderVals() {
+    var self = this;
+    var s = this.state;
+    var leadDefs = [
+      { id: 'claude', name: 'CLAUDE CODE', desc: 'Careful planner', hair: '#4a2f27', skin: '#f2c79b', shirt: '#d97757', tag: 'Claude account' },
+      { id: 'codex', name: 'CODEX', desc: 'Fast splitter', hair: '#1b1730', skin: '#c68642', shirt: '#42a5f5', tag: 'ChatGPT account' }
+    ];
+    var leads = leadDefs.map(function (l) {
+      var on = l.id === s.lead;
+      return Object.assign({}, l, { pressed: on ? 'true' : 'false', ring: on ? '#ffca28' : '#454b55', glow: on ? '0 0 0 4px #1f2328, 0 0 0 8px #ffca28' : 'none', anim: on ? 'bob' : '', tagBg: on ? '#ffca28' : '#9aa1ab', pick: function () { self.setState({ lead: l.id }); } });
+    });
+    var names = ['Byte', 'Pixel', 'Nova', 'Echo', 'Bit', 'Glitch'];
+    var looks = [['#4a2f27', '#e0a878', '#2fbf71'], ['#e2557a', '#f2c79b', '#ff9f43'], ['#1b1730', '#c68642', '#42a5f5'], ['#9b9b9b', '#f2c79b', '#b06cff'], ['#ffca28', '#e0a878', '#ef5350'], ['#2fbf71', '#f2c79b', '#6b7280']];
+    var slots = names.map(function (n, i) {
+      var filled = i < s.count;
+      var rt = s.rt[i];
+      return { name: n, filled: filled, empty: !filled, hair: looks[i][0], skin: looks[i][1], shirt: looks[i][2], border: filled ? '#6b7280' : '#454b55', borderStyle: filled ? 'solid' : 'dashed', runtime: rt, rtBg: rt === 'Claude' ? '#ff9f43' : '#42a5f5', flip: function () { var r = Object.assign({}, self.state.rt); r[i] = rt === 'Claude' ? 'Codex' : 'Claude'; self.setState({ rt: r }); } };
+    });
+    var stackDefs = [['Next.js', '#f5f3ec'], ['Go', '#00add8'], ['Kafka', '#ffca28'], ['IBM MQ', '#4589ff'], ['Oracle', '#c74634'], ['Clerk', '#7c5cff'], ['Supabase', '#2fbf71'], ['Stripe', '#42a5f5'], ['Tailwind', '#38bdf8'], ['Prisma', '#9aa1ab']];
+    var stack = stackDefs.map(function (d) {
+      var on = !!s.stack[d[0]];
+      return { name: d[0], color: d[1], pressed: on ? 'true' : 'false', border: on ? '#ffca28' : '#454b55', fg: on ? '#f5f3ec' : '#c9cdd4', state: on ? 'Equipped' : 'Not equipped', toggle: function () { var x = Object.assign({}, self.state.stack); x[d[0]] = !on; self.setState({ stack: x }); } };
+    });
+    var eq = stack.filter(function (x) { return x.pressed === 'true'; }).length;
+    var leadName = s.lead === 'claude' ? 'Claude Code' : 'Codex';
+    return {
+      leads: leads,
+      slots: slots,
+      count: s.count,
+      inc: function () { self.setState({ count: Math.min(6, self.state.count + 1) }); },
+      dec: function () { self.setState({ count: Math.max(1, self.state.count - 1) }); },
+      stack: stack,
+      checks: [
+        { label: 'Git repo with a GitHub or GitLab remote', mark: 'OK', color: '#66bb6a', bad: false },
+        { label: 'gh (GitHub) or glab (GitLab) signed in', mark: 'OK', color: '#66bb6a', bad: false },
+        { label: 'Docker Sandboxes ready', mark: 'OK', color: '#66bb6a', bad: false },
+        { label: 'Network policy set', mark: '!!', color: '#ef5350', bad: true, fix: 'sbx policy init balanced' },
+        { label: 'tmux installed', mark: 'OK', color: '#66bb6a', bad: false }
+      ],
+      summary: 'Lead: ' + leadName + ' · ' + s.count + ' workers · ' + eq + ' tools equipped'
+    };
+  }
+}
+</script>
+</body>
+</html>

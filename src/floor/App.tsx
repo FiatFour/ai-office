@@ -4,6 +4,7 @@ import { Drawer } from './Drawer.tsx';
 import { LANGS, type Lang } from './i18n.ts';
 import { floorView, type Mood, PANEL, panelOf, type WorkerView } from './model.ts';
 import { Scene } from './Scene.tsx';
+import { SCREENS, screenFromHash } from './screens.ts';
 import { useHq } from './useHq.ts';
 
 const MOOD_CHIP: Record<Mood, { bg: string; fg: string }> = {
@@ -51,7 +52,7 @@ const Card = ({ worker, onClose }: { worker: WorkerView; onClose: () => void }) 
   );
 };
 
-export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) => {
+const Floor = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) => {
   const { t } = useTranslation();
   const hq = useHq();
   const view = useMemo(() => (hq.snapshot === null ? null : floorView(hq.snapshot)), [hq.snapshot]);
@@ -230,4 +231,15 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
       )}
     </div>
   );
+};
+
+export const App = (props: { lang: Lang; onLang: (lang: Lang) => void }) => {
+  const [hash, setHash] = useState(location.hash);
+  useEffect(() => {
+    const onHash = (): void => setHash(location.hash);
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const screen = screenFromHash(hash, SCREENS);
+  return screen === null ? <Floor {...props} /> : <screen.Component />;
 };

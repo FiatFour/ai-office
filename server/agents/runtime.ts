@@ -85,10 +85,14 @@ const commentOf = (raw: unknown): LineComment[] => {
 
 const commentsOf = (raw: unknown): LineComment[] => (Array.isArray(raw) ? raw.flatMap(commentOf) : commentOf(raw));
 
-const FENCE_OPEN = /```[ \t]*(?:json)?[ \t]*\r?\n?\s*(?=\{)/gi;
 const EXCERPT = 500;
 
-const hasVerdict = (c: Record<string, unknown>) => VERDICTS.includes(c.verdict as Verdict);
+/** The verdict a block claims, ignoring case and surrounding space, or null when it claims none. */
+const verdictOf = (c: Record<string, unknown>): Verdict | null => {
+  if (typeof c.verdict !== 'string') return null;
+  const v = c.verdict.trim().toLowerCase();
+  return VERDICTS.find((k) => k === v) ?? null;
+};
 
 const balancedEnd = (text: string, from: number): number => {
   let depth = 0;
@@ -109,29 +113,28 @@ const balancedEnd = (text: string, from: number): number => {
   return text.length;
 };
 
+/**
+ * Every top-level json object in the text, fenced or bare, in order. A block ends at its closing brace or
+ * at the next fence outside a string, and the scan resumes right after it, so several objects in one fence,
+ * on one line or mixed with prose are all seen. Each step moves forward, so the scan is linear.
+ */
 const objectsIn = (text: string): Record<string, unknown>[] => {
   const found: Record<string, unknown>[] = [];
-  const take = (source: string) => {
+  let pos = text.indexOf('{');
+  while (pos >= 0) {
+    const end = balancedEnd(text, pos);
     try {
-      const parsed: unknown = JSON.parse(source);
+      const parsed: unknown = JSON.parse(text.slice(pos, end));
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))
         found.push(parsed as Record<string, unknown>);
     } catch {}
-  };
-  const opens = new RegExp(FENCE_OPEN);
-  for (let open = opens.exec(text); open !== null; open = opens.exec(text)) {
-    const start = open.index + open[0].length;
-    const end = balancedEnd(text, start);
-    take(text.slice(start, end));
-    opens.lastIndex = Math.max(end, opens.lastIndex);
-  }
-  if (!found.some(hasVerdict)) {
-    const from = text.indexOf('{');
-    const to = text.lastIndexOf('}');
-    if (from >= 0 && to > from) take(text.slice(from, to + 1));
+    pos = text.indexOf('{', end);
   }
   return found;
 };
+
+/** A quoted "verdict": "changes" key as it appears in raw text. Inside a json string its quotes are escaped, so a comment that merely mentions it does not match. */
+const CHANGES_KEY = /"verdict"\s*:\s*"\s*changes/i;
 
 const bodyOf = (o: Record<string, unknown>): string => {
   if (typeof o.body === 'string' && o.body.trim() !== '') return o.body;
@@ -141,15 +144,24 @@ const bodyOf = (o: Record<string, unknown>): string => {
 };
 
 export const parseReview = (text: string): Omit<Extract<AgentResult, { role: 'reviewer' }>, 'usage' | 'role'> => {
-  const reviews = objectsIn(text).filter(hasVerdict);
-  const o = reviews.findLast((r) => r.verdict === 'changes') ?? reviews.at(-1);
-  if (o === undefined)
+  const reviews = objectsIn(text).flatMap((r) => {
+    const verdict = verdictOf(r);
+    return verdict === null ? [] : [{ r, verdict }];
+  });
+  const chosen = reviews.findLast((x) => x.verdict === 'changes') ?? reviews.at(-1);
+  if (chosen === undefined)
     throw new AgentFailed(
       `the reviewer gave no json block with a verdict of approve, changes or comment. Reviewer text: ${text.slice(0, EXCERPT)}`,
     );
+  // Fail closed: a changes verdict we could not parse (quoted, in a ~~~ fence, with a trailing comma or a comment)
+  // must never let the review count as anything weaker.
+  if (chosen.verdict !== 'changes' && CHANGES_KEY.test(text))
+    throw new AgentFailed(
+      `the reviewer text holds a changes verdict that could not be read as json, so it is not treated as ${chosen.verdict}. Reviewer text: ${text.slice(0, EXCERPT)}`,
+    );
   return {
-    verdict: o.verdict as Verdict,
-    body: bodyOf(o),
-    comments: commentsOf(o.comments),
+    verdict: chosen.verdict,
+    body: bodyOf(chosen.r),
+    comments: commentsOf(chosen.r.comments),
   };
 };

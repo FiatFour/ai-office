@@ -1258,7 +1258,7 @@ const MUTANTS = [
     edits: [
       [
         'server/modes/cages.ts',
-        ".map((r) => ({ r, text: r.body.replace(REVIEW_MARK, '').replace(DROPPED_MARK, '\\n').trim() }))",
+        ".map((r) => ({ r, text: r.body.replace(REVIEW_MARKS, '').replaceAll(DROPPED_MARK, '\\n').trim() }))",
         ".map((r) => ({ r, text: r.body.includes(DROPPED_MARK) ? r.body.slice(r.body.indexOf(DROPPED_MARK) + DROPPED_MARK.length).trim() : '' }))",
       ],
     ],
@@ -1300,8 +1300,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/runtime.ts',
-        "reviews.findLast((r) => r.verdict === 'changes') ?? reviews.at(-1)",
-        "reviews.findLast((r) => r.verdict === 'changes') ?? reviews[0]",
+        "reviews.findLast((x) => x.verdict === 'changes') ?? reviews.at(-1)",
+        "reviews.findLast((x) => x.verdict === 'changes') ?? reviews[0]",
       ],
     ],
     tests: [AGENTS],
@@ -1312,7 +1312,7 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/runtime.ts',
-        "reviews.findLast((r) => r.verdict === 'changes') ?? reviews.at(-1)",
+        "reviews.findLast((x) => x.verdict === 'changes') ?? reviews.at(-1)",
         'reviews.at(-1)',
       ],
     ],
@@ -1324,8 +1324,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/runtime.ts',
-        "reviews.findLast((r) => r.verdict === 'changes')",
-        "reviews.find((r) => r.verdict === 'changes')",
+        "reviews.findLast((x) => x.verdict === 'changes')",
+        "reviews.find((x) => x.verdict === 'changes')",
       ],
     ],
     tests: [AGENTS],
@@ -1371,13 +1371,85 @@ const MUTANTS = [
   {
     name: 'fix-round-gets-dropped-mark',
     claim: 'the carried-comments mark never reaches the author of a fix round',
-    edits: [['server/modes/cages.ts', ".replace(DROPPED_MARK, '\\n')", '']],
+    edits: [['server/modes/cages.ts', ".replaceAll(DROPPED_MARK, '\\n')", '']],
     tests: [CAGES],
   },
   {
     name: 'review-block-ends-at-first-fence',
     claim: 'a verdict block holding triple backticks inside a comment still parses',
     edits: [['server/agents/runtime.ts', 'if (inString) {', 'if (false) {']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'fix-round-keeps-repeated-dropped-mark',
+    claim: 'every carried-comments mark is stripped from what the author of a fix round reads, not only the first',
+    edits: [['server/modes/cages.ts', ".replaceAll(DROPPED_MARK, '\\n')", ".replace(DROPPED_MARK, '\\n')"]],
+    tests: [CAGES],
+  },
+  {
+    name: 'review-skips-rest-of-fence-after-first-object',
+    claim: 'a changes object behind an approve object in the same fence, or on the same line, is still seen',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "pos = text.indexOf('{', end);",
+        "pos = text.indexOf('{', Math.max(end, text.indexOf('```', end)));",
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-verdict-case-sensitive',
+    claim: 'a verdict written as Changes or CHANGES is still a changes verdict',
+    edits: [['server/agents/runtime.ts', 'c.verdict.trim().toLowerCase()', 'c.verdict.trim()']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-verdict-space-sensitive',
+    claim: 'a verdict with space around it is still read',
+    edits: [['server/agents/runtime.ts', 'c.verdict.trim().toLowerCase()', 'c.verdict.toLowerCase()']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-bare-changes-after-fenced-approve-ignored',
+    claim: 'a bare changes object after a fenced approve block counts',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))",
+        "if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) && (found.length === 0 || text.slice(Math.max(0, pos - 12), pos).includes('```')))",
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-unreadable-changes-approves',
+    claim: 'a changes verdict that cannot be read as json never lets the review count as approve or comment',
+    edits: [['server/agents/runtime.ts', "chosen.verdict !== 'changes' && CHANGES_KEY.test(text)", 'false']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-mention-of-changes-fails-approve',
+    claim: 'an approve whose comments only mention the word changes or a quoted verdict is still an approve',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        'const CHANGES_KEY = /"verdict"\\s*:\\s*"\\s*changes/i;',
+        'const CHANGES_KEY = /verdict\\W+changes|changes/i;',
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-brace-search-backtracks-on-fence-whitespace',
+    claim: 'finding the next object takes linear time however much whitespace follows a fence',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "pos = text.indexOf('{', end);",
+        "{ const m = /```[ \\t]*(?:json)?[ \\t]*\\r?\\n?\\s*(?=\\{)|\\{/g; m.lastIndex = end; const r = m.exec(text); pos = r === null ? -1 : r.index + r[0].length - (r[0] === '{' ? 1 : 0); }",
+      ],
+    ],
     tests: [AGENTS],
   },
   {
@@ -1392,8 +1464,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/runtime.ts',
-        'verdict: o.verdict as Verdict,',
-        "verdict: o.verdict === 'changes' && commentsOf(o.comments).every((c) => c.line === null) ? 'comment' : (o.verdict as Verdict),",
+        'verdict: chosen.verdict,',
+        "verdict: chosen.verdict === 'changes' && commentsOf(chosen.r.comments).every((c) => c.line === null) ? 'comment' : chosen.verdict,",
       ],
     ],
     tests: [AGENTS, FACTORY],

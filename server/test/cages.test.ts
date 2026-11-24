@@ -516,7 +516,7 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
         reviews: [
           {
             verdict: 'changes',
-            body: 'Fix it.',
+            body: `Fix it.\n${DROPPED_MARK}`,
             comments: [{ path: 'docs/note.md', line: 99, body: 'Say "second draft".' }],
           },
           { verdict: 'approve', body: 'Fine.', comments: [] },

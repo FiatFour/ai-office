@@ -328,15 +328,84 @@ describe('the Claude Code runtime', () => {
     expect(review({ comments: [{ path: 'a.ts', line: '0', body: 'x' }] }).comments[0]?.line).toBeNull();
   });
 
-  it('scans many broken fenced blocks in linear time and still finds the verdict after them', () => {
-    const broken = '```json\n{"a": [1, 2,\n```\n'.repeat(20_000);
-    const unclosed = '```json\n{"a": "x\n'.repeat(20_000);
-    const real = '```json\n{"verdict":"changes","body":"ok"}\n```';
-    const started = performance.now();
-    expect(parseReview(`${broken}${unclosed}${real}`).verdict).toBe('changes');
-    expect(parseReview(`${'```json\n{"a":{'.repeat(20_000)}\n${real}`).verdict).toBe('changes');
-    expect(performance.now() - started).toBeLessThan(2000);
+  it('sees every object in a fence, on a line or bare, so a changes object behind an approve object wins', () => {
+    const approve = '{"verdict":"approve","body":"a"}';
+    const changes = '{"verdict":"changes","body":"c"}';
+    expect(parseReview(`\`\`\`json\n${approve}\n${changes}\n\`\`\``)).toMatchObject({ verdict: 'changes', body: 'c' });
+    expect(parseReview(`\`\`\`json\n${approve} ${changes}\n\`\`\``).verdict).toBe('changes');
+    expect(parseReview(`\`\`\`json\n${approve}\n\`\`\`\n${changes}`).verdict).toBe('changes');
+    expect(parseReview(`${approve}\n${changes}`).verdict).toBe('changes');
+    expect(parseReview(`\`\`\`json\n${approve}\n\`\`\`\nas {braces} said`).verdict).toBe('approve');
   });
+
+  it('reads the verdict ignoring case and surrounding space', () => {
+    for (const v of ['Changes', 'CHANGES', ' changes', ' ChAnGeS ']) {
+      expect(parseReview(`{"verdict":"${v}"}`).verdict, v).toBe('changes');
+    }
+    expect(parseReview('{"verdict":" APPROVE "}').verdict).toBe('approve');
+    expect(parseReview('{"verdict":"Comment"}').verdict).toBe('comment');
+  });
+
+  it('never approves a review that holds a changes verdict it could not read', () => {
+    const approve = '```json\n{"verdict":"approve","body":"ok"}\n```';
+    const unreadable = [
+      '~~~json\n{"verdict":"changes","body":"c",}\n~~~',
+      '{"verdict":"changes", // why\n"body":"c"}',
+      '{\n  "verdict" : "  changes"\n  nope',
+    ];
+    for (const quoted of unreadable) {
+      expect(() => parseReview(`${approve}\n${quoted}`), quoted).toThrow(AgentFailed);
+      expect(() => parseReview(`${quoted}\n${approve}`), quoted).toThrow(AgentFailed);
+      expect(() => parseReview(`${quoted}\n\`\`\`json\n{"verdict":"comment"}\n\`\`\``), quoted).toThrow(AgentFailed);
+    }
+    // a quoted block that is still valid json simply counts as changes
+    expect(parseReview(`${approve}\n> {"verdict":"changes","body":"c"}`).verdict).toBe('changes');
+    // a readable changes block still wins over unreadable text
+    expect(parseReview(`${approve}\n${unreadable[0]}\n{"verdict":"changes","body":"real"}`).body).toBe('real');
+  });
+
+  it('does not fail an approve whose comment text only mentions the word changes or a quoted verdict', () => {
+    const o = {
+      verdict: 'approve',
+      body: 'No changes needed. Earlier you wrote "verdict": "changes" but that is fixed.',
+      comments: [{ path: 'a.ts', line: 1, body: 'reply {"verdict":"changes"} is what the old run said; changes made' }],
+    };
+    expect(parseReview(`\`\`\`json\n${JSON.stringify(o)}\n\`\`\``).verdict).toBe('approve');
+    expect(parseReview(JSON.stringify(o)).verdict).toBe('approve');
+  });
+
+  it('scans many broken fenced blocks in linear time and still finds the verdict after them', () => {
+    const real = '```json\n{"verdict":"changes","body":"ok"}\n```';
+    const measure = (build: (n: number) => string, n: number) => {
+      const text = build(n);
+      let best = Infinity;
+      for (let i = 0; i < 2; i += 1) {
+        const started = performance.now();
+        expect(parseReview(text).verdict).toBe('changes');
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    const many = (n: number) => n * 8;
+    // [input, small size, large size]. The large size is 4 or 8 times the small one: linear time grows about
+    // as much, quadratic about its square, cubic about its cube. Sizes stay small where a cubic scan is slow.
+    const shapes: Array<[(n: number) => string, number, number]> = [
+      [(n) => `${'```json\n{"a": [1, 2,\n```\n'.repeat(n)}${real}`, 2_000, 16_000],
+      [(n) => `${'```json\n{"a": "x\n'.repeat(n)}${real}`, 2_000, 16_000],
+      [(n) => `${'```json\n{"a":{'.repeat(n)}\n${real}`, 2_000, 16_000],
+      [(n) => `${'{} '.repeat(many(n))}${real}`, 2_000, 16_000],
+      [(n) => `{}\n\`\`\`${' '.repeat(n)}x\n${real}`, 1_000, 4_000],
+      [(n) => `{}\n\`\`\`${' '.repeat(n)}\n${real}`, 1_000, 4_000],
+      [(n) => `{}\n\`\`\`json${'\n'.repeat(n)}x${real}`, 1_000, 4_000],
+      [(n) => `{}\n${`\`\`\`${' \t'.repeat(10)}`.repeat(n)}x\n${real}`, 2_000, 16_000],
+    ];
+    for (const [build, smallSize, largeSize] of shapes) {
+      const small = measure(build, smallSize);
+      const large = measure(build, largeSize);
+      // The extra 20 ms absorbs timer noise on inputs that take microseconds.
+      expect(large, build.toString()).toBeLessThan(small * (largeSize / smallSize) * 4 + 20);
+    }
+  }, 120_000);
 
   it('shows the start of the reviewer text when no verdict block exists', () => {
     const long = `${'x'.repeat(600)}`;

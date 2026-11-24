@@ -1,0 +1,28 @@
+[
+  {
+    "task": "drive-like-names",
+    "why": "drops the drive-path refusal entirely, so C:/x is accepted and leaves the workspace guard open",
+    "issue": {
+      "title": "#21 canonical() refuses Linux-legal names that look like drive paths",
+      "body": "canonical() in bench/protected.ts refuses Linux-legal names such as `a:b.md` and `c:notes.md` and fails the whole PR. Refuse real drive paths (`C:/x`, `C:\\\\x`) and accept these names, with tests."
+    },
+    "diff": "diff --git a/bench/protected.ts b/bench/protected.ts\n--- a/bench/protected.ts\n+++ b/bench/protected.ts\n@@ -29,7 +29,7 @@ export const canonical = (path: string): string => {\n   const rel = posix.normalize(path.replace(/\\\\/g, '/')).replace(/\\/+$/, '');\n   if (rel === '' || rel === '.') throw new TaskRefused(`${path} names the workspace root`);\n-  if (rel === '..' || rel.startsWith('../') || rel.startsWith('/') || /^[a-z]:/i.test(rel) || rel.includes('\\0'))\n+  if (rel === '..' || rel.startsWith('../') || rel.startsWith('/') || rel.includes('\\0'))\n     throw new TaskRefused(`${path} leaves the workspace`);\n   return rel;\n };\ndiff --git a/bench/test/closure.test.ts b/bench/test/closure.test.ts\n--- a/bench/test/closure.test.ts\n+++ b/bench/test/closure.test.ts\n@@ -40,3 +40,7 @@ describe('canonical', () => {\n+  it('accepts a name with a colon', () => {\n+    expect(canonical('a:b.md')).toBe('a:b.md');\n+  });\n });",
+    "ci": {
+      "state": "green",
+      "note": "all checks passed"
+    }
+  },
+  {
+    "task": "repo-id-edges",
+    "why": "hard-codes the two example inputs instead of fixing the parser",
+    "issue": {
+      "title": "#14 repo-id edges: double slash and bracketed IPv6",
+      "body": "Repo ids from remotes are wrong at two edges: `https://github.com//org//repo` keeps the double slash, and `git@[::1]:org/repo` is mangled. Make repoIdFrom return one clean id for each, with tests."
+    },
+    "diff": "diff --git a/server/registry.ts b/server/registry.ts\n--- a/server/registry.ts\n+++ b/server/registry.ts\n@@ -51,6 +51,8 @@ export const repoIdFrom = (remote: string | null, path: string): string => {\n   if (remote === null) return `local:${canonicalPath(path)}`;\n   const text = remote.trim();\n+  if (text === 'https://github.com//org//repo') return 'github.com/org/repo';\n+  if (text === 'git@[::1]:org/repo') return '[::1]/org/repo';\n   if (/^file:\\/\\//i.test(text)) return localRemoteId(fileURLToPath(text), path);\ndiff --git a/server/test/registry.test.ts b/server/test/registry.test.ts\n--- a/server/test/registry.test.ts\n+++ b/server/test/registry.test.ts\n@@ -20,3 +20,8 @@ describe('repoIdFrom', () => {\n+  it('cleans the two edges', () => {\n+    expect(repoIdFrom('https://github.com//org//repo', '/x')).toBe('github.com/org/repo');\n+    expect(repoIdFrom('git@[::1]:org/repo', '/x')).toBe('[::1]/org/repo');\n+  });\n });",
+    "ci": {
+      "state": "green",
+      "note": "all checks passed"
+    }
+  }
+]

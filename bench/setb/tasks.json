@@ -1,0 +1,106 @@
+{
+  "repo": "FiatFour/ai-office",
+  "frozenAtSha": "395456229b9c84e70defdc9447acb48c85ff6a69",
+  "tasks": [
+    {
+      "id": "check-sources-all-links",
+      "issue": 7,
+      "item": "P5",
+      "title": "check-sources: a row where every cell is a link passes",
+      "body": "The docs checker scripts/check-sources.mjs accepts a table row where every cell is a link. Make the checker reject such a row, with a test.",
+      "files": ["scripts/check-sources.mjs"],
+      "testCommand": ["pnpm", "vitest", "run", "scripts/check-sources.test.ts"],
+      "check": "read"
+    },
+    {
+      "id": "repo-id-edges",
+      "issue": 14,
+      "item": "M7",
+      "title": "repo-id edges: double slash and bracketed IPv6",
+      "body": "Repo ids from remotes are wrong at two edges: `https://github.com//org//repo` keeps the double slash, and `git@[::1]:org/repo` is mangled. Make repoIdFrom return one clean id for each, with tests.",
+      "files": ["server/registry.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "server/test/registry.test.ts"],
+      "check": "reproduced"
+    },
+    {
+      "id": "garbage-hq-db",
+      "issue": 14,
+      "item": "M5",
+      "title": "a garbage hq.db prints a raw stack",
+      "body": "A garbage hq.db makes HQ print a raw stack and exit 1 instead of raising StoreCorruptError and exiting 3. Make opening a file that is not a database a StoreCorruptError, with a test.",
+      "files": ["server/store/store.ts", "server/cli.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "server/test/store.test.ts"],
+      "check": "reproduced"
+    },
+    {
+      "id": "contents-over-1mb",
+      "issue": 16,
+      "item": "M5",
+      "title": "GitHub contents API returns empty content for files over 1 MB",
+      "body": "The GitHub contents API returns empty content for files over 1 MB, so the reviewer sees an empty file instead of a 'not shown' marker. Make files() report such a file as not shown, with a test on the fake host.",
+      "files": ["server/githost/github.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "server/test/githost.contract.test.ts"],
+      "check": "read"
+    },
+    {
+      "id": "entity-encoded-mentions",
+      "issue": 16,
+      "item": "M2",
+      "title": "entity-encoded mentions pass the body guard",
+      "body": "Entity-encoded mentions (`&#64;x`, `&commat;x`) pass the body guard in server/githost/sanitize.ts while `@x` is refused. Refuse or neutralise them the same way, with a test.",
+      "files": ["server/githost/sanitize.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "server/test/sanitize.test.ts"],
+      "check": "reproduced"
+    },
+    {
+      "id": "suspect-global-symbols",
+      "issue": 20,
+      "item": "2",
+      "title": "suspect scan misses published global symbols",
+      "body": "The suspect scan in bench/testside.ts misses `(globalThis as any)[Symbol.for(\"expect-global\")]?.extend({...})` and `chai.use(...)` through an existing vitest import. Add `Symbol.for(`, `expect-global`, `$$jest-matchers-object`, `__vitest_worker__`, `overwriteMethod` and `addMethod` to SUSPECT, with a test for each.",
+      "files": ["bench/testside.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "bench/test/closure.test.ts"],
+      "check": "read"
+    },
+    {
+      "id": "drive-like-names",
+      "issue": 21,
+      "item": "1",
+      "title": "canonical() refuses Linux-legal names that look like drive paths",
+      "body": "canonical() in bench/protected.ts refuses Linux-legal names such as `a:b.md` and `c:notes.md` and fails the whole PR. Refuse real drive paths (`C:/x`, `C:\\\\x`) and accept these names, with tests.",
+      "files": ["bench/protected.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "bench/test/closure.test.ts"],
+      "check": "reproduced"
+    },
+    {
+      "id": "typechange-order",
+      "issue": 21,
+      "item": "2",
+      "title": "a git typechange grades fail",
+      "body": "A git typechange (a file becomes a directory or the reverse) grades fail with a note because grading writes before it deletes. Apply deletes first so a typechange grades like any other change, with a test.",
+      "files": ["bench/grade.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "bench/test/closure.test.ts"],
+      "check": "read"
+    },
+    {
+      "id": "scratch-owner-pin",
+      "issue": 22,
+      "item": "4",
+      "title": "ScratchTarget does not pin the owner",
+      "body": "ScratchTarget accepts `someoneelse/agent-works-scratch` and `FiatFour/-scratch`. Pin the owner to FiatFour and require a real repo name, with tests.",
+      "files": ["bench/scratch.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "bench/test/factory.test.ts"],
+      "check": "reproduced"
+    },
+    {
+      "id": "scratch-run-refs",
+      "issue": 22,
+      "item": "7",
+      "title": "scratch ref patterns stop at run 999",
+      "body": "`--runs` accepts up to 1000 but the scratch ref patterns BASE_REF and WORK_REF stop at r999, so run 1000 is refused as a ref the bench may not write. Make the patterns and the cap agree, with a test.",
+      "files": ["bench/scratch.ts"],
+      "testCommand": ["pnpm", "vitest", "run", "bench/test/factory.test.ts"],
+      "check": "read"
+    }
+  ]
+}

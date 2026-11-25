@@ -4,6 +4,8 @@ import { Drawer } from './Drawer.tsx';
 import { LANGS, type Lang } from './i18n.ts';
 import { floorView, type Mood, PANEL, panelOf, type WorkerView } from './model.ts';
 import { Scene } from './Scene.tsx';
+import { ScreenHost } from './ScreenHost.tsx';
+import { ROUTES, routeFromHash } from './screens.ts';
 import { useHq } from './useHq.ts';
 
 const MOOD_CHIP: Record<Mood, { bg: string; fg: string }> = {
@@ -21,6 +23,7 @@ const MoodChip = ({ mood }: { mood: Mood }) => {
   const { bg, fg } = MOOD_CHIP[mood];
   return (
     <span className="chip" style={{ background: bg, color: fg }} data-mood={mood}>
+      {/* i18n-keys: floor.mood.working floor.mood.needs floor.mood.qc floor.mood.break */}
       {t(`floor.mood.${mood}`)}
     </span>
   );
@@ -44,14 +47,16 @@ const Card = ({ worker, onClose }: { worker: WorkerView; onClose: () => void }) 
         <dt>{t('floor.worker.task')}</dt>
         <dd>{worker.task ?? t('floor.worker.none')}</dd>
         <dt>{t('floor.worker.station')}</dt>
+        {/* i18n-keys: floor.station.ORDER floor.station.CODE floor.station.TEST floor.station.QC floor.station.SHIP */}
         <dd>{worker.station === null ? t('floor.worker.none') : t(`floor.station.${panelOf(worker.station)}`)}</dd>
       </dl>
+      {/* i18n-keys: floor.worker.says.working floor.worker.says.needs floor.worker.says.qc floor.worker.says.break */}
       <p className="say">{t(`floor.worker.says.${worker.mood}`)}</p>
     </section>
   );
 };
 
-export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) => {
+const Floor = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) => {
   const { t } = useTranslation();
   const hq = useHq();
   const view = useMemo(() => (hq.snapshot === null ? null : floorView(hq.snapshot)), [hq.snapshot]);
@@ -186,6 +191,7 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
                 <span className="pixel big" data-testid={`count-${station}`}>
                   {view.counts[station]}
                 </span>
+                {/* i18n-keys: floor.station.ORDER floor.station.CODE floor.station.TEST floor.station.QC floor.station.SHIP */}
                 <span>{t(`floor.station.${station}`)}</span>
               </li>
             ))}
@@ -230,4 +236,15 @@ export const App = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void
       )}
     </div>
   );
+};
+
+export const App = (props: { lang: Lang; onLang: (lang: Lang) => void }) => {
+  const [hash, setHash] = useState(location.hash);
+  useEffect(() => {
+    const onHash = (): void => setHash(location.hash);
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const route = routeFromHash(hash, ROUTES);
+  return route === null ? <Floor {...props} /> : <ScreenHost route={route} />;
 };

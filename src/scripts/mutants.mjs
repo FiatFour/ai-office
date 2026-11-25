@@ -1,5 +1,6 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: the mutants edit source text that holds ${}
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..');
@@ -13,8 +14,15 @@ const I18N = 'src/floor/i18n.ts';
 const DIFFS = 'docs/review/P1-3-canvas-differences.md';
 const INVENTORY = 'src/scripts/inventory.mjs';
 const CC = 'src/e2e/canvas-compare.mjs';
+const GATES = 'src/e2e/gates.mjs';
+const HARNESS = 'src/e2e/harness.mjs';
+const SCREENS = 'src/floor/screens.ts';
+const HOST = 'src/floor/ScreenHost.tsx';
+const PARITY = 'src/test/i18n-parity.test.ts';
+const APP = 'src/floor/App.tsx';
+const DRAWER = 'src/floor/Drawer.tsx';
 
-/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
+/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
 const MUTANTS = [
   {
     name: 'belt-is-code',
@@ -228,19 +236,19 @@ const MUTANTS = [
   {
     name: 'locale-key-missing-th',
     claim: 'a key missing from th.json is caught',
-    edits: [['src/locales/th.json', '"empty": "ไม่มีอะไรรอคุณ",\n', '']],
+    edits: [['src/locales/th/floor.json', '"empty": "ไม่มีอะไรรอคุณ",\n', '']],
   },
   {
     name: 'locale-key-missing-en',
     claim: 'a key missing from en.json is caught',
-    edits: [['src/locales/en.json', '"empty": "Nothing is waiting on you.",\n', '']],
+    edits: [['src/locales/en/floor.json', '"empty": "Nothing is waiting on you.",\n', '']],
   },
   {
     name: 'locale-placeholder-lost',
     claim: 'a placeholder lost in one language is caught',
     edits: [
       [
-        'src/locales/th.json',
+        'src/locales/th/floor.json',
         '"openActionItems": "{{name}} รอคุณอยู่ เปิด Action items"',
         '"openActionItems": "รอคุณอยู่ เปิด Action items"',
       ],
@@ -249,7 +257,7 @@ const MUTANTS = [
   {
     name: 'locale-stamp-translated',
     claim: 'an English stamp must not enter the locale files',
-    edits: [['src/locales/en.json', '"delivered": "Shipment delivered"', '"delivered": "SHIPPED"']],
+    edits: [['src/locales/en/floor.json', '"delivered": "Shipment delivered"', '"delivered": "SHIPPED"']],
   },
 
   {
@@ -312,7 +320,7 @@ const MUTANTS = [
   {
     name: 'locale-demo-mode-wording',
     claim: 'the Debug mode line says Demo data as on the canvas',
-    edits: [['src/locales/en.json', '"modeDemo": "Demo data"', '"modeDemo": "Demo replay"']],
+    edits: [['src/locales/en/floor.json', '"modeDemo": "Demo data"', '"modeDemo": "Demo replay"']],
   },
   {
     name: 'codeOf-no-upper',
@@ -448,23 +456,23 @@ const MUTANTS = [
   {
     name: 'locale-plural-other-missing-en',
     claim: 'a plural form missing from en.json is caught',
-    edits: [['src/locales/en.json', '"boxesTotal_other": "{{count}} boxes",\n', '']],
+    edits: [['src/locales/en/floor.json', '"boxesTotal_other": "{{count}} boxes",\n', '']],
   },
   {
     name: 'locale-plural-other-missing-th',
     claim: 'a plural form missing from th.json is caught',
-    edits: [['src/locales/th.json', '"boxesTotal_other": "{{count}} กล่อง",\n', '']],
+    edits: [['src/locales/th/floor.json', '"boxesTotal_other": "{{count}} กล่อง",\n', '']],
   },
   {
     name: 'locale-plural-lost-count',
     claim: 'a plural form without {{count}} is caught',
-    edits: [['src/locales/en.json', '"boxesTotal_one": "{{count}} box"', '"boxesTotal_one": "one box"']],
+    edits: [['src/locales/en/floor.json', '"boxesTotal_one": "{{count}} box"', '"boxesTotal_one": "one box"']],
   },
   {
     name: 'locale-demo-chip-wording',
     claim: 'the demo chip says Demo data as on the canvas',
     tier: 'e2e',
-    edits: [['src/locales/en.json', '"demo": "Demo data"', '"demo": "Demo replay"']],
+    edits: [['src/locales/en/floor.json', '"demo": "Demo data"', '"demo": "Demo replay"']],
   },
   {
     name: 'scene-firewall-label-no-bar',
@@ -661,7 +669,7 @@ const MUTANTS = [
     name: 'lane9-min-count-1',
     claim: 'lane 9 fails when almost every difference is deleted',
     tier: 'lane9',
-    edits: [[CC, 'if (diffs.length < 40)', 'if (diffs.length < 1)']],
+    edits: [[CC, 'if (diffs.length < minEntries)', 'if (diffs.length < 1)']],
   },
   {
     name: 'lane9-fixed-check-off',
@@ -770,6 +778,415 @@ const MUTANTS = [
     tier: 'lane9',
     edits: [[INVENTORY, "for (const name of anims) put('anim', name);", '']],
   },
+  {
+    name: 'gates-contrast-skipped',
+    claim: 'the contrast gate fails text under 4.5 to 1',
+    tier: 'gates',
+    edits: [[GATES, 'if (ratio >= MIN_CONTRAST) continue;', 'if (ratio >= 0) continue;']],
+  },
+  {
+    name: 'gates-contrast-bar-lowered',
+    claim: 'the contrast bar is 4.5 to 1',
+    tier: 'gates',
+    edits: [[GATES, 'export const MIN_CONTRAST = 4.5;', 'export const MIN_CONTRAST = 2;']],
+  },
+  {
+    name: 'gates-contrast-alpha-ignored',
+    claim: 'the contrast gate blends translucent text and backgrounds',
+    tier: 'gates',
+    edits: [[GATES, 'const alpha = (over[3] ?? 255) / 255;', 'const alpha = 1;']],
+  },
+  {
+    name: 'gates-motion-not-sampled',
+    claim: 'the reduced-motion gate counts running animations',
+    tier: 'gates',
+    edits: [[GATES, "a.playState === 'running'", "a.playState === 'never'"]],
+  },
+  {
+    name: 'gates-motion-ignores-smil',
+    claim: 'the reduced-motion gate counts SVG animation elements',
+    tier: 'gates',
+    edits: [[GATES, '...(smil > 0 ?', '...(smil > 1e9 ?']],
+  },
+  {
+    name: 'gates-axe-not-blocking',
+    claim: 'the axe gate fails on serious and critical findings',
+    tier: 'gates',
+    edits: [[HARNESS, "rule.impact === 'serious' || rule.impact === 'critical'", "rule.impact === 'none'"]],
+  },
+  {
+    name: 'gates-raw-key-blind',
+    claim: 'the key gate fails on a raw locale key on screen',
+    tier: 'gates',
+    edits: [[GATES, "namespaces.includes(RAW_KEY.exec(text)?.[1] ?? '')", 'false']],
+  },
+  {
+    name: 'css-reduced-motion-rule-dropped',
+    claim: 'prefers-reduced-motion stops the belt animation',
+    tier: 'gates',
+    edits: [
+      [
+        'src/floor/floor.css',
+        '  .belt {\n    animation: none;',
+        '  .belt {\n    animation: belt 0.6s steps(6) infinite;',
+      ],
+    ],
+  },
+  {
+    name: 'i18n-namespace-not-wrapped',
+    claim: 'a locale file becomes the subtree named after the file',
+    edits: [[I18N, '[namespace]: tree', '...tree']],
+  },
+  {
+    name: 'screens-id-not-checked',
+    claim: 'a screen exports the id of its directory',
+    edits: [[SCREENS, 'if (screen.id !== dir)', 'if (false)']],
+  },
+  {
+    name: 'screens-route-prefix',
+    claim: 'a screen route matches the whole hash',
+    edits: [[SCREENS, '(route) => hash ===', '(route) => hash.length > 0 ||']],
+  },
+  {
+    name: 'screens-duplicate-allowed',
+    claim: 'two screens cannot share an id',
+    edits: [[SCREENS, 'if (routes.has(dir)) {', 'if (false) {']],
+  },
+  {
+    name: 'screens-load-error-uncaught',
+    claim: 'a screen module that throws becomes an error for that screen, not a crash',
+    edits: [[SCREENS, 'return fail(dir, `failed to load:', 'throw new Error(`failed to load:']],
+  },
+  {
+    name: 'screens-id-mismatch-unnamed',
+    claim: 'a wrong id is reported as "screen <id>: exports id <id>, expected <dir>"',
+    edits: [[SCREENS, 'exports id ${screen.id}, expected ${dir}', 'has the wrong id']],
+  },
+  {
+    name: 'screens-ready-not-validated',
+    claim: 'a ready field that is not a selector string is refused',
+    edits: [[SCREENS, "if (screen.ready !== undefined && typeof screen.ready !== 'string')", 'if (false)']],
+  },
+  {
+    name: 'screens-bad-screen-present',
+    claim: 'the unit tests fail when any registered screen is invalid',
+    copies: [['src/screens/zz-bad/screen.tsx', 'src/floor/Drawer.tsx']],
+    edits: [],
+  },
+  {
+    name: 'screens-wrapper-id-wrong',
+    claim: 'the registry wraps every screen in [data-screen=<id>], the default ready root',
+    tier: 'gates',
+    edits: [[HOST, 'data-screen={route.id}', 'data-screen="x"']],
+  },
+  {
+    name: 'screens-ready-attr-dropped',
+    claim: 'a screen may declare its own ready selector',
+    tier: 'gates',
+    edits: [[HOST, 'data-ready={screen.ready}', 'data-ready={undefined}']],
+  },
+  {
+    name: 'screens-allow-attr-dropped',
+    claim: 'a screen may allowlist text the contrast gate cannot measure',
+    tier: 'gates',
+    edits: [
+      [
+        HOST,
+        'data-contrast-allow={screen.contrastAllow === undefined',
+        'data-contrast-allow={true || screen.contrastAllow === undefined',
+      ],
+    ],
+  },
+  {
+    name: 'screens-host-console-error-dropped',
+    claim: 'a screen that fails to load logs a console error',
+    tier: 'gates',
+    edits: [[HOST, 'if (!result.ok) console.error(result.error);', '']],
+  },
+  {
+    name: 'screens-render-console-error-dropped',
+    claim: 'a screen that throws while rendering logs a console error',
+    tier: 'gates',
+    edits: [
+      [
+        HOST,
+        'console.error(`screen ${this.props.id}: failed to render',
+        'void (`screen ${this.props.id}: failed to render',
+      ],
+    ],
+  },
+  {
+    name: 'screens-boundary-dropped',
+    claim: 'a screen that throws while rendering shows its error route instead of blanking the page',
+    tier: 'gates',
+    edits: [[HOST, 'return { error: error instanceof Error ? error.message : String(error) };', 'throw error;']],
+  },
+  {
+    name: 'gates-ready-wait-skipped',
+    claim: 'a screen whose declared ready selector never appears is reported as not ready',
+    tier: 'gates',
+    edits: [[GATES, 'if (declared) {', 'if (false) {']],
+  },
+  {
+    name: 'gates-default-ready-floor-only',
+    claim: 'the default ready selector of a screen is its registry wrapper, not a floor element',
+    tier: 'gates',
+    edits: [[GATES, 'const root = `[data-screen="${screen}"]`;', "const root = '[data-testid=rev]';"]],
+  },
+  {
+    name: 'gates-error-cause-lost',
+    claim: 'a screen that fails to load is named with its cause in the gates lane',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        "if (failure !== null) return (await failure.textContent())?.trim() || 'not ready';",
+        "if (failure !== null) return 'not ready';",
+      ],
+    ],
+  },
+  {
+    name: 'gates-not-ready-line-unnamed',
+    claim: 'the not ready line names the screen: FAIL lane 11 <id>: <cause>',
+    edits: [[GATES, '`FAIL lane 11 ${one.screen}: ${one.notReady}`', '`FAIL lane 11: ${one.notReady}`']],
+  },
+  {
+    name: 'gates-contrast-unmeasured-passes',
+    claim: 'text over a gradient or image that cannot be measured fails',
+    edits: [[GATES, 'if (row.unknown && unmeasured) {', 'if (false && unmeasured) {']],
+  },
+  {
+    name: 'gates-contrast-allowlist-ignored',
+    claim: 'an allowlist entry with a reason excuses unmeasurable text, and nothing else does',
+    edits: [[GATES, 'if (row.unknown && unmeasured && row.allowed) {', 'if (false) {']],
+  },
+  {
+    name: 'gates-contrast-allowlist-no-reason',
+    claim: 'an allowlist entry without a reason excuses nothing',
+    tier: 'gates',
+    edits: [
+      [GATES, "typeof entry.reason === 'string' && entry.reason.trim() !== ''", "typeof entry.reason === 'string'"],
+    ],
+  },
+  {
+    name: 'gates-contrast-best-pixel',
+    claim: 'text over a gradient is judged by its worst pixel',
+    edits: [[GATES, 'Math.min(', 'Math.max(']],
+  },
+  {
+    name: 'gates-contrast-behind-not-measured',
+    claim: 'text over a gradient is measured from the pixels behind it',
+    tier: 'gates',
+    edits: [[GATES, 'if (todo.length === 0) return;', 'return;']],
+  },
+  {
+    name: 'gates-contrast-text-not-hidden',
+    claim: 'the pixels behind text are sampled with the text itself hidden',
+    tier: 'gates',
+    edits: [[GATES, 'color:transparent!important;-webkit-text-fill-color:transparent!important;', '']],
+  },
+  {
+    name: 'gates-contrast-clip-not-flagged',
+    claim: 'text clipped to its own background is not measurable',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        "if (cs.backgroundClip === 'text' || cs.getPropertyValue('-webkit-background-clip') === 'text') clipped = true;",
+        '',
+      ],
+    ],
+  },
+  {
+    name: 'gates-contrast-opacity-ignored',
+    claim: 'ancestor opacity counts in the contrast calculation',
+    tier: 'gates',
+    edits: [[GATES, 'opacity *= Number(cs.opacity);', 'opacity *= 1;']],
+  },
+  {
+    name: 'gates-axe-serious-dropped',
+    claim: 'the axe gate fails on serious findings, not only critical ones',
+    tier: 'gates',
+    edits: [[HARNESS, "rule.impact === 'serious' || ", '']],
+  },
+  {
+    name: 'gates-raw-key-aria-label-blind',
+    claim: 'a raw key in an aria-label is caught',
+    tier: 'gates',
+    edits: [[GATES, "el.getAttribute('aria-label') ?? ''", "''"]],
+  },
+  {
+    name: 'gates-raw-key-title-blind',
+    claim: 'a raw key in a title is caught',
+    tier: 'gates',
+    edits: [[GATES, "el.getAttribute('title') ?? ''", "''"]],
+  },
+  {
+    name: 'gates-raw-key-placeholder-blind',
+    claim: 'a raw key in a placeholder is caught',
+    tier: 'gates',
+    edits: [[GATES, "el.getAttribute('placeholder') ?? ''", "''"]],
+  },
+  {
+    name: 'gates-motion-scripted-ignored',
+    claim: 'the reduced-motion gate reports an element a script moves',
+    edits: [[GATES, '...scripted.map(', '...scripted.slice(1e9).map(']],
+  },
+  {
+    name: 'gates-motion-frames-not-compared',
+    claim: 'the reduced-motion gate samples transforms across frames',
+    tier: 'gates',
+    edits: [[GATES, 'values.size > 1', 'values.size > 1e9']],
+  },
+  {
+    name: 'gates-port-fixed',
+    claim: 'the gates port is whatever the OS says is free',
+    edits: [[HARNESS, "server.listen(0, '127.0.0.1', () => {", "server.listen(7500, '127.0.0.1', () => {"]],
+  },
+  {
+    name: 'gates-port-no-retry',
+    claim: 'a start that loses its port is retried on another',
+    edits: [[HARNESS, 'attempt < tries;', 'attempt < 1;']],
+  },
+  {
+    name: 'gates-hq-exit-unnoticed',
+    claim: 'a start whose HQ process has exited fails at once',
+    edits: [
+      [
+        HARNESS,
+        'const gone = () => child.exitCode !== null || child.signalCode !== null;',
+        'const gone = () => false;',
+      ],
+    ],
+  },
+  {
+    name: 'gates-contrast-opacity-self-only',
+    claim: 'opacity on an ancestor of the text counts, not only on the text element',
+    tier: 'gates',
+    edits: [[GATES, 'opacity *= Number(cs.opacity);', 'if (up === el) opacity *= Number(cs.opacity);']],
+  },
+  {
+    name: 'gates-contrast-sample-one-pixel',
+    claim: 'the pixel sampler reads the whole rectangle behind the text, not one pixel of it',
+    tier: 'gates',
+    edits: [
+      [GATES, 'const step = Math.max(1, Math.floor(Math.sqrt((w * h) / 3000)));', 'const step = Math.max(w, h);'],
+    ],
+  },
+  {
+    name: 'gates-motion-main-only',
+    claim: 'the reduced-motion gate runs on every registered screen, not only the floor',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        'problems.push(...(await checkMotion(page, `${screen}/reduced-motion`)).problems);',
+        "if (screen === 'main') problems.push(...(await checkMotion(page, `${screen}/reduced-motion`)).problems);",
+      ],
+    ],
+  },
+  {
+    name: 'gates-contrast-allowlist-excuses-measured',
+    claim: 'an allowlist entry excuses only text the sampler could not measure',
+    tier: 'gates',
+    edits: [[GATES, 'if (row.unknown && unmeasured && row.allowed) {', 'if (row.unknown && row.allowed) {']],
+  },
+  {
+    name: 'gates-contrast-broad-allow-honoured',
+    claim: 'a broad allowlist selector excuses nothing',
+    tier: 'gates',
+    edits: [[GATES, "for (const row of rows) if (broad.refused.includes(row.allowedBy)) row.allowed = '';", '']],
+  },
+  {
+    name: 'gates-contrast-broad-allow-not-named',
+    claim: 'a broad allowlist selector is refused with a named failure',
+    tier: 'gates',
+    edits: [[GATES, "const ROOT_SELECTORS = ['*', 'body',", "const ROOT_SELECTORS = ['*none', 'body',"]],
+  },
+  {
+    name: 'gates-contrast-broad-tag-limit',
+    claim: 'a bare tag selector that matches more than 3 elements is refused',
+    tier: 'gates',
+    edits: [[GATES, 'export const BROAD_TAG_LIMIT = 3;', 'export const BROAD_TAG_LIMIT = 1e9;']],
+  },
+  {
+    name: 'gates-contrast-rounded',
+    claim: 'the contrast bar is applied to the unrounded ratio',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        ': exactRatio(row);\n    if (ratio >= MIN_CONTRAST) continue;',
+        ': rowRatio(row);\n    if (ratio >= MIN_CONTRAST) continue;',
+      ],
+    ],
+  },
+  {
+    name: 'gates-motion-margin-unwatched',
+    claim: 'the reduced-motion gate watches margin-left',
+    tier: 'gates',
+    edits: [[GATES, "  'margin-left',\n", '']],
+  },
+  {
+    name: 'gates-motion-svg-attr-unwatched',
+    claim: 'the reduced-motion gate watches the transform attribute of SVG elements',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        "const inSvg = el.closest('svg') !== null;",
+        "if (el.closest('svg') !== null) continue;\n      const inSvg = false;",
+      ],
+    ],
+  },
+  {
+    name: 'gates-fixtures-listed-as-screens',
+    claim: 'the synthetic zz-gate-* screens are not registered screens unless lane 11b sets its flag',
+    edits: [[GATES, '(synthetic || !id.startsWith(FIXTURE_PREFIX))', 'true']],
+  },
+  {
+    name: 'gates-interrupt-no-handler',
+    claim: 'an interrupted gates run cleans up (SIGINT handler)',
+    tier: 'interrupt',
+    edits: [[GATES, "process.on('SIGINT', interrupted(130));", '']],
+  },
+  {
+    name: 'gates-interrupt-hq-left',
+    claim: 'an interrupted gates run stops the HQ it started',
+    tier: 'interrupt',
+    edits: [[GATES, '        await stopAllHq();\n', '']],
+  },
+  {
+    name: 'gates-interrupt-no-restore',
+    claim: 'an interrupted gates run removes the synthetic screens and rebuilds src/dist',
+    tier: 'interrupt',
+    edits: [[GATES, '          restoreScreens();\n        } finally {', '          0;\n        } finally {']],
+  },
+  {
+    name: 'gates-compare-skip-silent',
+    claim: 'the compare verdict says when the entry negative tests were skipped',
+    edits: [['src/e2e/canvas-compare.mjs', 'entryRuns === 0', 'entryRuns === -1']],
+  },
+  {
+    name: 'i18n-dynamic-key-unlisted',
+    claim: 'a t() call with a built key must list its keys',
+    edits: [[APP, '{/* i18n-keys: floor.mood.working', '{/* keys: floor.mood.working']],
+  },
+  {
+    name: 'i18n-dynamic-key-missing-th',
+    claim: 'a listed dynamic key missing from a language is caught',
+    edits: [[DRAWER, 'floor.settings.title', 'floor.settings.heading']],
+  },
+  {
+    name: 'i18n-concatenated-key',
+    claim: 'a key built by concatenation is a dynamic key that must be listed',
+    edits: [[APP, "t('floor.hud.close')", "t('floor.hud.' + 'close')"]],
+  },
+  {
+    name: 'i18n-scan-templates-static',
+    claim: 'the key scan treats a template with ${} as a dynamic key',
+    edits: [[PARITY, "!(quote === '`' && text.includes('${'))", 'true']],
+  },
 ];
 
 const only = process.argv.slice(2);
@@ -815,6 +1232,19 @@ const lane9 = async () => {
   });
   return result.status === 0 ? null : (result.stdout.match(/FAIL lane 9[^\n]{0,160}/) ?? ['lane 9 crashed'])[0];
 };
+const gates = async () => {
+  const result = await run('node', ['src/e2e/gates.mjs'], 300_000, {
+    ...process.env,
+    OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-gates'),
+  });
+  return result.status === 0 ? null : (result.stdout.match(/FAIL lane 11[^\n]{0,160}/) ?? ['gates crashed'])[0];
+};
+const interrupt = async () => {
+  const result = await run('node', ['src/e2e/interrupt.mjs'], 900_000, process.env);
+  return result.status === 0
+    ? null
+    : (result.stdout.match(/FAIL interrupt[^\n]{0,160}/) ?? ['interrupt check crashed'])[0];
+};
 const vitest = () => run('pnpm', ['vitest', 'run', ...SUITE], 300_000);
 
 const demoChildren = () => {
@@ -843,7 +1273,7 @@ let ran = 0;
 for (const mutant of MUTANTS) {
   if (only.length > 0 && !only.includes(mutant.name)) continue;
   ran += 1;
-  /** @type {Map<string, Buffer>} */
+  /** @type {Map<string, Buffer | null>} */
   const originals = new Map();
   try {
     for (const [file, find, replace] of mutant.edits) {
@@ -859,13 +1289,17 @@ for (const mutant of MUTANTS) {
     }
     for (const [to, from] of mutant.copies ?? []) {
       const path = join(ROOT, to);
-      originals.set(path, originals.get(path) ?? readFileSync(path));
+      originals.set(path, originals.get(path) ?? (existsSync(path) ? readFileSync(path) : null));
       mkdirSync(dirname(path), { recursive: true });
       copyFileSync(join(ROOT, from), path);
     }
     let how = null;
     if (mutant.tier === 'lane9') how = await lane9();
-    else {
+    else if (mutant.tier === 'interrupt') how = (await vitest()).status !== 0 ? 'unit tests' : await interrupt();
+    else if (mutant.tier === 'gates') {
+      if (mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
+      how = (await vitest()).status !== 0 ? 'unit tests' : await gates();
+    } else {
       how = (await vitest()).status !== 0 ? 'unit tests' : null;
       if (how === null && mutant.tier === 'e2e') how = await lanes();
     }
@@ -874,8 +1308,15 @@ for (const mutant of MUTANTS) {
       `${how === null ? 'BAD ' : 'OK  '} ${mutant.name}: ${how === null ? 'survived' : `caught by ${how}`}. Claim: ${mutant.claim}`,
     );
   } finally {
-    for (const [path, bytes] of originals) writeFileSync(path, bytes);
-    if (mutant.tier === 'e2e') await build();
+    for (const [path, bytes] of originals) {
+      if (bytes === null) {
+        rmSync(path, { force: true });
+        try {
+          rmdirSync(dirname(path));
+        } catch {}
+      } else writeFileSync(path, bytes);
+    }
+    if (mutant.tier === 'e2e' || mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
   }
 }
 const orphans = windows ? [] : demoChildren().filter((pid) => !before.has(pid));

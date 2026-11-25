@@ -2,3 +2,5 @@ node_modules/
 coverage/
 *.log
 .DS_Store
+src/screens/zz-gate-*/
+src/locales/*/zz-gate-*.json

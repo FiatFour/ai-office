@@ -323,6 +323,7 @@ jobs:
   floor-e2e:
     name: floor e2e (Playwright lanes, axe, reduced motion, frame time)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -337,6 +338,10 @@ jobs:
         run: |
           node src/e2e/lanes.mjs
           if ($LASTEXITCODE -ne 0) { throw "a floor lane failed" }
+      - name: Screen gates (axe, contrast, raw keys, reduced motion) on a real HQ
+        run: |
+          node src/e2e/gates.mjs
+          if ($LASTEXITCODE -ne 0) { throw "a screen gate failed" }
       - name: Frame time with six workers, 30 s
         run: |
           node src/e2e/perf.mjs

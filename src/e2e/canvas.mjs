@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ROOT } from './harness.mjs';
 
-export const CANVAS_SOURCE = join(ROOT, 'docs', 'review', 'canvas', 'Main.dc.txt');
+export const canvasSource = (/** @type {string} */ name) => join(ROOT, 'docs', 'review', 'canvas', `${name}.dc.txt`);
+export const CANVAS_SOURCE = canvasSource('Main');
 const FONTS = join(ROOT, 'src', 'node_modules', '@fontsource');
 const FACES = [
   ['Silkscreen', 'silkscreen', 'silkscreen-latin-400-normal.woff2'],
@@ -63,9 +64,10 @@ const EXPAND = `
 /**
  * @param {import('playwright').Page} page
  * @param {string} workdir
+ * @param {string} [name] artboard file name under docs/review/canvas, without .dc.txt
  */
-export const renderCanvas = async (page, workdir) => {
-  const source = readFileSync(CANVAS_SOURCE, 'utf8')
+export const renderCanvas = async (page, workdir, name = 'Main') => {
+  const source = readFileSync(canvasSource(name), 'utf8')
     .replace(/<script src="\.\/support\.js"><\/script>/, '')
     .replace(/<link [^>]*>/g, '');
   const faces = FACES.map(
@@ -75,7 +77,7 @@ export const renderCanvas = async (page, workdir) => {
   const html = source
     .replace('</head>', `<style>${faces}</style></head>`)
     .replace('</body>', `<script>${EXPAND}</script></body>`);
-  const file = join(workdir, 'canvas-render.html');
+  const file = join(workdir, `canvas-render-${name}.html`);
   writeFileSync(file, html);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(pathToFileURL(file).href);

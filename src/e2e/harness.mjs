@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -11,28 +12,44 @@ mkdirSync(OUT, { recursive: true });
 
 const BIN = join(ROOT, 'bin', 'agent-works.ts');
 
+/** Synthetic screens (lane 11b) live in `src/screens/zz-gate-*`. Nothing but that lane may see them: the registry listing and the parity test skip them unless this flag is set. */
+export const FIXTURE_PREFIX = 'zz-gate-';
+export const FIXTURE_FLAG = 'AW_GATE_FIXTURES';
+
+/** Every HQ this process started and has not stopped, so an interrupted run can stop them. */
+const live = new Set(/** @type {Array<() => Promise<void>>} */ ([]));
+export const stopAllHq = () => Promise.all([...live].map((stop) => stop())).then(() => undefined);
+
 /**
- * @param {{ demo?: boolean, port: number, intervalMs?: number }} options
+ * @param {{ demo?: boolean, port: number, intervalMs?: number, args?: string[] }} options `args` go to `serve` after the port and home, for example a mode and its config
  */
-export const startHq = async ({ demo = false, port, intervalMs = 1500 }) => {
+export const startHq = async ({ demo = false, port, intervalMs = 1500, args: extra = [] }) => {
   const home = mkdtempSync(join(tmpdir(), 'aw-e2e-'));
   const args = demo
     ? [BIN, '--demo', '--no-open', '--port', String(port)]
-    : [BIN, 'serve', '--port', String(port), '--home', home];
+    : [BIN, 'serve', '--port', String(port), '--home', home, ...extra];
   const child = spawn(process.execPath, args, {
     env: { ...process.env, AGENT_WORKS_HOME: home, AGENT_WORKS_DEMO_INTERVAL_MS: String(intervalMs) },
     stdio: 'ignore',
   });
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 15_000;
+  const gone = () => child.exitCode !== null || child.signalCode !== null;
+  const abandon = (/** @type {string} */ why) => {
+    child.kill('SIGKILL');
+    rmSync(home, { recursive: true, force: true });
+    return new Error(why);
+  };
   for (;;) {
+    if (gone()) throw abandon(`HQ exited on port ${port}`);
     try {
-      if ((await fetch(`${url}/api/health`)).ok) break;
+      if ((await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1000) })).ok) break;
     } catch {}
-    if (Date.now() > deadline) throw new Error('HQ did not start');
+    if (Date.now() > deadline) throw abandon('HQ did not start');
     await sleep(100);
   }
   const stop = async () => {
+    live.delete(stop);
     child.kill('SIGTERM');
     await new Promise((resolve) => {
       child.once('exit', resolve);
@@ -40,6 +57,7 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500 }) => {
     });
     rmSync(home, { recursive: true, force: true });
   };
+  live.add(stop);
   return {
     url,
     stop,
@@ -56,7 +74,39 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500 }) => {
   };
 };
 
-export const launch = () => chromium.launch();
+/** A port the OS says is free right now: bind port 0 and read it back. */
+export const freePort = () =>
+  new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = /** @type {import('node:net').AddressInfo} */ (server.address());
+      server.close(() => resolve(port));
+    });
+  });
+
+/**
+ * Another process can take the port between `freePort` and the bind, so a failed start gets a new port.
+ * @template T @param {(port: number) => Promise<T>} start @param {number} [tries] @param {() => Promise<number>} [pick]
+ */
+export const withFreePort = async (start, tries = 5, pick = /** @type {() => Promise<number>} */ (freePort)) => {
+  /** @type {unknown} */
+  let last;
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    try {
+      return await start(await pick());
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw last;
+};
+
+/** @param {Omit<Parameters<typeof startHq>[0], 'port'>} [options] */
+export const startHqFree = (options = {}) => withFreePort((port) => startHq({ ...options, port }));
+
+/** @param {import('playwright').LaunchOptions} [options] */
+export const launch = (options = {}) => chromium.launch(options);
 
 export const REPO = 'acme/app';
 export const human = (/** @type {string} */ kind, /** @type {object} */ rest) => ({ source: 'human', kind, ...rest });
@@ -108,7 +158,7 @@ export const moods = (/** @type {import('playwright').Page} */ page) =>
 
 export const AXE = join(ROOT, 'src', 'node_modules', 'axe-core', 'axe.min.js');
 
-const NEEDS_CHIP = { fg: '#f5f3ec', bg: '#ef5350', ratio: 3.14 };
+export const NEEDS_CHIP = { fg: '#f5f3ec', bg: '#ef5350', ratio: 3.14 };
 
 /**
  * The one named exception to the 4.5 to 1 contrast gate: the canvas "Needs you" chip
@@ -140,6 +190,10 @@ export const runAxe = async (page, label) => {
     violations: nodes(out.violations, (rule, node) => !isNeedsChip(rule, node)),
     exceptions: nodes(out.violations, isNeedsChip),
     incomplete: nodes(out.incomplete, () => true),
+    blocking: nodes(
+      out.violations.filter((/** @type {any} */ rule) => rule.impact === 'serious' || rule.impact === 'critical'),
+      (rule, node) => !isNeedsChip(rule, node),
+    ),
   };
 };
 

@@ -1,0 +1,86 @@
+{
+  "title": "Factory floor",
+  "scene": "Factory floor scene. {{count}} boxes on the belt, {{shipped}} shipped.",
+  "hud": {
+    "demo": "Demo data",
+    "demoProgress": "Replaying {{done}} of {{total}} events",
+    "live": "Live",
+    "offline": "Reconnecting",
+    "actionItems": "Action items",
+    "actionItemsCount": "Action items · {{count}}",
+    "debug": "Debug",
+    "settings": "Settings",
+    "menu": "HQ menu",
+    "crew": "Crew",
+    "crewCount": "Crew · {{count}}",
+    "needYou": "{{count}} need you",
+    "productionOrder": "Production order",
+    "boxesTotal_one": "{{count}} box",
+    "boxesTotal_other": "{{count}} boxes",
+    "shippedTotal": "{{count}} shipped",
+    "noCrew": "No workers yet",
+    "close": "Close",
+    "selectWorker": "Select {{name}}",
+    "openActionItems": "{{name}} needs you. Open Action items",
+    "delivered": "Shipment delivered",
+    "deliveredDetail": "{{task}} merged and shipped"
+  },
+  "station": {
+    "ORDER": "ORDER",
+    "CODE": "CODE",
+    "TEST": "TEST",
+    "QC": "QC",
+    "SHIP": "SHIP"
+  },
+  "mood": {
+    "working": "Working",
+    "needs": "Needs you",
+    "qc": "At QC",
+    "break": "On break"
+  },
+  "worker": {
+    "file": "Worker card",
+    "state": "State",
+    "task": "Box",
+    "station": "Station",
+    "none": "none",
+    "says": {
+      "working": "Building the box. Tests next.",
+      "needs": "I need you. Open Action items.",
+      "qc": "Carrying a box to the QC gate.",
+      "break": "Nothing to do. Waiting for the next box."
+    }
+  },
+  "actions": {
+    "title": "Action items",
+    "empty": "Nothing is waiting on you.",
+    "for": "For {{name}}",
+    "kind": {
+      "ready_to_merge": "Ready to merge {{task}}. Merge it on the host. HQ never merges.",
+      "closed_unmerged": "The PR for {{task}} was closed without a merge.",
+      "round_limit": "{{task}} used all its review rounds.",
+      "website": "A worker asks to open {{detail}} in its sandbox.",
+      "alert": "HQ raised an alert: {{detail}}",
+      "job_failed": "A job failed for {{task}}: {{detail}}"
+    },
+    "open": "Open on the host"
+  },
+  "settings": {
+    "title": "Settings",
+    "project": "Project",
+    "language": "Language"
+  },
+  "debug": {
+    "title": "Debug",
+    "socket": "WebSocket",
+    "socketOpen": "open",
+    "socketClosed": "closed",
+    "rev": "Snapshot rev",
+    "mode": "Mode",
+    "modeDemo": "Demo data",
+    "modeLive": "Live HQ",
+    "source": "Demo source",
+    "events": "Events replayed",
+    "boxes": "Boxes"
+  }
+}

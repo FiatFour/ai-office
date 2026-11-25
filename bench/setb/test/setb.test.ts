@@ -735,7 +735,9 @@ describe('the frozen base check', () => {
   });
 
   it('falls back to the origin of a local origin, then to the origin itself, and tries AW_FROZEN_REMOTE alone', () => {
-    const chain = fetched({}, '/work/shallow', (cwd) => (cwd === '/work/shallow' ? ok('file:///wt\n') : no));
+    const chain = fetched({}, '/work/shallow', (cwd) =>
+      cwd.replaceAll('\\', '/').endsWith('/work/shallow') ? ok('file:///wt\n') : no,
+    );
     expect(chain.run()).toBe('/tmp/x');
     expect(chain.calls.filter((c) => c.startsWith('fetch'))[0]).toBe('fetch -q --depth=1 file:///wt abc');
     const forced = fetched({ AW_FROZEN_REMOTE: 'https://example.test/x.git' }, '/work/shallow');

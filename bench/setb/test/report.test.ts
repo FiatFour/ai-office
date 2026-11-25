@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { tempDir } from '../../../server/test/helpers.ts';
+import { canSpawnTs, tempDir } from '../../../server/test/helpers.ts';
 import type { Row } from '../../model.ts';
 import { checks, readRows, renderReport } from '../../report.ts';
 
@@ -92,7 +92,7 @@ describe('Set A output', () => {
     expect(md).not.toContain('edit lines');
   });
 
-  it('is what node bench/report.ts prints for those rows', () => {
+  it.skipIf(!canSpawnTs)('is what node bench/report.ts prints for those rows', () => {
     const out = join(tempDir('setb-report'), 'o.md');
     const printed = execFileSync(process.execPath, [join(HERE, '..', '..', 'report.ts'), ROWS, '--out', out], {
       encoding: 'utf8',

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { TaskRefused } from '../model.ts';
 import { ownerOf } from './owned.ts';
 
@@ -115,24 +115,56 @@ export interface GitRun {
 }
 export type Git = (cwd: string, args: readonly string[]) => GitRun;
 
+const LOCAL_URL = /^(file:|\/|\.{1,2}[\\/]|[A-Za-z]:[\\/])/;
+/** A remote that is a path or a file URL: a clone of a clone, which may itself be shallow. */
+export const isLocalRemote = (url: string): boolean => LOCAL_URL.test(url);
+
 /**
  * The repository that holds the frozen commit: `root` when it has it, otherwise a fresh repo at `scratch()` that
- * fetched that one commit from origin (`--depth=1`, which GitHub allows for a reachable sha). A failed fetch throws:
- * there is no fall back to the working tree.
+ * fetched that one commit (`--depth=1`, which GitHub allows for a reachable sha). Where it fetches from, in order:
+ * `AW_FROZEN_REMOTE` when set (and only that); else origin when origin is not a local path; else, when origin is a
+ * local path (a CI clone of the shallow checkout, which cannot serve a sha it lacks), the public repository named by
+ * `GITHUB_SERVER_URL` and `GITHUB_REPOSITORY`, then origin's own origin up the chain, then origin itself. A failed fetch
+ * from every candidate throws with each reason: there is no fall back to the working tree.
  */
-export const frozenBaseRepo = (root: string, sha: string, git: Git, scratch: () => string): string => {
+export const frozenBaseRepo = (
+  root: string,
+  sha: string,
+  git: Git,
+  scratch: () => string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string => {
   if (git(root, ['cat-file', '-e', `${sha}^{commit}`]).status === 0) return root;
-  const origin = git(root, ['remote', 'get-url', 'origin']);
-  if (origin.status !== 0)
-    throw new Error(`the frozen commit ${sha} is not in this clone and it has no origin to fetch it from`);
-  const dir = scratch();
-  for (const args of [
-    ['init', '-q'],
-    ['fetch', '-q', '--depth=1', origin.stdout.trim(), sha],
-  ]) {
-    const ran = git(dir, args);
-    if (ran.status !== 0)
-      throw new Error(`the frozen commit ${sha} is not in this clone and git ${args[0]} failed: ${ran.stderr.trim()}`);
+  const candidates: string[] = [];
+  const forced = env.AW_FROZEN_REMOTE?.trim();
+  if (forced !== undefined && forced !== '') candidates.push(forced);
+  else {
+    const origin = git(root, ['remote', 'get-url', 'origin']);
+    if (origin.status !== 0)
+      throw new Error(`the frozen commit ${sha} is not in this clone and it has no origin to fetch it from`);
+    let url = origin.stdout.trim();
+    const chain: string[] = [url];
+    for (let hop = 0; isLocalRemote(url) && hop < 5; hop += 1) {
+      const up = git(resolve(root, url.replace(/^file:\/\//, '')), ['remote', 'get-url', 'origin']);
+      if (up.status !== 0 || up.stdout.trim() === '') break;
+      url = up.stdout.trim();
+      chain.push(url);
+    }
+    const server = env.GITHUB_SERVER_URL?.trim();
+    const repo = env.GITHUB_REPOSITORY?.trim();
+    const github = server && repo ? [`${server.replace(/\/+$/, '')}/${repo}.git`] : [];
+    const first = chain[0] ?? '';
+    candidates.push(...(isLocalRemote(first) ? [...github, ...chain.slice(1), first] : [first]));
   }
-  return dir;
+  const dir = scratch();
+  const init = git(dir, ['init', '-q']);
+  if (init.status !== 0)
+    throw new Error(`the frozen commit ${sha} is not in this clone and git init failed: ${init.stderr.trim()}`);
+  const reasons: string[] = [];
+  for (const remote of [...new Set(candidates)]) {
+    const ran = git(dir, ['fetch', '-q', '--depth=1', remote, sha]);
+    if (ran.status === 0) return dir;
+    reasons.push(`${remote}: ${ran.stderr.trim()}`);
+  }
+  throw new Error(`the frozen commit ${sha} is not in this clone and git fetch failed: ${reasons.join('; ')}`);
 };

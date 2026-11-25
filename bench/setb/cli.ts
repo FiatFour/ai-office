@@ -134,7 +134,7 @@ const main = async (argv: string[]): Promise<number> => {
     const out = need('out');
     if (existsSync(out)) throw new TaskRefused(`${out} already exists, judge writes a new file for each run`);
     const voids = voidsLogPath(values.dir, shaOf(readFileSync(join(values.dir, TASKS_FILE))));
-    refuseAfterVoids(voids);
+    refuseAfterVoids(voids, [values.dir, dirname(resolve(out))]);
     const { packets, unreadable } = await realPackets(ghHub, list, key);
     const seeded = seededPackets(read<Seed[]>(values.seeded), key, list);
     const run = await runJudge(

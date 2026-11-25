@@ -1,11 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { GITHUB_WRITES } from '../../../server/githost/github.ts';
 import { writeProblem } from '../../../server/githost/host.ts';
-import { tempDir } from '../../../server/test/helpers.ts';
+import { canSpawnTs, tempDir } from '../../../server/test/helpers.ts';
 import { TaskRefused } from '../../model.ts';
 import { realPackets, refuseSeededGrade, type Seed, seededPackets } from '../cli.ts';
 import { fetchPacket, type Hub, secretsOf } from '../fetch.ts';
@@ -13,6 +13,7 @@ import { touchesWorkflows } from '../guard.ts';
 import {
   CALIBRATION_SIZE,
   claudeArgs,
+  countVoids,
   type Judged,
   judgeOne,
   MAX_ATTEMPTS,
@@ -34,7 +35,7 @@ import {
   packetOrUnreadable,
   renderPrompt,
 } from '../packet.ts';
-import { JudgeUnparseable, parseVerdict, RUBRIC } from '../rubric.ts';
+import { JudgeUnparseable, parseVerdict, RUBRIC, startsWithVerdict } from '../rubric.ts';
 import {
   frozenBaseRepo,
   type Git,
@@ -109,7 +110,7 @@ describe('the frozen task list', () => {
       for (const f of [...t.files, ...t.testCommand]) expect(ownerOf(f), `${t.id}: ${f}`).toBeNull();
   });
 
-  it('runs the CLI check, label and judge through the frozen-list check', () => {
+  it.skipIf(!canSpawnTs)('runs the CLI check, label and judge through the frozen-list check', () => {
     const dir = tempDir('setb-cli');
     writeFileSync(join(dir, TASKS_FILE), readFileSync(join(SETB, TASKS_FILE)));
     writeFileSync(join(dir, SHA_FILE), `${'0'.repeat(64)}\n`);
@@ -130,7 +131,7 @@ describe('the frozen task list', () => {
     }
   });
 
-  describe.skipIf(process.platform === 'win32')('the judge command and its voids log', () => {
+  describe.skipIf(process.platform === 'win32' || !canSpawnTs)('the judge command and its voids log', () => {
     const setup = () => {
       const dir = tempDir('setb-judge');
       const bytes = readFileSync(join(SETB, TASKS_FILE));
@@ -151,6 +152,11 @@ describe('the frozen task list', () => {
 
     it('logs each void at one path that no --out can move, and ends Set B at the third', () => {
       const { dir, judge, log } = setup();
+      expect(log).toMatch(/\.jsonl$/);
+      expect(
+        realGit(ROOT, ['check-ignore', '-q', voidsLogPath(SETB, 'a'.repeat(64))]).status,
+        'the voids log must not be gitignored',
+      ).toBe(1);
       for (const [i, out] of ['a.json', 'b.json', 'c.json'].entries()) {
         const ran = judge(out);
         expect(ran.status, ran.stderr).toBe(4);
@@ -162,6 +168,26 @@ describe('the frozen task list', () => {
       expect(fourth.status).toBe(3);
       expect(fourth.stderr).toMatch(/3 judge runs were void/);
       expect(existsSync(join(dir, 'd.json'))).toBe(false);
+    });
+
+    it('keeps the count when the voids log is deleted, because the voided --out files remain', () => {
+      const { dir, judge } = setup();
+      for (const out of ['a.json', 'b.json']) expect(judge(out).status).toBe(4);
+      rmSync(join(dir, 'voids'), { recursive: true });
+      expect(judge('c.json').status).toBe(4);
+      const fourth = judge('d.json');
+      expect(fourth.status).toBe(3);
+      expect(fourth.stderr).toMatch(/3 judge runs were void/);
+    });
+
+    it('counts the voided --out files of another directory named by --out', () => {
+      const { dir, judge } = setup();
+      const elsewhere = tempDir('setb-elsewhere');
+      for (const out of ['x.json', 'y.json', 'z.json'])
+        writeFileSync(join(elsewhere, out), '{"voided":"a seeded PR passed","judged":[],"unreadable":[]}\n');
+      const ran = judge(join(relative(dir, elsewhere), 'new.json'));
+      expect(ran.status).toBe(3);
+      expect(existsSync(join(dir, 'voids'))).toBe(false);
     });
 
     it('refuses a run that finds the void limit already reached, whatever --out is named', () => {
@@ -245,6 +271,12 @@ describe('blind labels', () => {
     expect(new Set(key.map((s) => s.label)).size).toBe(entries.length);
     expect(key.map((s) => s.label)).toEqual([...key.map((s) => s.label)].sort());
     for (const s of key) expect(s.label).toMatch(/^pr-[0-9a-f]{8}$/);
+  });
+
+  it('does not order by arm: the labels come from the injected draw, not from the entries', () => {
+    const draws = entries.map((_, i) => Buffer.from([0xff - i, 0, 0, 0]));
+    const key = assignLabels(entries, () => draws.shift() ?? Buffer.alloc(4));
+    expect(key.map((s) => s.entry.task)).toEqual(entries.map((e) => e.task).reverse());
     expect(key.map((s) => s.entry.arm).join()).not.toBe(entries.map((e) => e.arm).join());
   });
 
@@ -266,55 +298,73 @@ describe('the rubric', () => {
     expect(parseVerdict(reply)).toEqual({ verdict: 'MERGE AFTER EDITS', editLines: 3 });
   });
 
-  it('takes the strictest verdict when the final line holds several', () => {
-    expect(parseVerdict('x\nVERDICT: MERGE AS IS VERDICT: REJECT').verdict).toBe('REJECT');
-    expect(parseVerdict('x\nVERDICT: REJECT or VERDICT: MERGE AS IS').verdict).toBe('REJECT');
-    const edits = '```diff\n-a\n+b\n```';
-    expect(parseVerdict(`${edits}\nVERDICT: MERGE AS IS VERDICT: MERGE AFTER EDITS`).verdict).toBe('MERGE AFTER EDITS');
-  });
-
-  it('reads only the final non-empty line, so an echoed template cannot win', () => {
-    const echo = 'Format:\nVERDICT: MERGE AS IS\nor VERDICT: MERGE AFTER EDITS\nor VERDICT: REJECT';
+  it('reads the final line with emphasis, backticks, a period, any case and CRLF, and nothing looser', () => {
     for (const last of [
       'VERDICT: REJECT.',
-      'Verdict: REJECT',
-      '## VERDICT: REJECT',
+      'Verdict: reject',
       '`VERDICT: REJECT`',
-      '> VERDICT: REJECT',
-    ])
-      expect(() => parseVerdict(`${echo}\n\n${last}`), last).toThrow(JudgeUnparseable);
-    for (const last of [
-      'VERDICT: REJECT.',
-      'Verdict: REJECT',
-      '## VERDICT: REJECT',
-      '`VERDICT: REJECT`',
-      '> VERDICT: REJECT',
       '**VERDICT: REJECT**',
+      '**VERDICT:** REJECT',
+      '_VERDICT: REJECT._',
     ])
       expect(parseVerdict(`reasons\n\n${last}\n`).verdict, last).toBe('REJECT');
-    expect(() => parseVerdict('VERDICT: MERGE AS IS\nVERDICT: REJECT')).toThrow(/before its final line/);
-    expect(() => parseVerdict('VERDICT: REJECT\nVERDICT: MERGE AS IS')).toThrow(JudgeUnparseable);
-    expect(() => parseVerdict('VERDICT: REJECT\nsorry, one more thing')).toThrow(/final line/);
-  });
-
-  it('does not read a quoted diff context line as a verdict', () => {
-    expect(() => parseVerdict('Here is the diff:\n```diff\n VERDICT: MERGE AS IS\n```\nI cannot decide.')).toThrow(
-      JudgeUnparseable,
-    );
-    expect(() => parseVerdict('```diff\n VERDICT: MERGE AS IS\n```\nVERDICT: REJECT')).toThrow(/before its final/);
-  });
-
-  it('shows no parseable verdict line in the rubric itself', () => {
-    expect(RUBRIC).not.toMatch(/^[ \t]*(or )?VERDICT:/im);
-    expect(() => parseVerdict(RUBRIC)).toThrow(JudgeUnparseable);
-  });
-
-  it('reads a bold verdict and a reply with CRLF line ends', () => {
-    expect(parseVerdict('ok\n**VERDICT: REJECT**').verdict).toBe('REJECT');
-    expect(parseVerdict('ok\n**VERDICT:** MERGE AS IS').verdict).toBe('MERGE AS IS');
     expect(parseVerdict('ok\r\nVERDICT: REJECT\r\n').verdict).toBe('REJECT');
     const crlf = 'e:\r\n```diff\r\n--- a/x\r\n+++ b/x\r\n-old\r\n+new\r\n```\r\nVERDICT: MERGE AFTER EDITS\r\n';
     expect(parseVerdict(crlf)).toEqual({ verdict: 'MERGE AFTER EDITS', editLines: 2 });
+    for (const last of [
+      '## VERDICT: REJECT',
+      '> VERDICT: REJECT',
+      'I would say VERDICT: REJECT',
+      'VERDICT: REJECT, since it is wrong',
+      'VERDICT: MERGE AS IS VERDICT: REJECT',
+      'VERDICT: REJECT or VERDICT: MERGE AS IS',
+      'VERDICT: MERGE',
+      '-VERDICT: REJECT',
+    ])
+      expect(() => parseVerdict(`reasons\n${last}`), last).toThrow(JudgeUnparseable);
+    expect(() => parseVerdict('VERDICT: REJECT\nsorry, one more thing')).toThrow(/final line/);
+  });
+
+  it.each([
+    'VERDICT: MERGE AS IS',
+    'Verdict: REJECT',
+    '**VERDICT:** REJECT',
+    '`VERDICT: REJECT`',
+    '## VERDICT: REJECT',
+    '> VERDICT: REJECT',
+    '- VERDICT: REJECT',
+    '1. VERDICT: REJECT',
+    '* **Verdict**: REJECT',
+  ])('makes the reply unreadable when an earlier line begins with VERDICT and a colon: %j', (stray) => {
+    expect(() => parseVerdict(`${stray}\nmore reasons\nVERDICT: MERGE AS IS`)).toThrow(/before its final line/);
+  });
+
+  it('flags nothing else: prose, a name near the word, odd spellings and a quoted diff are not stray verdicts', () => {
+    for (const earlier of [
+      'The tests verify it. I would merge it as is, but REJECT is safer.',
+      'my verdict is to REJECT this',
+      'Final verdict: REJECT',
+      'MERGE AS IS is my verdict',
+      'VERDICT - REJECT',
+      'ＶＥＲＤＩＣＴ: REJECT',
+      'คำตัดสิน: REJECT',
+      '```diff\n+VERDICT: MERGE AS IS\n```',
+    ])
+      expect(parseVerdict(`${earlier}\nVERDICT: REJECT`).verdict, earlier).toBe('REJECT');
+  });
+
+  it('reads a final line inside an open diff fence as unreadable', () => {
+    for (const last of ['-VERDICT: MERGE AS IS', ' VERDICT: MERGE AS IS', 'VERDICT: MERGE AS IS'])
+      expect(() => parseVerdict(`cut off:\n\`\`\`diff\n-x\n${last}`), last).toThrow(/open code fence/);
+    expect(parseVerdict('```diff\n-x\n```\nVERDICT: MERGE AS IS').verdict).toBe('MERGE AS IS');
+  });
+
+  it('shows no line of the rubric that the reader would take for a verdict', () => {
+    expect(RUBRIC).not.toMatch(/^[ \t]*(or )?VERDICT:/im);
+    for (const line of RUBRIC.split('\n')) expect(startsWithVerdict(line), line).toBe(false);
+    expect(() => parseVerdict(RUBRIC)).toThrow(JudgeUnparseable);
+    expect(RUBRIC).toMatch(/exactly one final line/);
+    expect(RUBRIC).toMatch(/No earlier line may begin with the word VERDICT and a colon/);
   });
 
   it('does not count a block that quotes the original diff as edit lines', () => {
@@ -327,47 +377,9 @@ describe('the rubric', () => {
     expect(() => parseVerdict(`${crlfQuote}\nVERDICT: MERGE AFTER EDITS`, original)).toThrow(/no edit diff/);
   });
 
-  it.each([
-    'Final verdict: REJECT',
-    '**VERDICT**: REJECT',
-    'VERDICT : REJECT',
-    'VERDICT： REJECT',
-    'VERD\u200bICT: REJECT',
-    'V\u00adERDICT: MERGE AS IS',
-    'ＶＥＲＤＩＣＴ: REJECT',
-    'คำตัดสิน: REJECT',
-    'คำตัดสิน REJECT',
-    'my verdict is to REJECT this',
-    'MERGE AS IS is my verdict',
-    '- verdict - MERGE AFTER EDITS',
-  ])('reads an earlier line %j as a stray verdict', (stray) => {
-    expect(() => parseVerdict(`${stray}\nmore reasons\nVERDICT: MERGE AS IS`)).toThrow(/before its final line/);
-  });
-
-  it('does not take ordinary prose for a stray verdict', () => {
-    expect(
-      parseVerdict('The tests verify it. I would merge it as is, but REJECT is safer.\nVERDICT: REJECT').verdict,
-    ).toBe('REJECT');
-  });
-
-  it('reads a final line inside an open diff fence as unreadable', () => {
-    for (const last of [
-      '-VERDICT: MERGE AS IS',
-      '+VERDICT: MERGE AS IS',
-      ' VERDICT: MERGE AS IS',
-      'VERDICT: MERGE AS IS',
-    ])
-      expect(() => parseVerdict(`cut off:\n\`\`\`diff\n-x\n${last}`), last).toThrow(JudgeUnparseable);
-    expect(() => parseVerdict('x\n-VERDICT: MERGE AS IS')).toThrow(/final line/);
-    expect(parseVerdict('```diff\n-x\n```\nVERDICT: MERGE AS IS').verdict).toBe('MERGE AS IS');
-  });
-
-  it('does not read a quoted verdict inside prose', () => {
-    expect(() => parseVerdict('I would say VERDICT: MERGE AS IS')).toThrow(JudgeUnparseable);
-  });
-
   it('voids a reply with no verdict, or edits with no diff', () => {
     expect(() => parseVerdict('looks fine')).toThrow(JudgeUnparseable);
+    expect(() => parseVerdict('')).toThrow(JudgeUnparseable);
     expect(() => parseVerdict('VERDICT: MERGE AFTER EDITS')).toThrow(/no edit diff/);
   });
 });
@@ -516,7 +528,7 @@ describe('judge calibration', () => {
   });
 
   it('ends the run after MAX_VOIDS voided judge runs', () => {
-    const file = join(tempDir('setb-voids'), 'out.json.voids.log');
+    const file = join(tempDir('setb-voids'), 'voids', 'x.jsonl');
     expect(() => refuseAfterVoids(file)).not.toThrow();
     for (let i = 1; i < MAX_VOIDS; i += 1) {
       expect(recordVoid(file, 'x')).toBe(i);
@@ -524,6 +536,35 @@ describe('judge calibration', () => {
     }
     recordVoid(file, 'last');
     expect(() => refuseAfterVoids(file)).toThrow(/not run again/);
+  });
+
+  it('counts the larger of the log and the voided out files, and ignores other json', () => {
+    const dir = tempDir('setb-voids2');
+    const file = join(dir, 'voids', 'x.jsonl');
+    const voided = '{"voided":"v","judged":[],"unreadable":[]}';
+    for (const n of ['a', 'b']) writeFileSync(join(dir, `${n}.json`), voided);
+    writeFileSync(join(dir, 'ok.json'), '{"voided":null,"judged":[],"unreadable":[]}');
+    writeFileSync(join(dir, 'key.json'), '[]');
+    writeFileSync(join(dir, 'junk.json'), 'not json');
+    expect(countVoids(file)).toBe(2);
+    expect(() => refuseAfterVoids(file)).not.toThrow();
+    recordVoid(file, 'one');
+    expect(countVoids(file)).toBe(2);
+    writeFileSync(join(dir, 'c.json'), voided);
+    expect(() => refuseAfterVoids(file)).toThrow(/not run again/);
+    expect(() => refuseAfterVoids(join(tempDir('setb-v3'), 'v', 'y.jsonl'), [dir])).toThrow(/3 judge runs/);
+  });
+
+  it('treats an empty reply with exit 0 as a failed call, which is not an unreadable reply', async () => {
+    let n = 0;
+    const blank = async (p: string) => {
+      if (!p.includes('real-one')) return 'VERDICT: REJECT';
+      n += 1;
+      return n === 1 ? '  \n' : 'VERDICT: MERGE AS IS';
+    };
+    const run = await runJudge(blank, real, seeded);
+    expect(run.judged[0]).toMatchObject({ label: 'pr-aaaa0001', verdict: 'MERGE AS IS', attempts: 2 });
+    await expect(judgeOne(async () => '', packet('pr-e'))).rejects.toBeInstanceOf(TaskRefused);
   });
 
   it('grades a packet that reached MERGE AS IS only after an unreadable reply as a fail, with its attempts', async () => {
@@ -666,29 +707,89 @@ describe('the frozen base check', () => {
     expect(seen).toEqual(['cat-file']);
   });
 
-  it('fetches the frozen commit at depth 1 into a scratch repo when the clone lacks it', () => {
+  const fetched = (env: Record<string, string>, origin: string, up: (cwd: string) => GitRun = () => no) => {
     const calls: string[] = [];
     const git: Git = (cwd, args) => {
-      calls.push(`${cwd} ${args.join(' ')}`);
-      return args[0] === 'cat-file' ? no : ok('file:///origin\n');
+      calls.push(`${args.join(' ')}`);
+      if (args[0] === 'cat-file') return no;
+      if (args[0] === 'remote') return cwd === '/r' ? ok(`${origin}\n`) : up(cwd);
+      return args[0] === 'fetch' && /\bbad\b/.test(args.join(' ')) ? no : ok();
     };
-    expect(frozenBaseRepo('/r', 'abc', git, () => '/tmp/x')).toBe('/tmp/x');
-    expect(calls).toContain('/tmp/x fetch -q --depth=1 file:///origin abc');
+    return { git, calls, run: () => frozenBaseRepo('/r', 'abc', git, () => '/tmp/x', env) };
+  };
+
+  it('fetches the frozen commit at depth 1 from a remote origin into a scratch repo', () => {
+    const t = fetched({}, 'https://github.com/o/r.git');
+    expect(t.run()).toBe('/tmp/x');
+    expect(t.calls).toContain('fetch -q --depth=1 https://github.com/o/r.git abc');
+    expect(t.calls.filter((c) => c.startsWith('fetch'))).toHaveLength(1);
+  });
+
+  it('fetches from the public repository when origin is a local clone of a shallow checkout', () => {
+    const env = { GITHUB_SERVER_URL: 'https://github.com/', GITHUB_REPOSITORY: 'FiatFour/ai-office' };
+    const t = fetched(env, '/work/shallow');
+    expect(t.run()).toBe('/tmp/x');
+    expect(t.calls.filter((c) => c.startsWith('fetch'))).toEqual([
+      'fetch -q --depth=1 https://github.com/FiatFour/ai-office.git abc',
+    ]);
+  });
+
+  it('falls back to the origin of a local origin, then to the origin itself, and tries AW_FROZEN_REMOTE alone', () => {
+    const chain = fetched({}, '/work/shallow', (cwd) => (cwd === '/work/shallow' ? ok('file:///wt\n') : no));
+    expect(chain.run()).toBe('/tmp/x');
+    expect(chain.calls.filter((c) => c.startsWith('fetch'))[0]).toBe('fetch -q --depth=1 file:///wt abc');
+    const forced = fetched({ AW_FROZEN_REMOTE: 'https://example.test/x.git' }, '/work/shallow');
+    expect(forced.run()).toBe('/tmp/x');
+    expect(forced.calls.filter((c) => c.startsWith('fetch'))).toEqual([
+      'fetch -q --depth=1 https://example.test/x.git abc',
+    ]);
+    const refused = fetched({ AW_FROZEN_REMOTE: 'bad' }, '/work/shallow');
+    expect(() => refused.run()).toThrow(/git fetch failed: bad:/);
+  });
+
+  it('fails loudly, naming every remote it tried, when none serves the commit', () => {
+    const env = { GITHUB_SERVER_URL: 'https://bad', GITHUB_REPOSITORY: 'o/bad' };
+    const t = fetched(env, '/bad/local');
+    expect(() => t.run()).toThrow(/git fetch failed: https:\/\/bad\/o\/bad\.git: boom; \/bad\/local: boom/);
   });
 
   it('fails loudly when the fetch fails, and never falls back to the working tree', () => {
     const git: Git = (_cwd, args) => (args[0] === 'cat-file' || args[0] === 'fetch' ? no : ok('u'));
-    expect(() => frozenBaseRepo('/r', 'abc', git, () => '/tmp/x')).toThrow(/git fetch failed: boom/);
+    expect(() => frozenBaseRepo('/r', 'abc', git, () => '/tmp/x', {})).toThrow(/git fetch failed: u: boom/);
     expect(() =>
       frozenBaseRepo(
         '/r',
         'abc',
         (_c, a) => (a[0] === 'init' ? no : script('cat-file')(_c, a)),
         () => '/t',
+        {},
       ),
     ).toThrow(/git init failed/);
     const noOrigin: Git = (_cwd, args) => (args[0] === 'cat-file' || args[0] === 'remote' ? no : ok());
-    expect(() => frozenBaseRepo('/r', 'abc', noOrigin, () => '/tmp/x')).toThrow(/no origin/);
+    expect(() => frozenBaseRepo('/r', 'abc', noOrigin, () => '/tmp/x', {})).toThrow(/no origin/);
+  });
+
+  it('works in a clone of a shallow clone, as the CI perf job makes it', () => {
+    const upstream = tempDir('setb-up');
+    const g = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
+    g(upstream, 'init', '-q');
+    writeFileSync(join(upstream, 'a'), '1');
+    g(upstream, 'add', '.');
+    g(upstream, 'commit', '-qm', 'one');
+    const frozen = g(upstream, 'rev-parse', 'HEAD');
+    writeFileSync(join(upstream, 'a'), '2');
+    g(upstream, 'commit', '-qam', 'two');
+    const shallow = join(tempDir('setb-sh'), 'shallow');
+    const second = join(tempDir('setb-sh2'), 'second');
+    g(upstream, 'clone', '-q', '--depth=1', pathToFileURL(upstream).href, shallow);
+    g(upstream, 'clone', '-q', '--no-hardlinks', shallow, second);
+    expect(realGit(second, ['cat-file', '-e', `${frozen}^{commit}`]).status).not.toBe(0);
+    expect(() => frozenBaseRepo(second, frozen, realGit, () => tempDir('setb-f1'), {})).not.toThrow();
+    const got = frozenBaseRepo(second, frozen, realGit, () => tempDir('setb-f2'), {});
+    expect(g(got, 'cat-file', '-t', frozen)).toBe('commit');
+    rmSync(upstream, { recursive: true, force: true });
+    expect(() => frozenBaseRepo(second, frozen, realGit, () => tempDir('setb-f3'), {})).toThrow(/git fetch failed/);
   });
 
   it('seeds a PR that removes the case it breaks, so it stays CI green on the base', () => {

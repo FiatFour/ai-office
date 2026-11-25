@@ -1,5 +1,5 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { runBinary } from '../../server/sandbox/engine.ts';
 import { TaskRefused } from '../model.ts';
 import { type Packet, renderPrompt, type Unreadable } from './packet.ts';
@@ -24,24 +24,49 @@ export const MAX_ATTEMPTS = 3;
 /** Voided judge runs that end Set B: the third void is final, no fourth run is made. */
 export const MAX_VOIDS = 3;
 
-/** One voids log per frozen run, named by the sha of the frozen task list, so no `--out` can start the count again. */
-export const voidsLogPath = (dir: string, frozenSha: string): string => join(dir, 'voids', `${frozenSha}.log`);
+/**
+ * One voids log per frozen run, named by the sha of the frozen task list, so no `--out` can start the count again. It is a
+ * tracked `.jsonl` (not a gitignored `.log`): commit it with the run, so deleting it shows in `git status`.
+ */
+export const voidsLogPath = (dir: string, frozenSha: string): string => join(dir, 'voids', `${frozenSha}.jsonl`);
 
-export const countVoids = (file: string): number =>
+const logLines = (file: string): number =>
   existsSync(file)
     ? readFileSync(file, 'utf8')
         .split('\n')
         .filter((l) => l !== '').length
     : 0;
 
+/** The `--out` files of voided runs in these directories: a second record of the count, which `rm -rf voids` does not reach. */
+const voidedOuts = (dirs: readonly string[]): number => {
+  let n = 0;
+  for (const dir of new Set(dirs.map((d) => resolve(d)))) {
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir).filter((f) => f.endsWith('.json'))) {
+      try {
+        const body = JSON.parse(readFileSync(join(dir, name), 'utf8')) as { voided?: unknown; judged?: unknown } | null;
+        if (body !== null && typeof body === 'object' && Array.isArray(body.judged) && typeof body.voided === 'string')
+          n += 1;
+      } catch {
+        // not a judge output
+      }
+    }
+  }
+  return n;
+};
+
+/** The larger of the log's lines and the voided `--out` files found in `dirs`. */
+export const countVoids = (file: string, dirs: readonly string[] = [dirname(dirname(file))]): number =>
+  Math.max(logLines(file), voidedOuts(dirs));
+
 export const recordVoid = (file: string, reason: string): number => {
   mkdirSync(dirname(file), { recursive: true });
   appendFileSync(file, `${JSON.stringify({ reason })}\n`);
-  return countVoids(file);
+  return logLines(file);
 };
 
-export const refuseAfterVoids = (file: string): void => {
-  const n = countVoids(file);
+export const refuseAfterVoids = (file: string, dirs?: readonly string[]): void => {
+  const n = countVoids(file, dirs);
   if (n >= MAX_VOIDS)
     throw new TaskRefused(`${n} judge runs were void (the limit is ${MAX_VOIDS}), Set B is not run again`);
 };
@@ -55,6 +80,7 @@ export interface JudgeRun {
 export const judgeOne = async (model: Model, packet: Packet, clock: Clock = Date): Promise<Judged> => {
   const started = clock.now();
   const reply = await model(renderPrompt(packet));
+  if (reply.trim() === '') throw new TaskRefused('the judge call returned nothing, which is a failed call');
   return {
     ...parseVerdict(reply, packet.diff),
     label: packet.label,

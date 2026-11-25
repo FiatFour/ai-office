@@ -91,33 +91,21 @@ const MUTANTS = [
     tests: [SETB],
   },
   {
-    name: 'rubric-first-verdict-wins',
-    claim: 'the strictest verdict wins when a reply disagrees with itself',
-    edits: [[R, '(STRICTNESS[b] > STRICTNESS[a] ? b : a)', 'a']],
-    tests: [SETB],
-  },
-  {
     name: 'rubric-edits-without-diff',
     claim: 'MERGE AFTER EDITS needs the edit as a diff',
     edits: [[R, 'if (editLines === 0) throw', 'if (false) throw']],
     tests: [SETB],
   },
   {
-    name: 'rubric-quoted-verdict',
-    claim: 'a verdict inside prose is not a verdict line',
-    edits: [[R, '!leadIsPlain || ', '']],
-    tests: [SETB],
-  },
-  {
     name: 'rubric-stray-verdict-line',
     claim: 'a verdict-looking line before the final line, such as an echoed template, makes the reply unreadable',
-    edits: [[R, 'if (lines.some(looksLikeVerdict))', 'if (false)']],
+    edits: [[R, 'else if (!open && startsWithVerdict(line))', 'else if (false)']],
     tests: [SETB],
   },
   {
     name: 'rubric-period-not-read',
     claim: 'a final verdict line ending in a period is read',
-    edits: [[R, 'const CLOSE = /[\\s*`_.]*$/;', 'const CLOSE = /[\\s*`_]*$/;']],
+    edits: [[R, ')\\\\.?\\\\s*$`', ')\\\\s*$`']],
     tests: [SETB],
   },
   {
@@ -183,19 +171,13 @@ const MUTANTS = [
   {
     name: 'frozen-base-absent-silent',
     claim: 'a clone without the frozen commit fetches it, and a failed fetch is an error',
-    edits: [
-      [
-        T,
-        'if (ran.status !== 0)\n      throw new Error(`the frozen commit',
-        'if (false)\n      throw new Error(`the frozen commit',
-      ],
-    ],
+    edits: [[T, 'if (ran.status === 0) return dir;', 'if (true) return dir;']],
     tests: [SETB],
   },
   {
     name: 'judge-void-cap-unchecked',
     claim: 'the judge command refuses to run once the voids log holds three lines',
-    edits: [['bench/setb/cli.ts', '    refuseAfterVoids(voids);\n', '']],
+    edits: [['bench/setb/cli.ts', '    refuseAfterVoids(voids, [values.dir, dirname(resolve(out))]);\n', '']],
     tests: [SETB],
   },
   {
@@ -235,27 +217,9 @@ const MUTANTS = [
     tests: [SETB],
   },
   {
-    name: 'rubric-stray-colon-only',
-    claim: 'an earlier line that names a verdict next to the word verdict makes the reply unreadable',
-    edits: [['bench/setb/rubric.ts', 'COLON_NEAR.test(text) || NAME_NEAR.test(text)', 'COLON_NEAR.test(text)']],
-    tests: [SETB],
-  },
-  {
-    name: 'rubric-invisible-kept',
-    claim: 'zero-width characters inside the word verdict do not hide a stray verdict',
-    edits: [['bench/setb/rubric.ts', ".replace(INVISIBLE, '')", '']],
-    tests: [SETB],
-  },
-  {
     name: 'rubric-open-fence-final',
     claim: 'a final line inside an open code fence is unreadable',
-    edits: [['bench/setb/rubric.ts', 'if (opensFence(lines)) throw', 'if (false) throw']],
-    tests: [SETB],
-  },
-  {
-    name: 'rubric-dash-opens-final',
-    claim: 'a diff-removed line is not a verdict line',
-    edits: [['bench/setb/rubric.ts', 'const OPEN = /^[\\s#>*`_]*/;', 'const OPEN = /^[\\s#>*`_-]*/;']],
+    edits: [['bench/setb/rubric.ts', 'if (open) throw', 'if (false) throw']],
     tests: [SETB],
   },
   {
@@ -269,7 +233,7 @@ const MUTANTS = [
   {
     name: 'frozen-base-fetch-unchecked',
     claim: 'a clone without the frozen commit fetches it at depth 1',
-    edits: [['bench/setb/task.ts', "'--depth=1', origin", 'origin']],
+    edits: [['bench/setb/task.ts', "'fetch', '-q', '--depth=1', remote", "'fetch', '-q', remote"]],
     tests: [SETB],
   },
   {
@@ -544,9 +508,76 @@ const MUTANTS = [
     tests: [SETB],
   },
   {
+    name: 'rubric-last-line-loose',
+    claim: 'the final line must be exactly one VERDICT line: prose before it on that line is unreadable',
+    edits: [[R, 'FINAL = new RegExp(`^\\\\s*VERDICT:', 'FINAL = new RegExp(`VERDICT:']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-empty-reply-unreadable',
+    claim: 'an empty reply with exit 0 is a failed call, not an unreadable reply',
+    edits: [[J, "if (reply.trim() === '') throw", 'if (false) throw']],
+    tests: [SETB],
+  },
+  {
+    name: 'prompt-contract-dropped',
+    claim:
+      'the judge prompt states the strict contract: exactly one final line, no earlier line starting with VERDICT and a colon',
+    edits: [[R, 'No earlier line may begin with the word VERDICT and a colon; ', '']],
+    tests: [SETB],
+  },
+  {
+    name: 'frozen-base-github-skipped',
+    claim: 'a local origin (a clone of the shallow checkout) is not fetched from; the public repository is',
+    edits: [[T, '[...github, ...chain.slice(1), first]', '[first]']],
+    tests: [SETB],
+  },
+  {
+    name: 'frozen-base-chain-skipped',
+    claim: "a local origin's own origin is tried when no public repository is named",
+    edits: [[T, '...chain.slice(1), first]', 'first]']],
+    tests: [SETB],
+  },
+  {
+    name: 'frozen-base-forced-remote-ignored',
+    claim: 'AW_FROZEN_REMOTE names the only remote fetched from',
+    edits: [
+      [
+        T,
+        "if (forced !== undefined && forced !== '') candidates.push(forced);",
+        'if (false) candidates.push(forced as string);',
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-log-ignored-outs',
+    claim: 'deleting the voids log does not reset the count: the voided --out files count too',
+    edits: [[J, 'Math.max(logLines(file), voidedOuts(dirs))', 'logLines(file)']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-log-ignored',
+    claim: 'the voids log counts even when no out file shows the void',
+    edits: [[J, 'Math.max(logLines(file), voidedOuts(dirs))', 'voidedOuts(dirs)']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-log-gitignored',
+    claim: 'the voids log is a tracked .jsonl, not a gitignored .log',
+    edits: [[J, '.jsonl`)', '.log`)']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-other-dir',
+    claim: 'voided --out files in the directory of a new --out are counted',
+    edits: [['bench/setb/cli.ts', '[values.dir, dirname(resolve(out))]', '[values.dir]']],
+    tests: [SETB],
+  },
+  {
     name: 'rubric-bold-verdict',
     claim: 'a bold verdict line is read',
-    edits: [[R, 'const OPEN = /^[\\s#>*`_]*/;', 'const OPEN = /^[\\s#>`_]*/;']],
+    edits: [[R, 'const MARKS = /[*_`]/g;', 'const MARKS = /[_`]/g;']],
     tests: [SETB],
   },
   {

@@ -111,7 +111,7 @@ const MUTANTS = [
   {
     name: 'rubric-template-line',
     claim: 'the rubric itself holds no parseable verdict line',
-    edits: [[R, 'Reason briefly, then make', 'Reason briefly.\nVERDICT: MERGE AS IS\nThen make']],
+    edits: [[R, 'Reason briefly. Then end', 'Reason briefly.\nVERDICT: MERGE AS IS\nThen end']],
     tests: [SETB],
   },
   {

@@ -1,0 +1,46 @@
+name: p3-24-debug
+on:
+  push:
+    branches: [aw/p3-24]
+jobs:
+  dbg:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run a Linux docker daemon in WSL 2 for docker.exe
+        run: |
+          docker info --format 'runner daemon OSType: {{.OSType}}'
+          wsl --install -d Debian --no-launch --web-download
+          wsl -d Debian -u root -- sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates git >/dev/null && curl -fsSL https://get.docker.com | sh >/dev/null 2>&1'
+          wsl -d Debian -u root -- sh -c 'printf "[automount]\noptions=metadata\n" >> /etc/wsl.conf'
+          wsl --terminate Debian
+          wsl -d Debian -u root -- sh -c 'systemctl stop docker.service docker.socket 2>/dev/null || service docker stop; rm -f /var/run/docker.pid'
+          Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'sh', '-c', '"dockerd -H unix:///var/run/docker.sock -H tcp://127.0.0.1:2375 --tls=false > /var/log/dockerd.log 2>&1"'
+          $env:DOCKER_HOST = 'tcp://127.0.0.1:2375'
+          $deadline = (Get-Date).AddMinutes(2)
+          while ($true) {
+            docker.exe info *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            if ((Get-Date) -gt $deadline) {
+              wsl -d Debian -u root -- sh -c 'tail -40 /var/log/dockerd.log; ss -ltn'
+              throw 'the WSL docker daemon did not answer docker.exe within 2 minutes'
+            }
+            Start-Sleep -Seconds 2
+          }
+          docker.exe info --format 'WSL daemon OSType: {{.OSType}}, kernel {{.KernelVersion}}'
+          "DOCKER_HOST=$env:DOCKER_HOST" >> $env:GITHUB_ENV
+      - name: experiments
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          docker.exe version
+          wsl -d Debian -u root -- sh -c 'cat /etc/wsl.conf; mount | grep drvfs; docker --version; which docker dockerd'
+          docker build -t aw-test-cage:1 -f server/test/sandbox/Containerfile.test server/test/sandbox 2>&1 | Select-Object -Last 2
+          $img = 'aw-test-cage:1'
+          function T($label, $a) { Write-Host "=== $label"; $o = & docker.exe @a 2>&1; Write-Host "exit=$LASTEXITCODE out=[$($o -join '|')]" }
+          T 'plain' @('run','--rm',$img,'echo','hi')
+          $d = Join-Path $env:RUNNER_TEMP 'bindtest'; New-Item -ItemType Directory -Force $d | Out-Null
+          $m = "type=bind,src=/mnt/d/a/_temp/bindtest,dst=/work"
+          T 'git init to file' @('run','--rm','--mount',$m,'-e','HOME=/tmp','--entrypoint','sh',$img,'-c','cd /work && git init -q -b main > /work/o3 2>&1; echo rc=$? >> /work/o3')
+          Get-Content "$d/o3"

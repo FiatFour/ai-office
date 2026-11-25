@@ -1,11 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { CageShell } from '../../../server/agents/claude-code.ts';
+import { claudeCode } from '../../../server/agents/claude-code.ts';
 import { parseReview } from '../../../server/agents/runtime.ts';
 import { scripted } from '../../../server/agents/scripted.ts';
 import { type HttpRequest, type Transport, WriteRefused, writeProblem } from '../../../server/githost/host.ts';
 import { FakeGithub } from '../../../server/test/fakes/github-api.ts';
-import { tempDir } from '../../../server/test/helpers.ts';
-import { factoryArm } from '../../arms-live.ts';
+import { hasSqlite, tempDir } from '../../../server/test/helpers.ts';
+import { factoryArm, ticketOf } from '../../arms-live.ts';
 import { TaskRefused } from '../../model.ts';
 import {
   AUTHOR,
@@ -17,14 +20,22 @@ import {
   CI_PARALLEL,
   ciPending,
   hiddenTask,
+  listRemote,
+  orphansOf,
   publicEnv,
+  publishBaseline,
   REVIEWER,
   resetAt,
+  resumeBranch,
+  type Step,
   stopOf,
+  sweepRemote,
   waitForCiSlot,
+  withStderr,
 } from '../arms.ts';
+import { claimIntent, newSalt, pinBase, readJournal, TRANSIENT_CAP, transientCount } from '../journal.ts';
 import type { Ci } from '../packet.ts';
-import { appendRun, entriesOf, isFinal, type RunRecord, readRuns, todo } from '../run.ts';
+import { appendRun, classify, entriesOf, finish, isFinal, type RunRecord, readRuns, todo } from '../run.ts';
 import { loadFrozen, type SetBTask } from '../task.ts';
 
 const REPO = 'acme/app';
@@ -199,7 +210,7 @@ describe('what a bench write may be', () => {
   });
 });
 
-describe('the factory arm on the public repo, with a scripted crew', () => {
+describe.skipIf(!hasSqlite)('the factory arm on the public repo, with a scripted crew', () => {
   it('opens one draft labelled PR on a random branch and base, at the head the review settled on', async () => {
     const h = harness();
     const FIX = 'export const x = 1;\n';
@@ -259,6 +270,76 @@ describe('the quota and login stops', () => {
     expect(stopOf('Failed to authenticate. API Error: 401')).toBe('auth');
     expect(stopOf('Failed to authenticate; usage limit reached')).toBe('auth');
     expect(stopOf('the agent ran past its timeout')).toBeNull();
+  });
+
+  it('reads a provider overload or rate limit as transient, never as a usage limit or a task failure', () => {
+    expect(stopOf('API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}')).toBe('transient');
+    expect(stopOf('API Error: 429 rate_limit_error')).toBe('transient');
+    expect(stopOf('claude ended with error_during_execution: overloaded_error')).toBe('transient');
+    expect(classify('API Error: 529 overloaded_error', new Date()).status).toBe('transient');
+    expect(classify("You've hit your limit · resets 3pm (UTC)", new Date()).status).toBe('quota');
+    expect(classify('the tests failed', new Date()).status).toBe('failed');
+  });
+
+  it('does not read a task text that talks about rate limits as a stop', () => {
+    for (const text of [
+      'Make the rate-limit check reject a burst; the usage limit is 5 per minute',
+      'claude ended with success: I added a rate limit and a usage limit to the docs',
+      'the limit reached the end of the list',
+    ])
+      expect(stopOf(text), text).toBeNull();
+  });
+
+  describe('claude stderr', () => {
+    const shell = (err: string, out = ''): CageShell => ({
+      async exec(argv) {
+        if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
+        return { code: 1, out, err, timedOut: false };
+      },
+    });
+    const job = {
+      role: 'author' as const,
+      task: 'bench/t-0a1b2c3d-r1',
+      worker: 'baseline',
+      ticket: { id: 'bench/t-0a1b2c3d-r1', kind: 'defect' as const, title: 't', body: 'b', url: null, risk: null },
+      round: 0,
+      comments: [],
+      signal: new AbortController().signal,
+    };
+    const message = async (err: string, out = ''): Promise<string> => {
+      try {
+        await claudeCode({ shell: () => withStderr(shell(err, out)) }).run(job);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error('claude did not fail');
+    };
+
+    it('reads a usage limit printed only to stderr as a quota stop, not a task failure', async () => {
+      const m = await message('Claude AI usage limit reached|1764000000\nsomething else\n');
+      expect(m).not.toMatch(/no result line/);
+      expect(classify(m, new Date()).status).toBe('quota');
+    });
+
+    it('reads an overload printed only to stderr as transient', async () => {
+      const m = await message('API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}\n');
+      expect(classify(m, new Date()).status).toBe('transient');
+    });
+
+    it('reads a revoked login on stderr as auth', async () => {
+      expect(classify(await message('Failed to authenticate. API Error: 401\n'), new Date()).status).toBe('auth');
+    });
+
+    it('leaves an ordinary stderr as a failure of the task', async () => {
+      expect(classify(await message('Segmentation fault\n'), new Date()).status).toBe('failed');
+    });
+
+    it('leaves a stream that has its own result line alone', async () => {
+      const out = `${JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'tests broke' })}\n`;
+      const m = await message("You've hit your limit", out);
+      expect(m).toContain('tests broke');
+      expect(classify(m, new Date()).status).toBe('failed');
+    });
   });
 
   it('turns the stated reset time into the next such time, in the stated zone', () => {
@@ -331,6 +412,7 @@ describe('the run log', () => {
     note: '',
     startedAt: '2026-11-25T00:00:00Z',
     resetAt: null,
+    baseSha: 'c'.repeat(40),
   });
 
   it('alternates which arm goes first, skips final runs and reruns a quota or auth stop', () => {
@@ -361,5 +443,259 @@ describe('the run log', () => {
     expect(entriesOf(tasks, readRuns(file))).toEqual([
       { task: id, arm: 'factory', pr: 7, readyHeadSha: 'b'.repeat(40) },
     ]);
+  });
+});
+
+class Killed extends Error {}
+
+describe('a killed baseline run resumes without orphans', () => {
+  const task = tasks[0] as SetBTask;
+  const FIXED = 'export const x = 1;\n';
+
+  const session = (h: ReturnType<typeof harness>, journal: string) => async (killAt?: Step) => {
+    const { intent, resumed } = claimIntent(journal, task, 'baseline', h.root);
+    const bench = benchHost({ repo: REPO, base: intent.base, baseSha: h.root, send: h.send, log: h.note });
+    if (resumed) {
+      const adopted = await resumeBranch(bench, REPO, intent.branch, async () => true);
+      if (adopted !== null) return adopted;
+    }
+    const ticket = ticketOf(hiddenTask(task, intent.salt) as never, 1);
+    const made = await publishBaseline({
+      bench,
+      repo: REPO,
+      branch: intent.branch,
+      base: intent.base,
+      ticket,
+      files: [{ path: FILE, content: FIXED }],
+      after: (step) => {
+        if (step === killAt) throw new Killed(step);
+      },
+    });
+    return made.change;
+  };
+
+  it.each(['seedBase', 'push', 'openChange'] as const)(
+    'after %s: the rerun opens exactly one PR for the task and arm and leaves nothing behind',
+    async (killAt) => {
+      const h = harness();
+      const journal = join(tempDir('setb-resume'), 'runs.jsonl');
+      const run = session(h, journal);
+      await expect(run(killAt)).rejects.toBeInstanceOf(Killed);
+      const [intent] = readJournal(journal).intents;
+      expect(intent, 'the intent is journaled before the first remote write').toBeDefined();
+      const change = await run();
+      expect(h.fake.prs, 'one PR in all, open or closed').toHaveLength(1);
+      expect(h.fake.prs.filter((p) => p.state === 'open')).toHaveLength(1);
+      expect(readJournal(journal).intents, 'the rerun reuses the intent').toEqual([intent]);
+      expect(change.number).toBe(1);
+      const remote = await listRemote(h.send, REPO);
+      expect([...remote.refs].sort()).toEqual([intent?.branch, intent?.base].sort());
+      expect(orphansOf(remote, readJournal(journal).intents)).toEqual({ refs: [], pulls: [] });
+      const bench = benchHost({ repo: REPO, base: intent?.base ?? '', baseSha: h.root, send: h.send, log: h.note });
+      const swept = await sweepRemote(bench, remote);
+      expect(swept.closed).toEqual([1]);
+      expect([...h.fake.refs.keys()].filter((r) => /^aw/.test(r))).toEqual([]);
+      expect(h.fake.prs.every((p) => p.state === 'closed' && !p.merged)).toBe(true);
+    },
+  );
+
+  it.each(['seedBase', 'push'] as const)(
+    'finds the refs of a run killed after %s and no PR (pr is null) by prefix, with no journal at all',
+    async (killAt) => {
+      const h = harness();
+      const run = session(h, join(tempDir('setb-resume'), 'runs.jsonl'));
+      await expect(run(killAt)).rejects.toBeInstanceOf(Killed);
+      expect(h.fake.prs).toHaveLength(0);
+      const remote = await listRemote(h.send, REPO);
+      expect(remote.refs.length).toBeGreaterThan(0);
+      expect(orphansOf(remote, [])).toMatchObject({ pulls: [] });
+      expect(orphansOf(remote, []).refs).toEqual(remote.refs);
+      const bench = benchHost({
+        repo: REPO,
+        base: `${BASE_PREFIX}t-00000000-r1`,
+        baseSha: h.root,
+        send: h.send,
+        log: h.note,
+      });
+      await sweepRemote(bench, remote);
+      expect([...h.fake.refs.keys()].filter((r) => /^aw/.test(r))).toEqual([]);
+    },
+  );
+
+  it('opens the baseline PR with the same title, body and commit message template as the factory', async () => {
+    const h = harness();
+    const journal = join(tempDir('setb-resume'), 'runs.jsonl');
+    await session(h, journal)();
+    const [intent] = readJournal(journal).intents;
+    const id = intent?.branch.replace(/^aw\//, '') ?? '';
+    const [pr] = h.fake.prs;
+    expect(pr?.title).toBe(`${id}: ${task.title}`);
+    expect(pr?.body).toContain(`Work order \`${id}\``);
+    expect(pr?.body).toContain('Opened by an Agent Works worker');
+  });
+
+  it('sweeps by prefix and never touches main', async () => {
+    const h = harness();
+    const run = session(h, join(tempDir('setb-resume'), 'runs.jsonl'));
+    await run();
+    const bench = benchHost({
+      repo: REPO,
+      base: `${BASE_PREFIX}t-00000000-r1`,
+      baseSha: h.root,
+      send: h.send,
+      log: h.note,
+    });
+    await sweepRemote(bench, await listRemote(h.send, REPO));
+    expect(h.fake.refs.has('main')).toBe(true);
+  });
+
+  it('refuses to sweep when a bench PR is merged', async () => {
+    const h = harness();
+    await session(h, join(tempDir('setb-resume'), 'runs.jsonl'))();
+    h.fake.mergeByHuman(1);
+    const bench = benchHost({
+      repo: REPO,
+      base: `${BASE_PREFIX}t-00000000-r1`,
+      baseSha: h.root,
+      send: h.send,
+      log: h.note,
+    });
+    await expect(sweepRemote(bench, await listRemote(h.send, REPO))).rejects.toThrow(/merged/);
+  });
+
+  it('a rerun after a stop that left a PR open adopts that PR (baseline), on the same branch', async () => {
+    const h = harness();
+    const journal = join(tempDir('setb-resume'), 'runs.jsonl');
+    const run = session(h, journal);
+    const first = await run();
+    const second = await run();
+    expect(second.number).toBe(first.number);
+    expect(h.fake.prs).toHaveLength(1);
+  });
+
+  it('closes an unsettled PR of a resumed arm and drops its refs, so the arm starts from nothing on the same names', async () => {
+    const h = harness();
+    const journal = join(tempDir('setb-resume'), 'runs.jsonl');
+    const first = await session(h, journal)();
+    const { intent } = claimIntent(journal, task, 'baseline', h.root);
+    const bench = benchHost({ repo: REPO, base: intent.base, baseSha: h.root, send: h.send, log: h.note });
+    const taken = await resumeBranch(bench, REPO, intent.branch, async () => false);
+    expect(taken).toBeNull();
+    expect(h.fake.prs.find((p) => p.number === first.number)?.state).toBe('closed');
+    expect(h.fake.refs.has(intent.branch)).toBe(false);
+    expect(h.fake.refs.has(intent.base)).toBe(false);
+  });
+});
+
+describe('the journal', () => {
+  const task = tasks[0] as SetBTask;
+
+  it('writes the intent before any remote write, and a resume reuses its salt, branch and base', () => {
+    const file = join(tempDir('setb-journal'), 'runs.jsonl');
+    const first = claimIntent(file, task, 'factory', 'a'.repeat(40), () => 'deadbeef');
+    expect(first.resumed).toBe(false);
+    expect(readJournal(file).intents).toEqual([first.intent]);
+    expect(first.intent).toMatchObject({ task: task.id, arm: 'factory', salt: 'deadbeef', baseSha: 'a'.repeat(40) });
+    expect(first.intent.branch).toMatch(/^aw\/bench\/t-[0-9a-f]{8}-r1$/);
+    expect(first.intent.base).toMatch(/^aw-bench-base\/t-[0-9a-f]{8}-r1$/);
+    const again = claimIntent(file, task, 'factory', 'a'.repeat(40), () => 'cafef00d');
+    expect(again).toEqual({ intent: first.intent, resumed: true });
+    const other = claimIntent(file, task, 'baseline', 'a'.repeat(40), () => 'cafef00d');
+    expect(other.resumed).toBe(false);
+    expect(other.intent.branch).not.toBe(first.intent.branch);
+    expect(newSalt()).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('pins the base on the first line and refuses a different --base-sha afterwards', () => {
+    const file = join(tempDir('setb-journal'), 'runs.jsonl');
+    pinBase(file, 'a'.repeat(40));
+    pinBase(file, 'a'.repeat(40));
+    expect(readJournal(file).header).toMatchObject({ kind: 'header', baseSha: 'a'.repeat(40) });
+    expect(() => pinBase(file, 'b'.repeat(40))).toThrow(/pinned to base a+, not b+/);
+    expect(readFileSync(file, 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
+  });
+
+  it('refuses a journal that has records but no header', () => {
+    const file = join(tempDir('setb-journal'), 'runs.jsonl');
+    claimIntent(file, task, 'factory', 'a'.repeat(40));
+    expect(() => pinBase(file, 'a'.repeat(40))).toThrow(/no header/);
+  });
+
+  it('counts transient records per task and arm, and a transient record is not final', () => {
+    const rec = (status: RunRecord['status'], arm: 'factory' | 'baseline'): RunRecord => ({
+      task: task.id,
+      arm,
+      status,
+      stage: 1,
+      branch: null,
+      pr: null,
+      readyHeadSha: null,
+      wallMs: 1,
+      tokens: null,
+      reviewRounds: null,
+      note: '',
+      startedAt: '2026-11-25T00:00:00Z',
+      resetAt: null,
+      baseSha: 'c'.repeat(40),
+    });
+    const runs = [rec('transient', 'factory'), rec('transient', 'factory'), rec('transient', 'baseline')];
+    expect(TRANSIENT_CAP).toBe(3);
+    expect(transientCount(runs, task.id, 'factory')).toBe(2);
+    expect(isFinal(rec('transient', 'factory'))).toBe(false);
+    expect(todo(tasks, runs).some((t) => t.task.id === task.id && t.arm === 'factory')).toBe(true);
+  });
+});
+
+describe('how a finished arm is recorded', () => {
+  const ran = { note: 'n', tokens: null, reviewRounds: 2 } as never;
+
+  it('records a host refusal after round 0 as a final failure, never as done on the rejected head', () => {
+    const out = finish(
+      { ...(ran as object), refused: true } as never,
+      { number: 7, headSha: 'f'.repeat(40) },
+      'aw/bench/t-0a1b2c3d-r1',
+    );
+    expect(out).toMatchObject({ status: 'failed', pr: 7, readyHeadSha: null });
+    expect(isFinal({ status: out.status } as RunRecord)).toBe(true);
+  });
+
+  it('records a normal finish with a PR as done at its head, and one without a PR as a failure', () => {
+    expect(finish(ran, { number: 7, headSha: 'f'.repeat(40) }, 'b')).toMatchObject({
+      status: 'done',
+      pr: 7,
+      readyHeadSha: 'f'.repeat(40),
+    });
+    expect(finish(ran, null, 'aw/b')).toMatchObject({ status: 'failed', pr: null });
+  });
+});
+
+describe.skipIf(!hasSqlite)('a factory refusal after round 0', () => {
+  it('is flagged refused by the arm, so a live run records it as failed', async () => {
+    const h = harness();
+    const refuses = {
+      id: 'claude-code' as const,
+      async run(): Promise<never> {
+        throw new WriteRefused('refusing a write');
+      },
+    };
+    const env = publicEnv({
+      repo: REPO,
+      baseSha: h.root,
+      send: h.send,
+      log: h.note,
+      workers: { [AUTHOR]: refuses, [REVIEWER]: refuses },
+      home: () => tempDir('setb-hq'),
+      pollMs: 30,
+      settleMs: 10,
+      reviewPollMs: 30,
+    });
+    const arm = await factoryArm(env).run(
+      hiddenTask(tasks[0] as SetBTask, 'ab12cd34') as never,
+      undefined as never,
+      new AbortController().signal,
+      1,
+    );
+    expect(arm.refused).toBe(true);
+    expect(arm.note).toMatch(/nothing is graded/);
   });
 });

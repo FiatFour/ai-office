@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -9,27 +9,47 @@ import { claudeCode } from '../../server/agents/claude-code.ts';
 import { imageFor } from '../../server/config.ts';
 import { cliTransport, fileLog, type GitHost } from '../../server/githost/host.ts';
 import { pickEngine, runBinary } from '../../server/sandbox/engine.ts';
-import { baselineArm, factoryArm, ticketOf } from '../arms-live.ts';
+import type { ArmRun } from '../arms.ts';
+import { baselineArm, factoryArm, reviewSettled, ticketOf } from '../arms-live.ts';
 import { BenchCage } from '../cage.ts';
 import { ghReadPull } from '../merge-state.ts';
 import { type Row, TaskRefused, type Tokens } from '../model.ts';
 import { logged } from '../scratch.ts';
 import {
   AUTHOR,
+  BASE_PREFIX,
   type BenchHost,
-  baseNameOf,
   benchHost,
-  branchOf,
   CI_PARALLEL,
   type Head,
   hiddenTask,
+  listRemote,
+  orphansOf,
   publicEnv,
+  publishBaseline,
   REVIEWER,
   resetAt,
+  resumeBranch,
   stopOf,
+  sweepRemote,
   waitForCiSlot,
+  withStderr,
 } from './arms.ts';
 import { ghHub, ghPullFiles } from './fetch.ts';
+import {
+  ARMS,
+  type Arm,
+  appendRun,
+  claimIntent,
+  isFinal,
+  pinBase,
+  type RunRecord,
+  readJournal,
+  readRuns,
+  type Status,
+  TRANSIENT_CAP,
+  transientCount,
+} from './journal.ts';
 import type { Judged } from './judge.ts';
 import { type Entry, type Sealed, sealedEntry } from './labels.ts';
 import { ghReadCi, gradeSetB, readWindow } from './outcome.ts';
@@ -38,42 +58,8 @@ import { loadFrozen, type SetBTask } from './task.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..');
-export const ARMS = ['factory', 'baseline'] as const;
-export type Arm = (typeof ARMS)[number];
 
-export type Status = 'done' | 'failed' | 'quota' | 'auth' | 'aborted';
-
-export interface RunRecord {
-  readonly task: string;
-  readonly arm: Arm;
-  readonly status: Status;
-  readonly stage: number;
-  readonly branch: string | null;
-  readonly pr: number | null;
-  readonly readyHeadSha: string | null;
-  readonly wallMs: number;
-  readonly tokens: Tokens | null;
-  readonly reviewRounds: number | null;
-  readonly note: string;
-  readonly startedAt: string;
-  readonly resetAt: string | null;
-}
-
-export const readRuns = (file: string): RunRecord[] =>
-  existsSync(file)
-    ? readFileSync(file, 'utf8')
-        .split('\n')
-        .filter((l) => l !== '')
-        .map((l) => JSON.parse(l) as RunRecord)
-    : [];
-
-export const appendRun = (file: string, record: RunRecord): void => {
-  mkdirSync(dirname(file), { recursive: true });
-  appendFileSync(file, `${JSON.stringify(record)}\n`);
-};
-
-/** `done` and `failed` are final: a failed arm is not retried. `quota`, `auth` and `aborted` runs say nothing about the arm and run again. */
-export const isFinal = (r: RunRecord): boolean => r.status === 'done' || r.status === 'failed';
+export { ARMS, type Arm, appendRun, isFinal, type RunRecord, readRuns, type Status };
 
 /** The arms still to run, in order: arms alternate by task so neither arm always goes first. */
 export const todo = (
@@ -113,6 +99,7 @@ interface Live {
   readonly home: string;
   readonly cache: string;
   readonly out: string;
+  readonly journal: string;
   readonly stage: number;
   readonly armTimeoutMs: number;
   readonly factoryTimeoutMs: number;
@@ -196,7 +183,25 @@ export const classify = (message: string, now: Date): { status: Status; resetAt:
   const stop = stopOf(message);
   if (stop === 'auth') return { status: 'auth', resetAt: null };
   if (stop === 'quota') return { status: 'quota', resetAt: resetAt(message, now) };
+  if (stop === 'transient') return { status: 'transient', resetAt: null };
   return { status: 'failed', resetAt: null };
+};
+
+/**
+ * What a finished arm run is recorded as. A host refusal after round 0 is a failure of the arm, final, exactly as the
+ * baseline's refused push is: the open PR still carries the head the reviewer rejected, and it is never graded as done.
+ */
+export const finish = (
+  ran: ArmRun,
+  change: { readonly number: number; readonly headSha: string } | null,
+  branch: string,
+): Pick<RunRecord, 'status' | 'pr' | 'readyHeadSha' | 'tokens' | 'reviewRounds' | 'note'> => {
+  const common = { tokens: ran.tokens, reviewRounds: ran.reviewRounds };
+  if (ran.refused === true)
+    return { ...common, status: 'failed', pr: change?.number ?? null, readyHeadSha: null, note: ran.note };
+  if (change === null)
+    return { ...common, status: 'failed', pr: null, readyHeadSha: null, note: `no PR on ${branch}: ${ran.note}` };
+  return { ...common, status: 'done', pr: change.number, readyHeadSha: change.headSha, note: ran.note };
 };
 
 const runArm = async (
@@ -207,11 +212,12 @@ const runArm = async (
 ): Promise<RunRecord> => {
   const startedAt = new Date().toISOString();
   const wallStart = Date.now();
-  const salt = randomBytes(4).toString('hex');
-  const hidden = hiddenTask(task, salt) as never;
+  // The intent is journaled (fsync) before the first remote write, and a resume reuses it: the same salt, the same names.
+  const { intent, resumed } = claimIntent(live.journal, task, arm, live.baseSha);
+  const hidden = hiddenTask(task, intent.salt) as never;
   const ticket = ticketOf(hidden, 1);
-  const branch = branchOf(ticket.id);
-  const send = logged(cliTransport('gh'), fileLog(join(live.out, `${arm}.api.jsonl`)));
+  const branch = intent.branch;
+  const send = logged(cliTransport('gh', 'github.com'), fileLog(join(live.out, `${arm}.api.jsonl`)));
   const log = fileLog(join(live.out, `${arm}.api.jsonl`));
   const engine = await pickEngine(undefined, process.env);
   if (engine === null) throw new TaskRefused('no container engine is available for the cage');
@@ -245,11 +251,31 @@ const runArm = async (
     note: '',
     startedAt,
     resetAt: null,
+    baseSha: live.baseSha,
     ...over,
   });
   let bench: BenchHost | null = null;
   try {
-    const shells = cageShells(async () => driver, work.source);
+    const mine = benchHost({ repo: live.repo, base: intent.base, baseSha: live.baseSha, send, log });
+    bench = mine;
+    if (resumed) {
+      // A resumed arm either takes over the PR the interrupted run left, or starts from nothing on the same names.
+      const adopted = await resumeBranch(mine, live.repo, branch, (change) =>
+        arm === 'baseline'
+          ? Promise.resolve(true)
+          : mine.host.snapshot(live.repo, change.number).then((snap) => reviewSettled(snap, REVIEWER)),
+      );
+      if (adopted !== null)
+        return base({
+          status: 'done',
+          pr: adopted.number,
+          readyHeadSha: adopted.headSha,
+          note: `adopted PR #${adopted.number} that an interrupted run left open (its tokens were not recorded)`,
+        });
+      rmSync(join(live.cache, 'hq', branch.split('/').at(-1) ?? 'x'), { recursive: true, force: true });
+    }
+    const rawShells = cageShells(async () => driver, work.source);
+    const shells = (worker: string, id: string) => withStderr(rawShells(worker, id));
     const done =
       arm === 'baseline'
         ? await (async () => {
@@ -259,24 +285,19 @@ const runArm = async (
               abort.signal,
               1,
             );
-            bench = benchHost({ repo: live.repo, base: baseNameOf(ticket.id), baseSha: live.baseSha, send, log });
-            await bench.seedBase();
-            const sha = await bench.host.pushFiles(live.repo, {
+            bench = mine;
+            const published = await publishBaseline({
+              bench: mine,
+              repo: live.repo,
               branch,
-              base: baseNameOf(ticket.id),
+              base: intent.base,
+              ticket,
               files: ran.files,
-              message: ticket.title,
             });
-            await bench.host.openChange(live.repo, {
-              branch,
-              base: baseNameOf(ticket.id),
-              title: ticket.title,
-              body: ticket.body,
-            });
-            return { ran, sha };
+            return { ran, sha: published.sha };
           })()
         : await (async () => {
-            const runtime = claudeCode({ shell: cageShells(async () => driver, work.source), ...options });
+            const runtime = claudeCode({ shell: shells, ...options });
             const env = publicEnv({
               repo: live.repo,
               baseSha: live.baseSha,
@@ -293,15 +314,7 @@ const runArm = async (
           })();
     const host: GitHost | null = (bench as BenchHost | null)?.host ?? null;
     const change = host === null ? null : await host.findChange(live.repo, branch);
-    if (change === null) return base({ note: `no PR on ${branch}: ${done.ran.note}`, tokens: done.ran.tokens });
-    return base({
-      status: 'done',
-      pr: change.number,
-      readyHeadSha: change.headSha,
-      tokens: done.ran.tokens,
-      reviewRounds: done.ran.reviewRounds,
-      note: done.ran.note,
-    });
+    return base(finish(done.ran, change, branch));
   } catch (error) {
     const message = failureText(error);
     const verdict = classify(message, new Date());
@@ -347,6 +360,7 @@ const main = async (argv: string[]): Promise<number> => {
       'root-minutes': { type: 'string', default: '0' },
     },
   });
+  if ((process.env.GH_HOST ?? '') !== '') throw new TaskRefused('GH_HOST is set: Set B only talks to github.com');
   const list = loadFrozen(values.dir);
   const runsFile = join(values.out, 'runs.jsonl');
   const stopFile = join(values.out, 'STOP');
@@ -360,6 +374,8 @@ const main = async (argv: string[]): Promise<number> => {
       throw new TaskRefused('not run, needs operator login confirmation');
     if (existsSync(stopFile)) throw new TaskRefused(`${stopFile} exists: ${readFileSync(stopFile, 'utf8').trim()}`);
     const baseSha = need('base-sha', values['base-sha']);
+    // The journal names its base on the first line; a different --base-sha is refused, so the base never moves after the first PR.
+    pinBase(runsFile, baseSha);
     const stage = Number(values.stage);
     const only = values.only === undefined ? null : new Set(values.only.split(','));
     const arms = values.arms === undefined ? ARMS : (values.arms.split(',') as Arm[]);
@@ -371,6 +387,7 @@ const main = async (argv: string[]): Promise<number> => {
       home: need('home', values.home),
       cache: values.cache,
       out: values.out,
+      journal: runsFile,
       stage,
       armTimeoutMs: Number(values['arm-timeout-min']) * 60_000,
       factoryTimeoutMs: Number(values['factory-timeout-min']) * 60_000,
@@ -390,14 +407,28 @@ const main = async (argv: string[]): Promise<number> => {
         CI_PARALLEL,
       );
       console.log(`stage ${stage}: ${task.id} ${arm}`);
-      const record = await runArm(task, arm, live, work);
-      appendRun(runsFile, record);
-      console.log(JSON.stringify({ ...record, note: record.note.slice(0, 120) }));
-      if (record.status === 'auth') {
-        writeFileSync(stopFile, `login revoked or failed: ${record.note}\n`);
-        return 5;
+      for (;;) {
+        const tried = transientCount(readRuns(runsFile), task.id, arm);
+        if (tried >= TRANSIENT_CAP) {
+          console.error(`${task.id} ${arm}: ${tried} transient provider errors already recorded, stopping for root`);
+          return 75;
+        }
+        const record = await runArm(task, arm, live, work);
+        appendRun(runsFile, record);
+        console.log(JSON.stringify({ ...record, note: record.note.slice(0, 120) }));
+        if (record.status === 'auth') {
+          writeFileSync(stopFile, `login revoked or failed: ${record.note}\n`);
+          return 5;
+        }
+        if (record.status === 'quota') return 75;
+        if (record.status !== 'transient') break;
+        // A provider overload or rate limit: counted against neither arm, run again after a wait, up to a cap.
+        if (tried + 1 >= TRANSIENT_CAP) {
+          console.error(`${task.id} ${arm}: ${tried + 1} transient provider errors, stopping for root`);
+          return 75;
+        }
+        await sleep(60_000 * (tried + 1));
       }
-      if (record.status === 'quota') return 75;
     }
     return 0;
   }
@@ -466,27 +497,38 @@ const main = async (argv: string[]): Promise<number> => {
     console.log(`${rows.length} rows -> ${rowsFile}`);
     return 0;
   }
-  if (command === 'close') {
+  if (command === 'close' || command === 'reconcile') {
     const baseSha = need('base-sha', values['base-sha']);
-    let n = 0;
-    for (const r of readRuns(runsFile)) {
-      if (r.branch === null || r.pr === null) continue;
-      const b = benchHost({
-        repo: REPO,
-        base: baseNameOf(r.branch.replace(/^aw\//, '')),
-        baseSha,
-        send: cliTransport('gh'),
-        log: fileLog(join(values.out, 'close.api.jsonl')),
-      });
-      const pull = await ghReadPull(REPO, r.pr);
-      if (pull.merged) throw new TaskRefused(`PR #${r.pr} is merged, which the bench never does`);
-      n += (await b.closeWork(r.branch)).length;
-      await b.dropRefs(r.branch);
+    const { header } = readJournal(runsFile);
+    if (header !== null && header.baseSha !== baseSha)
+      throw new TaskRefused(`${runsFile} is pinned to base ${header.baseSha}, not ${baseSha}`);
+    const send = cliTransport('gh', 'github.com');
+    const bench = benchHost({
+      repo: REPO,
+      base: `${BASE_PREFIX}t-00000000-r1`,
+      baseSha,
+      send,
+      log: fileLog(join(values.out, 'close.api.jsonl')),
+    });
+    // Both commands find everything by prefix on the remote and never read the journal to decide what exists: a run killed
+    // before its record was written leaves refs and a PR that only the remote knows about.
+    const remote = await listRemote(send, REPO);
+    const intents = readJournal(runsFile).intents;
+    if (command === 'reconcile') {
+      const orphans = orphansOf(remote, intents);
+      const pending = intents.filter(
+        (i) => !readRuns(runsFile).some((r) => r.task === i.task && r.arm === i.arm && isFinal(r)),
+      );
+      console.log(
+        JSON.stringify({ refs: remote.refs, pulls: remote.pulls, orphans, unfinishedIntents: pending.length }, null, 2),
+      );
+      return orphans.refs.length === 0 && orphans.pulls.length === 0 ? 0 : 6;
     }
-    console.log(`closed ${n} bench PRs`);
+    const swept = await sweepRemote(bench, remote);
+    console.log(`closed ${swept.closed.length} bench PRs, deleted ${swept.deleted.length} bench refs`);
     return 0;
   }
-  console.error('usage: node bench/setb/run.ts prepare|drive|entries|settle|grade-all|close [...]');
+  console.error('usage: node bench/setb/run.ts prepare|drive|entries|settle|grade-all|close|reconcile [...]');
   return 2;
 };
 

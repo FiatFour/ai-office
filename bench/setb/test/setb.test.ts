@@ -393,6 +393,9 @@ const packet = (label: string, over: Partial<Packet> = {}): Packet => ({
   ...over,
 });
 
+/** The check runs on the pinned base commit 56db6a1 (26 completed, 26 success), the count a real PR head shows. */
+const PINNED_BASE_CHECKS = 26;
+
 describe('the judge packet', () => {
   it('shows the issue, the CI result and the diff, and nothing that names the arm or the PR', () => {
     const text = renderPrompt(packet('pr-12345678'));
@@ -662,8 +665,19 @@ describe('judge calibration', () => {
           })),
         ),
       );
-      expect(seed.checks, 'the check count of a green head of main').toBe(18);
-      expect(p.ci.note).toBe('18 checks passed or were skipped');
+      expect(seed.checks, 'the check count of the pinned base 56db6a1').toBe(PINNED_BASE_CHECKS);
+      expect(p.ci.note).toBe(`${PINNED_BASE_CHECKS} checks passed or were skipped`);
+      // A real PR on that base is read by the same function from the same kind of runs: the text has the same shape.
+      const real = ciFrom(
+        'd'.repeat(40),
+        Array.from({ length: PINNED_BASE_CHECKS }, () => ({
+          head_sha: 'd'.repeat(40),
+          status: 'completed',
+          conclusion: 'success',
+        })),
+      );
+      expect(p.ci.note).toBe(real.note);
+      expect(p.ci.state).toBe(real.state);
       expect(p.issue.title, String(i)).not.toMatch(/^#\d/);
       expect(armLeaks(p.diff)).toEqual([]);
     }

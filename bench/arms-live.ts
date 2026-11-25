@@ -162,6 +162,7 @@ export const factoryArm = (env: FactoryEnv): Arm => ({
           quotaWindows: null,
           humanMinutes: null,
           note: `the host refused what the crew pushed, so nothing is graded: ${stop.error}`,
+          refused: true,
         };
       if (stop.kind === 'failed') throw new ArmFailed(`no retry after the first failure: ${stop.error}`);
       if (stop.kind === 'job_failed') throw new ArmFailed(`job failed: ${stop.error}`);

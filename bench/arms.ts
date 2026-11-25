@@ -12,6 +12,8 @@ export interface ArmRun {
   readonly quotaWindows: number | null;
   readonly humanMinutes: number | null;
   readonly note: string;
+  /** The host refused what the arm pushed after the first round: nothing was graded, and a live run records it as a failure. */
+  readonly refused?: true;
 }
 
 export interface Arm {

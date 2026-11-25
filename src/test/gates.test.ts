@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { hasSqlite } from '../../server/test/helpers.ts';
 import { negativeNote } from '../e2e/canvas-compare.mjs';
 import {
   allowlistProblems,
@@ -278,28 +279,48 @@ const never = async (url: string, ms: number) => {
   return true;
 };
 
-describe('an HQ the gate kit starts never outlives the run', () => {
+describe.skipIf(!hasSqlite)('an HQ the gate kit starts never outlives the run', () => {
   it('stops an HQ that is still starting when a signal arrives, and refuses to start another', async () => {
-    vi.resetModules();
-    const harness = await import('../e2e/harness.mjs');
-    const port = await harness.freePort();
-    const starting = harness.startHq({ port });
-    const outcome = starting.then(
-      () => 'started',
-      (error: Error) => error.message,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await harness.stopAllHq();
-    expect(await outcome).toContain('HQ exited');
-    expect(await never(`http://127.0.0.1:${port}`, 4000)).toBe(true);
-    await expect(harness.startHq({ port: await harness.freePort() })).rejects.toThrow('refused');
+    const scratch = mkdtempSync(join(tmpdir(), 'gate-starting-'));
+    const was = process.env.TMPDIR;
+    process.env.TMPDIR = scratch;
+    try {
+      vi.resetModules();
+      const harness = await import('../e2e/harness.mjs');
+      const port = await harness.freePort();
+      const starting = harness.startHq({ port });
+      const outcome = starting.then(
+        () => 'started',
+        (error: Error) => error.message,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(readdirSync(scratch)).toHaveLength(1);
+      await harness.stopAllHq();
+      expect(await outcome).toContain('HQ exited');
+      expect(await never(`http://127.0.0.1:${port}`, 4000)).toBe(true);
+      expect(readdirSync(scratch)).toEqual([]);
+      await expect(harness.startHq({ port: await harness.freePort() })).rejects.toThrow('refused');
+    } finally {
+      if (was === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = was;
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }, 20_000);
 
-  it('kills its children when the process exits without cleaning up', async () => {
-    const script = `import { startHqFree } from ${JSON.stringify(new URL('../e2e/harness.mjs', import.meta.url).href)};
-      const hq = await startHqFree(); console.log(hq.url); process.exit(0);`;
-    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
-    expect(await never(out.trim(), 3000)).toBe(true);
+  it('kills its children and removes their homes when the process exits without cleaning up', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'gate-exit-'));
+    try {
+      const script = `import { startHqFree } from ${JSON.stringify(new URL('../e2e/harness.mjs', import.meta.url).href)};
+        const hq = await startHqFree(); console.log(hq.url); process.exit(0);`;
+      const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        env: { ...process.env, TMPDIR: scratch },
+      });
+      expect(await never(out.trim(), 3000)).toBe(true);
+      expect(readdirSync(scratch)).toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }, 30_000);
 });
 

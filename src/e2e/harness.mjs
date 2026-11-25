@@ -23,8 +23,11 @@ const live = new Set(/** @type {Array<() => Promise<void>>} */ ([]));
 /** Every child still running, so a process that exits without cleaning up does not leave an HQ behind. */
 const children = new Set(/** @type {Set<import('node:child_process').ChildProcess>} */ (new Set()));
 let halted = false;
+/** Temp homes of HQs not yet stopped, removed on exit so a process.exit does not leave `aw-e2e-*` folders behind. */
+const homes = new Set(/** @type {Set<string>} */ (new Set()));
 process.on('exit', () => {
   for (const child of children) child.kill('SIGKILL');
+  for (const home of homes) rmSync(home, { recursive: true, force: true });
 });
 /** Stops every HQ, including one that is still starting, and refuses to start another. */
 export const haltHq = () => {
@@ -66,6 +69,7 @@ export const within = (work, ms) =>
 export const startHq = async ({ demo = false, port, intervalMs = 1500, args: extra = [] }) => {
   if (halted) throw new Error('HQ start refused: the run is stopping');
   const home = mkdtempSync(join(tmpdir(), 'aw-e2e-'));
+  homes.add(home);
   const args = demo
     ? [BIN, '--demo', '--no-open', '--port', String(port)]
     : [BIN, 'serve', '--port', String(port), '--home', home, ...extra];
@@ -85,6 +89,7 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
     });
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     rmSync(home, { recursive: true, force: true });
+    homes.delete(home);
   };
   live.add(stop);
   const url = `http://127.0.0.1:${port}`;
@@ -94,6 +99,7 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
     live.delete(stop);
     child.kill('SIGKILL');
     rmSync(home, { recursive: true, force: true });
+    homes.delete(home);
     return new Error(why);
   };
   for (;;) {

@@ -670,6 +670,30 @@ const BREAKERS = [
   },
   {
     gate: 'contrast',
+    what: 'an allowlist of `body` on the one unmeasurable row of an otherwise empty page, so only the root check can refuse it',
+    check: async (page, label) =>
+      checkContrast(
+        page,
+        label,
+        (await page.$('.gate-solo')) === null ? [] : [{ selector: 'body', reason: 'because' }],
+      ),
+    inject: `document.body.replaceChildren(); ${probe(
+      'gate-solo',
+      30,
+      'background-image:linear-gradient(#000,#000);-webkit-background-clip:text;background-clip:text;color:transparent',
+    )}`,
+  },
+  {
+    gate: 'contrast',
+    what: 'text clipped to a gradient with a half-transparent fill, where the gradient shows through and cannot be measured',
+    check: checkContrast,
+    inject: styled(
+      `.gate-fill-half{${BOX}top:450px;background:#fff}.gate-fill-half p{margin:0;background-image:linear-gradient(#000,#000);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:rgba(0,0,0,.9);color:rgba(0,0,0,.9)}`,
+      '<div class="gate-fill-half"><p>half fill</p></div>',
+    ),
+  },
+  {
+    gate: 'contrast',
     what: 'an allowlist of `*` on clipped text it cannot measure',
     check: async (page, label) =>
       checkContrast(page, label, (await page.$('.gate-star')) === null ? [] : [{ selector: '*', reason: 'because' }]),

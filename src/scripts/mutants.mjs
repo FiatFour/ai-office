@@ -22,7 +22,7 @@ const PARITY = 'src/test/i18n-parity.test.ts';
 const APP = 'src/floor/App.tsx';
 const DRAWER = 'src/floor/Drawer.tsx';
 
-/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
+/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt' | 'interrupt-only', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
 const MUTANTS = [
   {
     name: 'belt-is-code',
@@ -971,7 +971,7 @@ const MUTANTS = [
   {
     name: 'gates-contrast-best-pixel',
     claim: 'text over a gradient is judged by its worst pixel',
-    edits: [[GATES, 'Math.min(', 'Math.max(']],
+    edits: [[GATES, 'behindRatio = (row, pixels) =>\n  Math.min(', 'behindRatio = (row, pixels) =>\n  Math.max(']],
   },
   {
     name: 'gates-contrast-behind-not-measured',
@@ -1152,6 +1152,20 @@ const MUTANTS = [
     edits: [[GATES, 'if (clipsToText && opaqueFill) continue;', '']],
   },
   {
+    name: 'gates-contrast-root-check-blind',
+    claim: 'an allowlist selector that contains a page root is refused even on a page with few rows',
+    tier: 'gates',
+    edits: [
+      [GATES, 'pageRoots.some((root) => el.contains(root))', 'pageRoots.some((root) => false && el.contains(root))'],
+    ],
+  },
+  {
+    name: 'gates-contrast-half-fill-unclipped',
+    claim: 'text with a half-transparent fill over a clipped background is not treated as opaque',
+    tier: 'gates',
+    edits: [[GATES, '(fg[3] ?? 255) === 255;', '(fg[3] ?? 255) > 0;']],
+  },
+  {
     name: 'gates-contrast-offscreen-gives-up',
     claim: 'text rects are clipped to the viewport, text partly outside it is still measured',
     tier: 'gates',
@@ -1246,9 +1260,14 @@ const MUTANTS = [
   },
   {
     name: 'gates-interrupt-hq-left',
-    claim: 'an interrupted gates run stops the HQ it started',
-    tier: 'interrupt',
-    edits: [[GATES, '        await stopAllHq();\n', '']],
+    claim:
+      'an interrupted gates run leaves no HQ alive: the cleanup stops it and, behind that, the exit handler kills it',
+    // Either layer alone covers the other, so both are removed, and the unit tests are skipped so the interrupted run itself has to see it.
+    tier: 'interrupt-only',
+    edits: [
+      [GATES, '        await stopAllHq();\n', ''],
+      [HARNESS, "for (const child of children) child.kill('SIGKILL');", 'for (const child of children) child;'],
+    ],
   },
   {
     name: 'gates-interrupt-no-restore',
@@ -1341,11 +1360,33 @@ const interrupt = async () => {
 };
 const vitest = () => run('pnpm', ['vitest', 'run', ...SUITE], 300_000);
 
-const demoChildren = () => {
+/** Everything this runner starts inherits this variable, so an orphan it left behind can be told from a process of someone else. */
+const MARKER = 'AW_MUTANT_RUN';
+const token = `${process.pid}-${Date.now()}`;
+process.env[MARKER] = token;
+/** HQ processes that carry this run's marker: only ones this runner started, never anyone else's. */
+const ownHq = () => {
   const found = spawnSync('pgrep', ['-f', 'bin/agent-works.ts'], { encoding: 'utf8' });
-  return found.status === 0 ? found.stdout.split('\n').filter(Boolean) : [];
+  if (found.status !== 0) return [];
+  return found.stdout
+    .split('\n')
+    .filter(Boolean)
+    .filter((pid) => {
+      const env = spawnSync('ps', ['eww', '-o', 'command=', '-p', pid], { encoding: 'utf8' });
+      return env.status === 0 && env.stdout.includes(`${MARKER}=${token}`);
+    });
 };
-const before = new Set(windows ? [] : demoChildren());
+/** @type {string[]} */
+const orphans = [];
+const sweepOrphans = () => {
+  if (windows) return;
+  for (const pid of ownHq()) {
+    orphans.push(pid);
+    try {
+      process.kill(Number(pid), 'SIGKILL');
+    } catch {}
+  }
+};
 
 /** @type {string[]} */
 const lines = [];
@@ -1389,6 +1430,7 @@ for (const mutant of MUTANTS) {
     }
     let how = null;
     if (mutant.tier === 'lane9') how = await lane9();
+    else if (mutant.tier === 'interrupt-only') how = await interrupt();
     else if (mutant.tier === 'interrupt') how = (await vitest()).status !== 0 ? 'unit tests' : await interrupt();
     else if (mutant.tier === 'gates') {
       if (mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
@@ -1402,6 +1444,7 @@ for (const mutant of MUTANTS) {
       `${how === null ? 'BAD ' : 'OK  '} ${mutant.name}: ${how === null ? 'survived' : `caught by ${how}`}. Claim: ${mutant.claim}`,
     );
   } finally {
+    sweepOrphans();
     for (const [path, bytes] of originals) {
       if (bytes === null) {
         rmSync(path, { force: true });
@@ -1413,10 +1456,11 @@ for (const mutant of MUTANTS) {
     if (mutant.tier === 'e2e' || mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
   }
 }
-const orphans = windows ? [] : demoChildren().filter((pid) => !before.has(pid));
-if (orphans.length > 0) bad += 1;
+/** Orphans are cleaned up and reported on their own line: a mutant that breaks the kill code leaves them, which is not a survivor. */
+sweepOrphans();
+log(`${ran} mutants, ${bad} survived`);
 log(
-  `${ran} mutants, ${bad} survived, ${orphans.length} orphan demo processes${orphans.length > 0 ? ` (${orphans.join(' ')})` : ''}`,
+  `${orphans.length} orphan HQ processes started by this run were killed${orphans.length > 0 ? ` (${orphans.join(' ')})` : ''}`,
 );
 const result = process.env.MUTANT_OUT ?? '/tmp/swarm-P1-3/owner/mutants-p1-3.txt';
 mkdirSync(dirname(result), { recursive: true });

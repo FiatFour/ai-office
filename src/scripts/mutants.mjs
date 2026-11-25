@@ -1231,6 +1231,11 @@ const MUTANTS = [
     edits: [[HARNESS, "for (const child of children) child.kill('SIGKILL');", 'for (const child of children) child;']],
   },
   {
+    name: 'gates-hq-exit-homes-left',
+    claim: 'the temp homes are removed when the process exits without cleaning up',
+    edits: [[HARNESS, 'for (const home of homes) {', 'for (const home of []) {']],
+  },
+  {
     name: 'gates-interrupt-second-ignored',
     claim: 'a second signal exits at once',
     edits: [[HARNESS, '        exit(code);\n        return;', '        return;']],

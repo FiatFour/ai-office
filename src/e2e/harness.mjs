@@ -27,7 +27,12 @@ let halted = false;
 const homes = new Set(/** @type {Set<string>} */ (new Set()));
 process.on('exit', () => {
   for (const child of children) child.kill('SIGKILL');
-  for (const home of homes) rmSync(home, { recursive: true, force: true });
+  for (const home of homes) {
+    // Windows holds the files of a child that is still dying, so retry; a home that stays must not change the exit code.
+    try {
+      rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch {}
+  }
 });
 /** Stops every HQ, including one that is still starting, and refuses to start another. */
 export const haltHq = () => {

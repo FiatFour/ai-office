@@ -982,7 +982,7 @@ const MUTANTS = [
   {
     name: 'gates-contrast-best-pixel',
     claim: 'text over a gradient is judged by its worst pixel',
-    edits: [[GATES, 'Math.min(', 'Math.max(']],
+    edits: [[GATES, 'behindRatio = (row, pixels) =>\n  Math.min(', 'behindRatio = (row, pixels) =>\n  Math.max(']],
   },
   {
     name: 'gates-contrast-behind-not-measured',
@@ -1000,13 +1000,7 @@ const MUTANTS = [
     name: 'gates-contrast-clip-not-flagged',
     claim: 'text clipped to its own background is not measurable',
     tier: 'gates',
-    edits: [
-      [
-        GATES,
-        "if (cs.backgroundClip === 'text' || cs.getPropertyValue('-webkit-background-clip') === 'text') clipped = true;",
-        '',
-      ],
-    ],
+    edits: [[GATES, 'if (clipsToText) clipped = true;', '']],
   },
   {
     name: 'gates-contrast-opacity-ignored',
@@ -1112,13 +1106,14 @@ const MUTANTS = [
     name: 'gates-contrast-broad-allow-not-named',
     claim: 'a broad allowlist selector is refused with a named failure',
     tier: 'gates',
-    edits: [[GATES, "const ROOT_SELECTORS = ['*', 'body',", "const ROOT_SELECTORS = ['*none', 'body',"]],
+    edits: [
+      [GATES, "      : roots\n        ? 'matches the whole page'", "      : false\n        ? 'matches the whole page'"],
+    ],
   },
   {
-    name: 'gates-contrast-broad-tag-limit',
-    claim: 'a bare tag selector that matches more than 3 elements is refused',
-    tier: 'gates',
-    edits: [[GATES, 'export const BROAD_TAG_LIMIT = 3;', 'export const BROAD_TAG_LIMIT = 1e9;']],
+    name: 'gates-contrast-broad-row-limit',
+    claim: 'a selector that covers more than 3 text rows is refused',
+    edits: [[GATES, 'export const BROAD_ROW_LIMIT = 3;', 'export const BROAD_ROW_LIMIT = 1e9;']],
   },
   {
     name: 'gates-contrast-rounded',
@@ -1156,22 +1151,139 @@ const MUTANTS = [
     edits: [[GATES, '(synthetic || !id.startsWith(FIXTURE_PREFIX))', 'true']],
   },
   {
+    name: 'gates-contrast-rows-not-counted',
+    claim: 'an allowlist selector that covers more than 3 text rows is refused',
+    tier: 'gates',
+    edits: [[GATES, 'entry.rows += 1;', 'entry.rows += 0;']],
+  },
+  {
+    name: 'gates-contrast-opaque-fill-clipped',
+    claim: 'text with an opaque fill over a background clipped to its glyphs is measured, not unmeasurable',
+    tier: 'gates',
+    edits: [[GATES, 'if (clipsToText && opaqueFill) continue;', '']],
+  },
+  {
+    name: 'gates-contrast-root-check-blind',
+    claim: 'an allowlist selector that contains a page root is refused even on a page with few rows',
+    tier: 'gates',
+    edits: [
+      [GATES, 'pageRoots.some((root) => el.contains(root))', 'pageRoots.some((root) => false && el.contains(root))'],
+    ],
+  },
+  {
+    name: 'gates-contrast-half-fill-unclipped',
+    claim: 'text with a half-transparent fill over a clipped background is not treated as opaque',
+    tier: 'gates',
+    edits: [[GATES, '(fg[3] ?? 255) === 255;', '(fg[3] ?? 255) > 0;']],
+  },
+  {
+    name: 'gates-contrast-offscreen-gives-up',
+    claim: 'text rects are clipped to the viewport, text partly outside it is still measured',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        'return visible.length === 0 ? null : visible;',
+        'return visible.length === rects.length ? visible : null;',
+      ],
+    ],
+  },
+  {
+    name: 'gates-contrast-stacked-layers-cut',
+    claim: 'stacked translucent backgrounds are all composited',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        'if (unknown || layers.some((layer) => layer[3] === 255)) continue;',
+        'if (unknown || layers.some((layer) => layer[3] > 0)) continue;',
+      ],
+      [
+        GATES,
+        'if (!layers.some((layer) => layer[3] === 255)) layers.push([255, 255, 255, 255]);',
+        'layers.push([255, 255, 255, 255]);',
+      ],
+    ],
+  },
+  {
+    name: 'gates-motion-css-animations-only',
+    claim: 'a running CSS transition fails the reduced-motion gate',
+    tier: 'gates',
+    edits: [[GATES, "a.playState === 'running'", "a.playState === 'running' && !(a instanceof CSSTransition)"]],
+  },
+  {
+    name: 'gates-motion-no-script-animations',
+    claim: 'an el.animate() loop fails the reduced-motion gate',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        "a.playState === 'running'",
+        "a.playState === 'running' && (a instanceof CSSAnimation || a instanceof CSSTransition)",
+      ],
+    ],
+  },
+  {
+    name: 'gates-hq-joins-live-late',
+    claim: 'an HQ is stopped on a signal even while it is still starting',
+    edits: [
+      [HARNESS, '  live.add(stop);\n  const url', '  const url'],
+      [HARNESS, '  return {\n    url,', '  live.add(stop);\n  return {\n    url,'],
+    ],
+  },
+  {
+    name: 'gates-hq-start-not-refused',
+    claim: 'no HQ starts once the run is stopping',
+    edits: [[HARNESS, "if (halted) throw new Error('HQ start refused", "if (false) throw new Error('HQ start refused"]],
+  },
+  {
+    name: 'gates-hq-exit-orphan',
+    claim: 'HQ children are killed when the process exits without cleaning up',
+    edits: [[HARNESS, "for (const child of children) child.kill('SIGKILL');", 'for (const child of children) child;']],
+  },
+  {
+    name: 'gates-hq-exit-homes-left',
+    claim: 'the temp homes are removed when the process exits without cleaning up',
+    edits: [[HARNESS, 'for (const home of homes) {', 'for (const home of []) {']],
+  },
+  {
+    name: 'gates-interrupt-second-ignored',
+    claim: 'a second signal exits at once',
+    edits: [[HARNESS, '        exit(code);\n        return;', '        return;']],
+  },
+  {
+    name: 'gates-interrupt-cleanup-unbounded',
+    claim: 'a cleanup that hangs is abandoned after its limit',
+    edits: [[HARNESS, 'Promise.race([cleanup().catch(() => {}), limit])', 'cleanup().catch(() => {})']],
+  },
+  {
+    name: 'gates-browser-close-unbounded',
+    claim: 'browser.close has a timeout',
+    edits: [
+      [HARNESS, 'Promise.race([work, new Promise((resolve) => setTimeout(resolve, ms, undefined).unref())])', 'work'],
+    ],
+  },
+  {
+    name: 'gates-fixture-tracked-unseen',
+    claim: 'a tracked file under the zz-gate- prefix fails the unit tests',
+    edits: [[HARNESS, 'files.filter((file) => file.includes(FIXTURE_PREFIX))', 'files.filter(() => false)']],
+  },
+  {
     name: 'gates-interrupt-no-handler',
     claim: 'an interrupted gates run cleans up (SIGINT handler)',
     tier: 'interrupt',
-    edits: [[GATES, "process.on('SIGINT', interrupted(130));", '']],
+    edits: [[GATES, "process.on('SIGINT', interrupt.on(130));", '']],
   },
   {
     name: 'gates-interrupt-hq-left',
-    claim: 'an interrupted gates run stops the HQ it started',
-    tier: 'interrupt',
-    edits: [[GATES, '        await stopAllHq();\n', '']],
+    claim: 'the cleanup of an interrupted gates run stops the HQs, before the browser and the tree',
+    edits: [[HARNESS, '      await stopHqs();\n', '']],
   },
   {
     name: 'gates-interrupt-no-restore',
     claim: 'an interrupted gates run removes the synthetic screens and rebuilds src/dist',
     tier: 'interrupt',
-    edits: [[GATES, '          restoreScreens();\n        } finally {', '          0;\n        } finally {']],
+    edits: [[GATES, 'restore: restoreScreens }', 'restore: () => {} }']],
   },
   {
     name: 'gates-compare-skip-silent',
@@ -1258,11 +1370,33 @@ const interrupt = async () => {
 };
 const vitest = () => run('pnpm', ['vitest', 'run', ...SUITE], 300_000);
 
-const demoChildren = () => {
+/** Everything this runner starts inherits this variable, so an orphan it left behind can be told from a process of someone else. */
+const MARKER = 'AW_MUTANT_RUN';
+const token = `${process.pid}-${Date.now()}`;
+process.env[MARKER] = token;
+/** HQ processes that carry this run's marker: only ones this runner started, never anyone else's. */
+const ownHq = () => {
   const found = spawnSync('pgrep', ['-f', 'bin/agent-works.ts'], { encoding: 'utf8' });
-  return found.status === 0 ? found.stdout.split('\n').filter(Boolean) : [];
+  if (found.status !== 0) return [];
+  return found.stdout
+    .split('\n')
+    .filter(Boolean)
+    .filter((pid) => {
+      const env = spawnSync('ps', ['eww', '-o', 'command=', '-p', pid], { encoding: 'utf8' });
+      return env.status === 0 && env.stdout.includes(`${MARKER}=${token}`);
+    });
 };
-const before = new Set(windows ? [] : demoChildren());
+/** @type {string[]} */
+const orphans = [];
+const sweepOrphans = () => {
+  if (windows) return;
+  for (const pid of ownHq()) {
+    orphans.push(pid);
+    try {
+      process.kill(Number(pid), 'SIGKILL');
+    } catch {}
+  }
+};
 
 /** @type {string[]} */
 const lines = [];
@@ -1319,6 +1453,7 @@ for (const mutant of MUTANTS) {
       `${how === null ? 'BAD ' : 'OK  '} ${mutant.name}: ${how === null ? 'survived' : `caught by ${how}`}. Claim: ${mutant.claim}`,
     );
   } finally {
+    sweepOrphans();
     for (const [path, bytes] of originals) {
       if (bytes === null) {
         rmSync(path, { force: true });
@@ -1330,10 +1465,11 @@ for (const mutant of MUTANTS) {
     if (mutant.tier === 'e2e' || mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
   }
 }
-const orphans = windows ? [] : demoChildren().filter((pid) => !before.has(pid));
-if (orphans.length > 0) bad += 1;
+/** Orphans are cleaned up and reported on their own line: a mutant that breaks the kill code leaves them, which is not a survivor. */
+sweepOrphans();
+log(`${ran} mutants, ${bad} survived`);
 log(
-  `${ran} mutants, ${bad} survived, ${orphans.length} orphan demo processes${orphans.length > 0 ? ` (${orphans.join(' ')})` : ''}`,
+  `${orphans.length} orphan HQ processes started by this run were killed${orphans.length > 0 ? ` (${orphans.join(' ')})` : ''}`,
 );
 const result = process.env.MUTANT_OUT ?? '/tmp/swarm-P1-3/owner/mutants-p1-3.txt';
 mkdirSync(dirname(result), { recursive: true });

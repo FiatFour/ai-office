@@ -1,9 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { hasSqlite } from '../../server/test/helpers.ts';
 import { negativeNote } from '../e2e/canvas-compare.mjs';
 import {
   allowlistProblems,
@@ -15,7 +17,15 @@ import {
   registeredScreens,
   rowRatio,
 } from '../e2e/gates.mjs';
-import { freePort, startHq, withFreePort } from '../e2e/harness.mjs';
+import {
+  freePort,
+  interruptedCleanup,
+  interruptible,
+  startHq,
+  syntheticFiles,
+  withFreePort,
+  within,
+} from '../e2e/harness.mjs';
 
 const opaque = (r: number, g: number, b: number) => [r, g, b, 255];
 const row = (fg: number[], layers: number[][], html = '<p>') => ({ text: 'x', html, fg, layers, unknown: false });
@@ -98,25 +108,37 @@ describe('contrast gate arithmetic', () => {
       });
   });
 
-  it('refuses broad allowlist selectors by name: *, body, html, main, #root and a bare tag matching more than 3 elements', () => {
-    const entry = (selector: string, count: number, valid = true) => ({ selector, count, valid });
-    for (const selector of ['*', 'body', 'html', 'main', '#root', ':root', ' * '])
-      expect(allowlistProblems([entry(selector, 1)], 't')).toMatchObject({
+  it('refuses an allowlist selector by what it matches: a page root or more than 3 text rows, whatever its spelling', () => {
+    const entry = (selector: string, roots: boolean, rows: number, valid = true) => ({ selector, roots, rows, valid });
+    for (const selector of [
+      '*',
+      'BODY',
+      'html body',
+      'body *',
+      '[class]',
+      ':not(.x)',
+      'main',
+      '#root',
+      'p, body',
+      ' * ',
+    ])
+      expect(allowlistProblems([entry(selector, true, 1)], 't')).toMatchObject({
         refused: [selector],
         problems: [
           expect.stringContaining(`contrastAllow selector "${selector}" is too broad: it matches the whole page`),
         ],
       });
-    expect(allowlistProblems([entry('p', 4)], 't').problems).toEqual([
-      't contrastAllow selector "p" is too broad: it is a bare tag that matches 4 elements, more than 3, so it excuses nothing; name the element',
+    expect(allowlistProblems([entry('p', false, 4)], 't').problems).toEqual([
+      't contrastAllow selector "p" is too broad: it covers 4 text rows, more than 3, so it excuses nothing; name the element',
     ]);
+    expect(allowlistProblems([entry('#v1,#v2,#v3,#v4', false, 4)], 't').refused).toEqual(['#v1,#v2,#v3,#v4']);
     expect(
-      allowlistProblems([entry('p', 3), entry('.clip', 90), entry('section p', 90), entry('#hero', 1)], 't'),
+      allowlistProblems([entry('p', false, 3), entry('.clip', false, 1), entry('section p', false, 0)], 't'),
     ).toEqual({
       problems: [],
       refused: [],
     });
-    expect(allowlistProblems([entry('p[', 0, false)], 't').problems[0]).toContain('is not a valid selector');
+    expect(allowlistProblems([entry('p[', false, 0, false)], 't').problems[0]).toContain('is not a valid selector');
   });
 
   it('excuses only the Needs-you chip, matched on colours, ratio, class and mood', () => {
@@ -247,5 +269,138 @@ describe('compare verdict note', () => {
     expect(negativeNote(0)).toContain('2 layout');
     expect(negativeNote(9)).toBe('11 negative tests each failed as they should');
     expect(negativeNote(9)).not.toContain('SKIPPED');
+  });
+});
+
+const answers = async (url: string) => {
+  try {
+    return (await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(500) })).ok;
+  } catch {
+    return false;
+  }
+};
+const never = async (url: string, ms: number) => {
+  for (const end = Date.now() + ms; Date.now() < end; ) {
+    if (await answers(url)) return false;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return true;
+};
+
+/** `os.tmpdir()` reads TMPDIR on Linux and macOS and TEMP or TMP on Windows. */
+const tmpEnv = (dir: string) => ({ TMPDIR: dir, TEMP: dir, TMP: dir });
+const homesIn = (dir: string) => readdirSync(dir).filter((name) => name.startsWith('aw-e2e-'));
+
+describe.skipIf(!hasSqlite)('an HQ the gate kit starts never outlives the run', () => {
+  it('stops an HQ that is still starting when a signal arrives, and refuses to start another', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'gate-starting-'));
+    for (const [name, value] of Object.entries(tmpEnv(scratch))) vi.stubEnv(name, value);
+    try {
+      vi.resetModules();
+      const harness = await import('../e2e/harness.mjs');
+      const port = await harness.freePort();
+      const starting = harness.startHq({ port });
+      const outcome = starting.then(
+        () => 'started',
+        (error: Error) => error.message,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(homesIn(scratch)).toHaveLength(1);
+      await harness.stopAllHq();
+      expect(await outcome).toContain('HQ exited');
+      expect(await never(`http://127.0.0.1:${port}`, 4000)).toBe(true);
+      expect(homesIn(scratch)).toEqual([]);
+      await expect(harness.startHq({ port: await harness.freePort() })).rejects.toThrow('refused');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('kills its children and removes their homes when the process exits without cleaning up', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'gate-exit-'));
+    try {
+      const script = `import { startHqFree } from ${JSON.stringify(new URL('../e2e/harness.mjs', import.meta.url).href)};
+        const hq = await startHqFree(); console.log(hq.url); process.exit(0);`;
+      const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+        encoding: 'utf8',
+        env: { ...process.env, ...tmpEnv(scratch) },
+      });
+      expect(await never(out.trim(), 3000)).toBe(true);
+      expect(homesIn(scratch)).toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe('an interrupted run', () => {
+  it('cleans up on the first signal and exits at once on the second, even while the cleanup hangs', async () => {
+    const exits: number[] = [];
+    let cleaned = 0;
+    const run = interruptible({
+      cleanup: () => {
+        cleaned += 1;
+        return new Promise(() => {});
+      },
+      exit: (code) => exits.push(code),
+      limitMs: 60_000,
+    });
+    expect(run.stopping).toBe(false);
+    run.on(130)();
+    expect([cleaned, exits, run.stopping]).toEqual([1, [], true]);
+    run.on(130)();
+    expect([cleaned, exits]).toEqual([1, [130]]);
+  });
+
+  it('stops the HQs, then closes the browser, then restores the tree, also when stopping fails', async () => {
+    const done: string[] = [];
+    const steps = (stop: () => Promise<unknown>) =>
+      interruptedCleanup({
+        stopHqs: stop,
+        browser: { close: async () => done.push('browser') },
+        restore: () => done.push('restore'),
+      });
+    await steps(async () => done.push('hqs'))();
+    expect(done).toEqual(['hqs', 'browser', 'restore']);
+    done.length = 0;
+    await expect(steps(() => Promise.reject(new Error('no')))()).rejects.toThrow('no');
+    expect(done).toEqual(['restore']);
+  });
+
+  it('gives up on a cleanup that takes longer than its limit', async () => {
+    const exits: number[] = [];
+    interruptible({ cleanup: () => new Promise(() => {}), exit: (code) => exits.push(code), limitMs: 50 }).on(143)();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(exits).toEqual([143]);
+  });
+
+  it('exits after a cleanup that finishes', async () => {
+    const exits: number[] = [];
+    interruptible({ cleanup: async () => {}, exit: (code) => exits.push(code) }).on(130)();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(exits).toEqual([130]);
+  });
+});
+
+describe('browser close', () => {
+  it('is given up on after its timeout instead of hanging the run', async () => {
+    expect(await within(new Promise(() => {}), 50)).toBeUndefined();
+    expect(await within(Promise.resolve('closed'), 50)).toBe('closed');
+  });
+});
+
+describe('synthetic gate screens', () => {
+  it('are never tracked: no tracked file path uses the zz-gate- prefix', () => {
+    const tracked = execFileSync('git', ['ls-files', '-z'], {
+      encoding: 'utf8',
+      cwd: join(import.meta.dirname, '..', '..'),
+    })
+      .split('\0')
+      .filter(Boolean);
+    expect(syntheticFiles(tracked)).toEqual([]);
+    expect(syntheticFiles(['src/screens/zz-gate-good/screen.tsx', 'src/screens/hq/screen.tsx'])).toEqual([
+      'src/screens/zz-gate-good/screen.tsx',
+    ]);
   });
 });

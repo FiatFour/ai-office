@@ -1,7 +1,11 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the strings are source text being mutated
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyEdit, selectMutants } from '../../scripts/mutate.mjs';
+import { parseArgs } from '../../scripts/shard.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const STORE = 'server/test/store.test.ts';
@@ -17,7 +21,7 @@ const CLI = 'server/test/cli.test.ts';
 const SITE = 'server/test/site.test.ts';
 const TMP = 'server/test/tmp-cleanup.test.ts';
 
-/** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[], survives?: boolean }>} */
+/** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string, all?: 'all']>, tests: string[], survives?: boolean }>} */
 const MUTANTS = [
   {
     name: 'id-without-epoch',
@@ -468,7 +472,13 @@ const MUTANTS = [
   {
     name: 'v-review-line-zero',
     claim: 'a review comment line must be at least 1',
-    edits: [['server/agents/runtime.ts', '(c.line as number) < 1 ||', '']],
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        'return Number.isSafeInteger(n) && (n as number) >= 1 ? (n as number) : null;',
+        'return Number.isSafeInteger(n) ? (n as number) : null;',
+      ],
+    ],
     tests: [AGENTS],
   },
   {
@@ -1020,7 +1030,13 @@ const MUTANTS = [
   {
     name: 'r3-wildcard-item-allowable',
     claim: 'the website item for a wildcard CONNECT does not offer Allow',
-    edits: [['server/modes/cages.ts', 'allow: valid !== null', 'allow: true']],
+    edits: [
+      [
+        'server/modes/cages.ts',
+        'allow: (seenBefore?.allow ?? true) && valid !== null && denial',
+        'allow: (seenBefore?.allow ?? true) && denial',
+      ],
+    ],
     tests: [CAGES],
   },
   {
@@ -1107,7 +1123,8 @@ const MUTANTS = [
 
 class PatternMissing extends Error {}
 
-const only = process.argv.slice(2);
+const { names: only, shard } = parseArgs(process.argv.slice(2));
+const chosen = selectMutants(MUTANTS, only, shard);
 /** @param {string[]} tests */
 const vitest = (tests) =>
   spawnSync('pnpm', ['vitest', 'run', ...tests], {
@@ -1125,7 +1142,7 @@ const log = (line) => {
   lines.push(line);
 };
 
-const baseline = vitest([...new Set(MUTANTS.flatMap((m) => m.tests))]);
+const baseline = vitest([...new Set(chosen.flatMap((m) => m.tests))]);
 log(`baseline ${baseline.status === 0 ? 'PASS' : 'FAIL'}`);
 if (baseline.status !== 0) {
   console.error(baseline.stdout.slice(-2000));
@@ -1133,16 +1150,18 @@ if (baseline.status !== 0) {
 }
 
 let bad = 0;
-for (const mutant of MUTANTS) {
-  if (only.length > 0 && !only.includes(mutant.name)) continue;
+for (const mutant of chosen) {
   const originals = new Map();
   try {
-    for (const [file, find, replace] of mutant.edits) {
+    for (const [file, find, replace, all] of mutant.edits) {
       const path = `${ROOT}/${file}`;
       const current = readFileSync(path, 'utf8');
       if (!originals.has(path)) originals.set(path, current);
-      if (!current.includes(find)) throw new PatternMissing(`${mutant.name}: pattern not found in ${file}`);
-      writeFileSync(path, current.replace(find, replace));
+      try {
+        writeFileSync(path, applyEdit(file, current, find, replace, all === 'all'));
+      } catch (error) {
+        throw new PatternMissing(`${mutant.name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     const result = vitest(mutant.tests);
     const caught = result.status !== 0;
@@ -1159,5 +1178,10 @@ for (const mutant of MUTANTS) {
     for (const [path, text] of originals) writeFileSync(path, text);
   }
 }
-writeFileSync(process.env.MUTANT_OUT ?? '/tmp/mutants-p1-2.txt', `${lines.join('\n')}\n`);
+lines.push(`caught ${chosen.length - bad}/${chosen.length}`);
+console.log(lines.at(-1));
+writeFileSync(
+  process.env.MUTANT_OUT ?? join(mkdtempSync(join(tmpdir(), 'mutants-p1-2-')), 'mutants.txt'),
+  `${lines.join('\n')}\n`,
+);
 process.exit(bad === 0 ? 0 : 1);

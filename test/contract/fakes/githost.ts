@@ -220,6 +220,7 @@ export const memorySubject = (
     merges: () => world.calls.filter((c) => /\/merge$/.test(c.path)).length,
     payloads,
     firstNumber: 1,
+    exactLogin: true,
     branch: (tag) => `aw/alpha/${tag}`,
   };
 };

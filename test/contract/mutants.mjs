@@ -4,13 +4,19 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyEdit, selectMutants } from '../../scripts/mutate.mjs';
+import { parseArgs } from '../../scripts/shard.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const HOST = 'test/contract/githost.recorded.test.ts';
 const EXPECTED = 'test/contract/expected.test.ts';
+const SHARD = 'test/contract/shard.test.ts';
+const TABLE = 'test/contract/table.test.ts';
+const SELF = 'test/contract/self.test.ts';
+const ENGINES = 'test/contract/engines.test.ts';
 const SANDBOX = 'test/contract/sandbox.real.test.ts';
 
-/** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, test: string, caught: string[], table?: RegExp }>} */
+/** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string, 'all'?]>, test: string, caught: string[], table?: RegExp }>} */
 const MUTANTS = [
   {
     name: 'find-comment-trusts-any-author',
@@ -147,6 +153,99 @@ const MUTANTS = [
     table: /github-recorded on linux never ran/,
   },
   {
+    name: 'poll-uppercases-the-reviewer',
+    claim: 'a poll reports the reviewer login exactly as the host spelled it',
+    edits: [
+      [
+        'server/githost/host.ts',
+        'reviews: [...latest.values()].map((review) => ({ reviewer: review.reviewer,',
+        'reviews: [...latest.values()].map((review) => ({ reviewer: review.reviewer.toUpperCase(),',
+      ],
+    ],
+    test: HOST,
+    caught: ['review-carries-reviewer-commit-and-host-time'],
+  },
+  {
+    name: 'shard-drops-a-mutant',
+    claim: 'every mutant runs in exactly one shard',
+    edits: [
+      ['scripts/shard.mjs', 'position % shard.total === shard.index - 1', 'position % shard.total === shard.index'],
+    ],
+    test: SHARD,
+    caught: ['cover every mutant exactly once across the shards'],
+  },
+  {
+    name: 'shard-past-the-end-accepted',
+    claim: 'a shard index above the shard count is refused',
+    edits: [['scripts/shard.mjs', 'if (index > total) throw', 'if (false) throw']],
+    test: SHARD,
+    caught: ['refuses a shard that is missing, malformed, zero or past the end'],
+  },
+  {
+    name: 'table-ignores-unknown-driver',
+    claim: 'a row for a driver the table does not know fails the table',
+    edits: [['scripts/contract-table.mjs', 'if (!DRIVERS.includes(row.driver))', 'if (false)']],
+    test: TABLE,
+    caught: ['fails a row that names a driver the table does not know'],
+  },
+  {
+    name: 'table-ignores-unknown-os',
+    claim: 'a row for an OS the table does not know fails the table',
+    edits: [['scripts/contract-table.mjs', 'else if (!OSES.includes(row.os))', 'else if (false)']],
+    test: TABLE,
+    caught: ['fails a row that names an OS the table does not know'],
+  },
+  {
+    name: 'table-ignores-unknown-status',
+    claim: 'a row whose status is not pass, fail or not-run fails the table',
+    edits: [['scripts/contract-table.mjs', 'if (!STATUSES.includes(row.status))', 'if (false)']],
+    test: TABLE,
+    caught: ['fails a row whose status is neither pass, fail, not-run nor expected'],
+  },
+  {
+    name: 'edit-accepts-ambiguous-match',
+    claim: 'a mutant whose find text matches twice is refused instead of mutating only the first match',
+    edits: [['scripts/mutate.mjs', 'if (count > 1 && !all)', 'if (false)']],
+    test: SHARD,
+    caught: ['refuses a find text that matches more than once, unless every match is asked for'],
+  },
+  {
+    name: 'selection-accepts-empty',
+    claim: 'an empty mutant selection is refused instead of reporting success on nothing',
+    edits: [['scripts/mutate.mjs', 'if (selected.length === 0)', 'if (false)']],
+    test: SHARD,
+    caught: ['refuses an unknown name and an empty selection'],
+  },
+  {
+    name: 'windows-probe-bypasses-driver-mount',
+    claim:
+      'the Windows probe builds its bind with the driver mount builder, so a driver that translates paths stops the probe matching',
+    edits: [
+      [
+        'test/contract/engines.ts',
+        "['create', ...mount(dir, '/m'), 'aw-no-such-image:0', 'true']",
+        "['create', '--mount', `type=bind,src=${dir},dst=/m`, 'aw-no-such-image:0', 'true']",
+      ],
+    ],
+    test: ENGINES,
+    caught: ['uses whatever path the driver mount builder produces, not the raw host path'],
+  },
+  {
+    name: 'fake-host-loses-exact-login',
+    claim: 'the in-memory host declares exactLogin, so the contract compares logins byte for byte against it',
+    edits: [['test/contract/fakes/githost.ts', '    exactLogin: true,\n', '']],
+    test: SELF,
+    caught: ['declares that its logins keep their case'],
+  },
+  {
+    name: 'windows-mount-refusal-ignored',
+    claim:
+      'a daemon that rejects the Windows bind path makes the docker cell not run, with the daemon words as the reason',
+    edits: [['test/contract/engines.ts', '/invalid mount|mount path|invalid bind/i.test(text)', 'false && text']],
+    test: ENGINES,
+    caught: ['reads a daemon that cannot see the Windows path as a refusal'],
+  },
+  {
     name: 'registration-skips-a-case',
     claim: 'a case wrapped in it.skip fails the table',
     edits: [
@@ -162,10 +261,8 @@ const MUTANTS = [
   },
 ];
 
-const only = process.argv.slice(2);
-const selected = MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name));
-for (const name of only)
-  if (!MUTANTS.some((mutant) => mutant.name === name)) throw new Error(`no mutant is named ${name}`);
+const { names: only, shard } = parseArgs(process.argv.slice(2));
+const selected = selectMutants(MUTANTS, only, shard);
 
 const lines = [];
 let caught = 0;
@@ -173,12 +270,11 @@ for (const mutant of selected) {
   const originals = new Map();
   let line;
   try {
-    for (const [file, find, replace] of mutant.edits) {
+    for (const [file, find, replace, all] of mutant.edits) {
       const path = `${ROOT}/${file}`;
       const current = readFileSync(path, 'utf8');
       if (!originals.has(path)) originals.set(path, current);
-      if (!current.includes(find)) throw new Error(`pattern not found in ${file}: ${find}`);
-      writeFileSync(path, current.replace(find, replace));
+      writeFileSync(path, applyEdit(file, current, find, replace, all === 'all'));
     }
     const results = mkdtempSync(join(tmpdir(), 'contract-results-'));
     const env = { ...process.env, CONTRACT_RESULTS: join(results, 'linux.jsonl') };

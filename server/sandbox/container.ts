@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { insideCage } from '../config.ts';
 import type { Engine, RunResult } from './engine.ts';
-import { exportPath, exportRepo, scanInContainer, userArgs } from './export.ts';
+import { exportPath, exportRepo, mount, scanInContainer, userArgs } from './export.ts';
 import {
   DEFAULT_ALLOWLIST,
   type Denial,
@@ -188,10 +188,8 @@ export class SandboxDriver {
         'NO_PROXY=localhost,127.0.0.1',
         '-w',
         '/work',
-        '--mount',
-        `type=bind,src=${repo},dst=/work`,
-        '--mount',
-        `type=bind,src=${homeDir},dst=/home/agent`,
+        ...mount(repo, '/work'),
+        ...mount(homeDir, '/home/agent'),
         this.image,
         'sleep',
         'infinity',

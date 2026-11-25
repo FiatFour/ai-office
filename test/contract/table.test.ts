@@ -136,6 +136,28 @@ describe('the CI table', () => {
     expect(markdown).toContain('pass 1, not run 1 (needs x)');
   });
 
+  it('fails a row that names a driver the table does not know', () => {
+    const rows = [...everything(), ...cell('cloud-hypervisor', 'linux')];
+    expect(tabulate(rows).problems).toContain(
+      'cloud-hypervisor on linux case a names a driver the table does not know',
+    );
+  });
+
+  it('fails a row that names an OS the table does not know', () => {
+    const rows = [...everything(), ...cell('docker', 'freebsd')];
+    expect(tabulate(rows).problems).toContain('docker on freebsd case a names an OS the table does not know');
+  });
+
+  it('fails a row whose status is neither pass, fail, not-run nor expected', () => {
+    const rows = [
+      ...without('docker', 'linux'),
+      ...ran('docker', 'linux', { a: 'pass', b: 'passed' as Row['status'] }),
+    ];
+    expect(tabulate(rows).problems).toContain(
+      'docker on linux case b has status "passed", which is not pass, fail, not-run or expected',
+    );
+  });
+
   it('fails docker and podman on linux when the engine is unusable, the way a broken socket looks', async () => {
     const { engine, reason } = await find('docker', { ...process.env, DOCKER_HOST: 'unix:///nonexistent.sock' });
     expect(engine).toBeNull();

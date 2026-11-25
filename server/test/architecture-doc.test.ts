@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { AgentRuntime } from '../agents/runtime.ts';
+import { scripted } from '../agents/scripted.ts';
+import { github } from '../githost/github.ts';
 import { type RunningHq, startHq } from '../hq.ts';
+import { cagesMode } from '../modes/cages.ts';
+import { FakeGithub } from './fakes/github-api.ts';
+import { SCRIPTS, TICKETS } from './fixtures/factory.ts';
 import { hasSqlite, human, tempDir } from './helpers.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -96,7 +102,11 @@ export const codeFields = (sources: Sources, type: (typeof TYPES)[number]): Set<
 
 const ROW = /^\|\s*`([\w.]+)`\s*\|(.*)\|\s*$/gm;
 
+// A row inside an HTML comment is not documented.
+export const visible = (doc: string): string => doc.replace(/<!--[\s\S]*?-->/g, '');
+
 const section = (doc: string, name: string): string => {
+  doc = visible(doc);
   const at = doc.search(new RegExp(`^### ${name}$`, 'm'));
   if (at < 0) throw new Error(`the doc has no section for ${name}`);
   const rest = doc.slice(doc.indexOf('\n', at) + 1);
@@ -315,6 +325,13 @@ describe('docs/architecture.md snapshot schema', () => {
     expect(compare(doc, added, lifecycle)).toContain('Snapshot.hq.host is in code, not in the doc');
   });
 
+  it('does not count a row inside an HTML comment as documented', () => {
+    const hidden = mutate(doc, /^(\|\s*`paused`[^\n]*)$/m, '<!-- $1 -->');
+    expect(compare(hidden, sources, lifecycle)).toContain('Snapshot.paused is in code, not in the doc');
+    const multiline = mutate(doc, /^(\|\s*`hq\.pid`[^\n]*)$/m, '<!--\n$1\n-->');
+    expect(compare(multiline, sources, lifecycle)).toContain('Snapshot.hq.pid is in code, not in the doc');
+  });
+
   it('fails when a section is missing', () => {
     expect(() => compare(mutate(doc, /^### CageView$/m, '### Cages'), sources, lifecycle)).toThrow(
       'no section for CageView',
@@ -338,6 +355,9 @@ describe('docs/architecture.md snapshot schema', () => {
   });
 });
 
+// CageView is the one snapshot type this file cannot serialize. Only `SandboxDriver.startCage` makes one, and it
+// needs a container engine. The CageView table is checked against the TypeScript declaration only, and the
+// contract tests in test/contract run the real driver where docker or podman exists.
 describe.skipIf(!hasSqlite)('docs/architecture.md against the serialized snapshot', () => {
   const doc = read('docs/architecture.md');
   const running: RunningHq[] = [];
@@ -386,5 +406,120 @@ describe.skipIf(!hasSqlite)('docs/architecture.md against the serialized snapsho
     expect(shapeProblems(dropRow(doc, 'Box', 'builders'), snap)).toContain(
       'Box.builders is serialized, not in the doc',
     );
+  });
+});
+
+// A real cages mode with a fake git host, a fake proxy and a scripted runtime that reports usage. No docker.
+describe.skipIf(!hasSqlite)('docs/architecture.md against the cages mode and the outbox', () => {
+  const doc = read('docs/architecture.md');
+  const running: RunningHq[] = [];
+  afterEach(async () => {
+    await Promise.all(running.splice(0).map((hq) => hq.close()));
+  });
+
+  const USAGE = { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheCreationTokens: 4, webRequests: 5 };
+  const until = async (hq: RunningHq, test: () => boolean): Promise<void> => {
+    const deadline = Date.now() + 8000;
+    while (!test()) {
+      if (Date.now() > deadline) throw new Error(`timed out: ${JSON.stringify(hq.snapshot().actions)}`);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+  };
+
+  it('serializes the ActionItem, ModeView and Usage keys the tables list', { timeout: 15_000 }, async () => {
+    const reached = new Set<string>();
+    let deny: (d: { host: string; port: number; agent: string; reason: string; at: string }) => void = () => {};
+    const base = scripted({
+      scripts: SCRIPTS,
+      egress: {
+        reach: async (agent: string, host: string) => {
+          if (reached.has(host)) return true;
+          deny({ host, port: 443, agent, reason: 'not-allowlisted', at: new Date().toISOString() });
+          return false;
+        },
+      },
+      retryMs: 10,
+    });
+    const runtime: AgentRuntime = {
+      id: base.id,
+      run: async (job) => ({ ...(await base.run(job)), usage: USAGE }) as Awaited<ReturnType<AgentRuntime['run']>>,
+    };
+    const fake = new FakeGithub();
+    const send = (login: string) =>
+      github({ repo: 'acme/app', base: 'main', send: fake.transport(login), log: () => {} });
+    const hq = await startHq({
+      home: tempDir('arch-mode'),
+      port: 0,
+      makeDriver: async (_hq, onDenial) => {
+        deny = onDenial;
+        return null;
+      },
+      mode: cagesMode({
+        host: send('aw-nova'),
+        reviewHost: send('vega'),
+        repo: 'acme/app',
+        base: 'main',
+        tickets: TICKETS,
+        author: 'nova',
+        reviewer: 'vega',
+        workers: { nova: runtime, vega: runtime },
+        egress: {
+          allow: async (site) => {
+            reached.add(site.replace(/:443$/, ''));
+          },
+        },
+        pollMs: 30,
+        reviewRetryMs: 5,
+      }),
+    });
+    running.push(hq);
+    await fetch(`${hq.url}/api/cages`, { method: 'POST', body: JSON.stringify({}) });
+    for (const id of ['alpha/t2', 'alpha/web'])
+      expect((await fetch(`${hq.url}/api/tickets`, { method: 'POST', body: JSON.stringify({ id }) })).status).toBe(200);
+    const kinds = () => new Set(hq.snapshot().actions.map((a) => a.kind));
+    await until(hq, () => kinds().has('ready_to_merge') && kinds().has('website'));
+    const snap = hq.snapshot() as unknown as { actions: Json[]; mode: Json };
+
+    const itemKeys = docFields(doc, 'ActionItem');
+    for (const item of snap.actions) {
+      const { kind, ...rest } = item;
+      for (const key of Object.keys(rest)) {
+        expect(itemKeys.has(key), `${String(kind)}.${key} is serialized, not in the doc`).toBe(true);
+        expect(docCell(doc, 'ActionItem', key), `${key} is not documented for ${String(kind)}`).toContain(
+          `\`${String(kind)}\``,
+        );
+      }
+      const documented = [...itemKeys].filter((key) => docCell(doc, 'ActionItem', key).includes(`\`${String(kind)}\``));
+      if (kind === 'website') expect(sorted(Object.keys(rest))).toEqual(sorted(documented));
+    }
+
+    expect(shapeProblems(doc, { ...snap, denials: [], blocked: [] } as unknown as Json)).toEqual([]);
+    expect(sorted(Object.keys(snap.mode))).toEqual(sorted(docFields(doc, 'ModeView')));
+    const entries = Object.values(snap.mode.usage as Record<string, Json[]>).flat();
+    expect(entries.length).toBeGreaterThan(0);
+    for (const used of entries) expect(sorted(Object.keys(used))).toEqual(sorted(docFields(doc, 'Usage')));
+  });
+
+  it('serializes the OutboxEntry keys the table lists', async () => {
+    const hq = await startHq({
+      home: tempDir('arch-outbox'),
+      port: 0,
+      executors: {
+        alert_human: async () => {
+          throw new Error('no one to tell');
+        },
+      },
+    });
+    running.push(hq);
+    const post = (event: unknown) => fetch(`${hq.url}/api/events`, { method: 'POST', body: JSON.stringify(event) });
+    await post(human.order('acme/t1', { id: 's1', size: 1 }));
+    // A second order into a full shipment is refused with an alert, and the executor fails every time.
+    for (let i = 0; i < 6 && hq.snapshot().outbox.failed.length === 0; i++) {
+      await post(human.order(`acme/over${i}`, { id: 's1', size: 1 }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const failed = hq.snapshot().outbox.failed as unknown as Json[];
+    expect(failed.length).toBeGreaterThan(0);
+    for (const entry of failed) expect(sorted(Object.keys(entry))).toEqual(sorted(docFields(doc, 'OutboxEntry')));
   });
 });

@@ -7,7 +7,7 @@ This page says how Agent Works fits together today. It describes code that exist
 One HQ process owns everything that decides. It is `startHq` in `server/hq.ts`, started by `bin/agent-works.ts` and `server/cli.ts`.
 
 - HQ listens on `127.0.0.1` only. It serves the floor assets, a JSON API and one WebSocket at `/api/ws`. Every HTTP request is refused with 403 unless its Host is a loopback name with HQ's port and any Origin matches it. A WebSocket upgrade that fails the same check, or asks for another path, gets no reply. HQ calls `socket.destroy()`.
-- HQ keeps all state in one SQLite file, `state/hq.db` in the HQ home (ADR 0002). A second HQ on the same directory is refused with `StoreLockedError`. There is no second store.
+- HQ keeps the reducer state, the event log and the command outbox in one SQLite file, `state/hq.db` in the HQ home (ADR 0002). The registry is two small JSON files beside it, `repos.json` and `factories.json`. A second HQ on the same directory is refused with `StoreLockedError`. There is no second store for events or reducer state.
 - Workers do not run in HQ. Each worker runs in its own container (a cage) on docker or podman, started through `SandboxDriver` in `server/sandbox/container.ts`.
 - One proxy container per HQ carries all cage traffic out. See the firewall section.
 - HQ reaches the git host through `gh api` and `glab api`, so it never reads a token (ADR 0004). A guard refuses every write that is not on its list. No merge is on the list.
@@ -27,7 +27,7 @@ browser floor  <--- WebSocket /api/ws (GET /api/demo in demo mode) --- HQ (node)
 The reducer keeps no per-worker record. A worker is a host login in `state.staff`. The state that moves is the box, one per task. What the floor shows for a worker is derived from the boxes. HQ does hold a little worker-keyed state outside the reducer, and none of it is in `state/hq.db`:
 
 - `BlockedLog` keeps a `held` set and the recent attempt times per worker (`server/blocked.ts`). The held set is `snapshot.paused`.
-- Each worker has a home directory on disk, `homes/<homeName>` in the HQ home. `SandboxDriver.startCage` creates it and it stays after the cage is released (`server/sandbox/container.ts`).
+- Each worker has a home directory on disk, `homes/<homeName>` in the HQ home. `homeName` is a slug of the worker name plus a hash of it (`server/sandbox/container.ts`). `SandboxDriver.startCage` creates it and it stays after the cage is released (`server/sandbox/container.ts`).
 - The cage shell of an agent job caches one cage per worker and task, in memory (`server/agents/cage-shell.ts`).
 
 A restart loses the held set, the times and the cage cache. The home directories stay.
@@ -53,9 +53,9 @@ Every box also has the fields of `BoxBase` and `state`, listed in the `Box` tabl
 
 `moodOf` in `src/floor/model.ts` picks one of `MOODS` for each worker, in this order:
 
-1. `needs`: an Action item has this worker as its worker. The floor gives an item to the first owner of the item's task (`actionsOf`). A `website` item has no task, so it never makes a worker `needs`. The floor also adds a `closed_unmerged` item for a box cancelled with reason `closed`. The server has no such kind.
+1. `needs`: an Action item has this worker as its worker. An owner of a box is any login in `builders` plus the current `worker`, and the floor gives an item to the first owner of the item's task (`actionsOf`). A `website` item has no task, so it never makes a worker `needs`. The floor also makes two items of its own. It adds a `ready_to_merge` item for every box at `merge`, whether or not the server sent one, and a `closed_unmerged` item for a box cancelled with reason `closed`. The server has no `closed_unmerged` kind.
 2. `qc`: the worker is the `reviewer` of a box at `qc`.
-3. `working`: the worker owns a box at `building`, `test` or `qc`.
+3. `working`: the worker is the box's current `worker` (not just a past builder) and the box is at `building`, `test` or `qc`.
 4. `break`: none of the above.
 
 ### Cage
@@ -71,7 +71,7 @@ A cage is a container the driver starts for one task and worker.
 
 ### Pause
 
-`BlockedLog` in `server/blocked.ts` can hold a worker. The third identical attempt inside 10 minutes pauses it (`REPEAT_LIMIT`, `REPEAT_WINDOW_MS`). The worker name is in `snapshot.paused` until `POST /api/workers/resume` clears it and wakes the mode. A denial of a well-formed host that is only missing from the allowlist does not count toward a pause. Every denial becomes a `website` Action item in the cages mode, and `allow` is `true` only for that well-formed case (`server/modes/cages.ts`).
+`BlockedLog` in `server/blocked.ts` can hold a worker. The third identical attempt inside 10 minutes pauses it (`REPEAT_LIMIT`, `REPEAT_WINDOW_MS`). The worker name is in `snapshot.paused` until `POST /api/workers/resume` clears it and wakes the mode. A denial of a well-formed host that is only missing from the allowlist does not count toward a pause. The cages mode keeps one `website` Action item per site. A site that is already allowed gives none. `allow` starts `true` and turns `false` for good once any denial of that site has another reason or a malformed host (`server/modes/cages.ts`).
 
 ## Snapshot schema
 
@@ -109,12 +109,12 @@ Source: `packages/core/src/lifecycle.ts`. Plain JSON. Shapes are in `docs/lifecy
 | Field | Meaning |
 | --- | --- |
 | `config` | The `Config`. |
-| `seq` | Number of events the reducer has applied. |
-| `staff` | Logins that may be hired or draw reviews. |
+| `seq` | The next order number. Only an accepted `order` event raises it, and each new box takes the value as its `seq`. It is not a count of events and not the cursor of `GET /api/events?after=`. That cursor is the `seq` column of the `events` table, which the store assigns to every event. |
+| `staff` | Logins that may be hired or draw reviews. `add_worker` and `hire` both add to it. |
 | `boxes` | One box per task. |
 | `changes` | PRs or MRs, keyed by `repo#number@branch`. |
-| `checks` | Check results by head sha. |
-| `reviews` | Review verdicts by change. |
+| `checks` | Check results, keyed by `repo\|head sha`, then by check name. |
+| `reviews` | Review verdicts, keyed by `repo#number\|head sha`, then by reviewer login. |
 | `shipments` | Groups of boxes that ship together. |
 
 ### Config
@@ -246,7 +246,7 @@ Source: `server/modes/cages.ts`.
 | Field | Meaning |
 | --- | --- |
 | `rounds` | Fix rounds per task. |
-| `usage` | Token usage per task and round, as `Usage`, or `null`. |
+| `usage` | A list per task with one entry for each agent job that ran for it, as `Usage` or `null`. The author job, each fix and each review add one. |
 | `jobs` | Keys of the jobs running now. |
 | `reviewGap` | Text that says why a review is missing, or `null`. |
 
@@ -272,12 +272,12 @@ Source: `server/modes/cages.ts`. A union tagged by `kind`. The kinds are `ready_
 | `url` | `ready_to_merge`, `round_limit` |
 | `brief` | `ready_to_merge`, the first lines of the merge brief |
 | `fixRounds` | `round_limit` |
-| `site` | `website`, the rule `host` or `host:port` |
+| `site` | `website`, the rule `host` or `host:port`. For a malformed host it is the quoted text `JSON.stringify("host:port")`, quotes included |
 | `host` | `website` |
 | `port` | `website` |
 | `agent` | `website` |
 | `count` | `website` |
-| `allow` | `website`, true when the host is well formed and only missing from the allowlist |
+| `allow` | `website`, true while every denial of the site was a well-formed host only missing from the allowlist. One other reason makes it false for good |
 | `reason` | `alert` |
 | `subject` | `alert` |
 | `job` | `job_failed` |
@@ -293,7 +293,7 @@ An event is one fact or one human order. The path is the same for every source.
 4. `Store` in `server/store/store.ts` writes the event row and the state row in one `BEGIN IMMEDIATE` transaction. The commands go into the outbox inside the state row. HQ acknowledges only after the commit. A failed reduce rolls both back.
 5. The events live in the SQLite `events` table, one row per event with a sequence number and a checksum. They are served by `GET /api/events?after=<seq>` as `{ events: [{ seq, event }] }`. They are not stored as a file.
 6. `drain` in `server/hq.ts` runs each runnable outbox entry through the executor the mode registered for that command kind. It marks the entry `done`, `failed` or `skipped`. An entry is tried at most three times (`MAX_ATTEMPTS` in `server/ledger.ts`). Delivery is at least once, so executors must be safe to repeat (ADR 0004).
-7. HQ pushes a fresh snapshot to every open WebSocket.
+7. HQ pushes a fresh snapshot to every open WebSocket. For `POST /api/events` it pushes right after the commit and before `drain` starts, and again after each executor finishes.
 
 A command is a trigger. The mode computes the job from the current state, and each job checks the host before it writes (ADR 0004). A restart does not replay events, because the state row and the log cannot disagree after a commit.
 
@@ -307,16 +307,16 @@ A command is a trigger. The mode computes the job from the current state, and ea
 
 | Method | Contract |
 | --- | --- |
-| `startCage({ task, worker, source })` | Refuses a source inside a cage or a worker home. Needs the cage image and names the build command if it is missing. Exports the repo without running its filters on the host, scans it in a throwaway container and refuses on any issue. Raises the firewall, then starts a hardened container on the internal network only. Returns a `CageView`. A failure removes the cage files and leaves `homes/<slug>`, the worker's home, in place. |
+| `startCage({ task, worker, source })` | Refuses a source inside a cage or a worker home. Needs the cage image and names the build command if it is missing. Exports the repo without running its filters on the host, scans it in a throwaway container and refuses on any issue. Raises the firewall, then starts a hardened container on the internal network only. Returns a `CageView`. A failure removes the cage files and leaves `homes/<homeName>`, the worker's home, in place. |
 | `exec(id, argv, options)` | Runs `argv` in the cage at `/work`. Throws `CageError` if no such cage runs. |
 | `allow(rule)` | Adds one host rule to the allowlist file. Refuses anything that is not a single host rule. |
 | `releaseCage(id)` | Removes the container. Returns false for an unknown id, so it is idempotent. |
-| `removeAll()` | Stops the firewall and removes every container and network that carries this HQ's labels. Returns the counts. |
+| `removeAll()` | Stops the firewall and removes every container and network that carries this HQ's labels. Returns `{ containers, networks }`. `containers` is the count found before the sweep. `networks` is the count still listed after `lowerFirewall`, so it is 0 on success. |
 | `leftovers()` | Lists the containers and networks still labelled for this HQ. |
 | `list()` | The running `CageView` list. |
 | `throwaway(args, mounts)` | Runs one command in a container with no network, hardened, 256 processes, 2 GB. |
 
-Every container gets the labels `agent-works.project`, `agent-works.hq` and `agent-works.role`. Cleanup finds containers by those labels, never by name.
+Every container gets the labels `agent-works.project`, `agent-works.hq` and `agent-works.role`. Cleanup (`removeAll`, `leftovers`) finds containers by those labels. `releaseCage` is the exception. It removes one cage by its container name.
 
 The contract has 15 cases in `test/contract/sandbox.contract.ts`. They run against real docker, real rootless podman (CI) and an in-memory fake. `docs/contract-tests.md` has the commands and the table of what does not run.
 
@@ -327,7 +327,8 @@ Spec section 4 names the rules F1 to F5. The codes are in `docs/threat-model.md`
 - **Networks.** `raiseFirewall` in `server/sandbox/firewall.ts` creates an `--internal` network and an egress network per HQ. On docker the internal network also sets `inhibit_ipv4`, so there is no host gateway. Cages join only the internal network (F1, F3).
 - **Proxy.** One container runs the Node CONNECT proxy from `server/sandbox/proxy/`. It joins both networks. Cages get `HTTPS_PROXY` and `HTTP_PROXY` that point at it, with the worker name as the proxy user so a denial names the worker.
 - **Rules.** The proxy allows `CONNECT host:port` only for hosts in the allowlist file and answers 403 otherwise (F2). It resolves once, refuses non-public addresses and dials the address it checked (F2a). It reads the ClientHello and closes the tunnel unless the SNI equals the CONNECT host (F2s). It reads the allowlist file on every request. `DEFAULT_ALLOWLIST` is `api.anthropic.com`, `github.com`, `api.github.com` and `registry.npmjs.org`.
-- **Denials.** The proxy logs one JSON line per denial, `{deny: event}`, with no cap. The cap of 20 a second (F4r) applies only to the POST to a `denyUrl`, and `raiseFirewall` never sets one. HQ follows the log: `engine.follow` feeds each line to `parseDenialLine`, which gives a raw denial. So the path HQ uses is uncapped, and F4r speaks of a path HQ does not use. That gap is issue #44. HQ's own bounds are a 250 ms throttle on snapshot pushes, 50 keys in the `denials` map and 500 entries in `BlockedLog`. `noteDenial` in `server/hq.ts` does three things for each line. It tells the mode, which may raise a `website` Action item. It records a blocked attempt with layer `F2`. It updates the `denials` map. That map holds at most 50 keys, and the oldest key goes first.
+- **Denials.** The proxy logs one JSON line per denial, `{deny: event}`, with no cap. The cap of 20 a second (F4r) applies only to the POST to a `denyUrl`, and `raiseFirewall` never sets one. HQ follows the log: `engine.follow` feeds each line to `parseDenialLine`, which gives a raw denial. So the path HQ uses is uncapped, and F4r speaks of a path HQ does not use. That gap is issue #44. Caveat: `docs/threat-model.md` still says in F4 that every denied request is POSTed to `/api/sandbox/deny`, and in F4r that the proxy posts at most 20 a second. HQ has no such route and reads the log instead. Both rows are false until issue #44 is settled. `noteDenial` in `server/hq.ts` does three things for each line. It tells the mode, which may raise a `website` Action item. It records a blocked attempt with layer `F2`. It updates the `denials` map.
+- **Bounds.** Some of what HQ holds is capped. Snapshot pushes for denials are throttled to one per 250 ms. The `denials` map in `server/hq.ts` holds at most 50 keys, and the oldest goes first. `BlockedLog` keeps at most 500 entries. Two maps are not capped, and each grows with every distinct host a cage tries. The cages mode keeps its own `denials` map, one entry per site, and never evicts. Its `actions()` returns every entry, so the snapshot and every push grow with it. `BlockedLog.times` keeps one list per attempt key (worker, layer, tool, detail) and drops keys only when `resume` runs for that worker. Memory is therefore not bounded under a flood of distinct hosts. Issue #27 tracks these two maps and issue #44 has the correction.
 - **Pause.** `BlockedLog` pauses a worker on the third identical attempt in 10 minutes and keeps at most 500 entries. See the state machine section.
 - **Allow.** A person approves a `website` item with `POST /api/actions/allow`. That calls `SandboxDriver.allow`. The worker's own retry then passes. Only a single host rule is accepted.
 - **Cage flags.** `hardenedArgs` drops all capabilities, sets `no-new-privileges`, makes the root read-only and gives a 256 MB `/tmp`. A cage has a 1024 process limit and 4 GB of memory. No cage is privileged, mounts the docker socket or mounts a named volume (CG).

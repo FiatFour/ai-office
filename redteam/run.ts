@@ -32,6 +32,7 @@ import {
 } from './outcome.ts';
 import { hostArtifacts, readDir, realGh, scanArtifacts, scanShapes } from './scan.ts';
 import { renderTask, TASKS } from './tasks/index.ts';
+import { commitMarker } from './tree.mjs';
 
 const TABLE = fileURLToPath(new URL('../docs/threat-model.md', import.meta.url));
 const LAYER = /^(L[1-5]|PF|MS|GS|HG|WH|CG|F[1-5][a-z]?|W[1-3])$/;
@@ -75,13 +76,7 @@ if (problems.length > 0) {
   process.exit(2);
 }
 const liveIds = rows.filter((row) => row.rating === 'stopped-live').map((row) => row.id);
-const gitSha = (): string => {
-  const run = (...args: string[]) =>
-    spawnSync('git', ['-C', fileURLToPath(new URL('..', import.meta.url)), ...args], {
-      encoding: 'utf8',
-    }).stdout.trim();
-  return `${run('rev-parse', 'HEAD')}${run('status', '--porcelain', '--untracked-files=no') === '' ? '' : ' (uncommitted changes)'}`;
-};
+const gitSha = (): string => commitMarker(fileURLToPath(new URL('..', import.meta.url)));
 const banner = [
   `git commit: ${gitSha()}`,
   args.live

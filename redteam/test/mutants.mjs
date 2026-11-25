@@ -1,11 +1,13 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the strings are source text being mutated
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dirtyPaths } from '../tree.mjs';
 
-const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+// MUTANTS_ROOT lets the signal test point the runner at a throw-away repo.
+const ROOT = process.env.MUTANTS_ROOT ?? fileURLToPath(new URL('../..', import.meta.url));
 const OUTCOME = 'redteam/test/outcome.test.ts';
 const CANARY = 'redteam/test/canary.test.ts';
 const COVERAGE = 'redteam/test/coverage.test.ts';
@@ -13,6 +15,8 @@ const SCAN = 'redteam/test/scan.test.ts';
 const CHECKS = 'redteam/test/checks.test.ts';
 const BLOCKED = 'server/test/blocked.test.ts';
 const PROXY = 'redteam/test/proxy.test.ts';
+const FLIP = 'redteam/test/flip-label.test.ts';
+const RUNNER = 'redteam/test/mutants-runner.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -223,6 +227,36 @@ const MUTANTS = [
     tests: [OUTCOME],
   },
   {
+    name: 'flip-200-unlabelled',
+    claim: 'a firewall row whose connection opened (status 200) is labelled FLIP, a connection opened',
+    edits: [['spikes/P0-6/rows-firewall.mjs', "? 'FLIP, a connection opened: '", "? ''"]],
+    tests: [FLIP],
+  },
+  {
+    name: 'killed-run-leaves-mutation',
+    claim: 'a SIGINT or SIGTERM to a mutant run restores the mutated file',
+    edits: [
+      [
+        'redteam/test/mutants.mjs',
+        'for (const signal of SIGNALS)\n  process.on(signal, () => {',
+        'for (const signal of [])\n  process.on(signal, () => {',
+      ],
+    ],
+    tests: [RUNNER],
+  },
+  {
+    name: 'dirty-tree-accepted',
+    claim: 'the mutant runner refuses to start when a tracked file is modified',
+    edits: [['redteam/tree.mjs', ".filter((line) => line !== '')", '.filter(() => false)']],
+    tests: [RUNNER],
+  },
+  {
+    name: 'untracked-file-not-dirty',
+    claim: 'a new untracked file counts as a dirty tree',
+    edits: [['redteam/tree.mjs', "'--untracked-files=all'", "'--untracked-files=no'"]],
+    tests: [RUNNER],
+  },
+  {
     name: 'rig-mounts-spike-proxy',
     claim: 'the red-team rig mounts the product proxy',
     edits: [['spikes/P0-6/rig.mjs', "'../../server/sandbox/proxy'", "'../P0-2/proxy'"]],
@@ -236,23 +270,53 @@ const MUTANTS = [
   },
 ];
 
-/** @param {string[]} tests */
+/** Files under mutation right now, path to original text. Restored on every way out: finally, signal, exit. */
+const originals = new Map();
+const restore = () => {
+  for (const [path, text] of originals) writeFileSync(path, text);
+  originals.clear();
+};
+/** @type {import('node:child_process').ChildProcess | null} */
+let running = null;
+const SIGNALS = /** @type {const} */ (['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']);
+const NUMBER = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGTERM: 15 };
+for (const signal of SIGNALS)
+  process.on(signal, () => {
+    restore();
+    running?.kill('SIGKILL');
+    console.error(`${signal}: the mutated files were restored`);
+    process.exit(128 + NUMBER[signal]);
+  });
+process.on('exit', restore);
+
+/** @param {string[]} tests @returns {Promise<number | null>} */
 const vitest = (tests) =>
-  spawnSync('pnpm', ['vitest', 'run', ...tests], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    timeout: 300_000,
-    env: { ...process.env },
+  new Promise((resolve) => {
+    const child = spawn('pnpm', ['vitest', 'run', ...tests], { cwd: ROOT, stdio: 'ignore', env: { ...process.env } });
+    running = child;
+    const timer = setTimeout(() => child.kill('SIGKILL'), 300_000);
+    child.on('error', () => resolve(null));
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      running = null;
+      resolve(code);
+    });
   });
 
 const only = process.argv.slice(2);
 for (const name of only)
   if (!MUTANTS.some((mutant) => mutant.name === name)) throw new Error(`no mutant is named ${name}`);
+const dirty = dirtyPaths(ROOT);
+if (dirty.length > 0) {
+  console.error(
+    `refusing to run on a dirty tree (a mutant run restores files from what it read, so it needs a clean one). Commit or stash first:\n${dirty.join('\n')}`,
+  );
+  process.exit(2);
+}
 const selected = MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name));
 const lines = [];
 let caught = 0;
 for (const mutant of selected) {
-  const originals = new Map();
   let line;
   try {
     for (const [file, find, replace] of mutant.edits) {
@@ -262,13 +326,13 @@ for (const mutant of selected) {
       if (!current.includes(find)) throw new Error(`pattern not found in ${file}: ${find}`);
       writeFileSync(path, current.replace(find, replace));
     }
-    const survived = vitest(mutant.tests).status === 0;
+    const survived = (await vitest(mutant.tests)) === 0;
     if (!survived) caught += 1;
     line = `${survived ? 'BAD ' : 'OK  '} ${mutant.name}: ${survived ? 'survived' : 'caught'}. Claim: ${mutant.claim}`;
   } catch (error) {
     line = `ERR  ${mutant.name}: ${error instanceof Error ? error.message : String(error)}`;
   } finally {
-    for (const [path, text] of originals) writeFileSync(path, text);
+    restore();
   }
   lines.push(line);
   console.log(line);

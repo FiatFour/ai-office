@@ -18,7 +18,7 @@ const server = createServer((socket) => socket.on('error', () => {}).end('host\\
 server.listen(0, '::', () => console.log(server.address().port));`;
 
 /** @param {number} status */
-const flipLabel = (status) =>
+export const flipLabel = (status) =>
   status === 403
     ? ''
     : status === 200

@@ -6,7 +6,7 @@ import { type RunningHq, startHq } from '../hq.ts';
 import { hasSqlite, human, tempDir } from './helpers.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
+const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8').replaceAll('\r\n', '\n');
 const CORE = 'packages/core/src/lifecycle.ts';
 const LIFECYCLE_DOC = 'docs/lifecycle.md';
 
@@ -128,7 +128,7 @@ export const reachable = (sources: Sources, start: string, file: string): Map<st
       const names = (m[1] as string).split(',').map((n) => n.trim().replace(/^type /, ''));
       if (!names.includes(name)) continue;
       const spec = m[2] as string;
-      return spec.startsWith('.') ? normalize(join(dirname(from), spec)) : CORE;
+      return spec.startsWith('.') ? normalize(join(dirname(from), spec)).replaceAll('\\', '/') : CORE;
     }
     return null;
   };

@@ -4,7 +4,7 @@ Status: proposed in P1-3, 2026-11-18. The operator may override any default belo
 
 ## Context
 
-P1-3 draws the run on the 480 by 270 factory floor and adds `agent-works --demo`. The spec asks for mock data, and the sharpened prompt and the plan ask for the event log of the real run instead of invented data. HQ already pushes one snapshot over the WebSocket and records every event in `events.jsonl` order (`GET /api/events?after=`).
+P1-3 draws the run on the 480 by 270 factory floor and adds `agent-works --demo`. The spec asks for mock data, and the sharpened prompt and the plan ask for the event log of the real run instead of invented data. HQ already pushes one snapshot over the WebSocket and records every event in the SQLite `events` table (ADR 0002), served in order by `GET /api/events?after=`. `server/modes/events-export.ts` writes that response as `events.jsonl`.
 
 ## Decision
 

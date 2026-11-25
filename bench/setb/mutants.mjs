@@ -179,7 +179,7 @@ const MUTANTS = [
   {
     name: 'judge-void-cap-unchecked',
     claim: 'the judge command refuses to run once the voids log holds three lines',
-    edits: [['bench/setb/cli.ts', '    refuseAfterVoids(voids, [values.dir, dirname(resolve(out))]);\n', '']],
+    edits: [['bench/setb/cli.ts', '    refuseAfterVoids(voids, voidScanDirs(values.dir));\n', '']],
     tests: [SETB],
   },
   {
@@ -790,6 +790,24 @@ const MUTANTS = [
     tests: [ARMT],
   },
   {
+    name: 'prompt-drops-verdict-contract',
+    claim: 'the rendered judge prompt carries the VERDICT contract sentence',
+    edits: [[P, '    RUBRIC,\n', "    RUBRIC.split('Reason briefly')[0],\n"]],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-out-anywhere',
+    claim: '--out must sit in the fixed judged folder so a new directory cannot reset the void count',
+    edits: [['bench/setb/cli.ts', "judgedOutPath(values.dir, need('out'))", "need('out')"]],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-scan-narrowed',
+    claim: 'voided outputs in the judged folder count toward the cap',
+    edits: [[J, 'join(dir, JUDGED_DIR)]', ']']],
+    tests: [SETB],
+  },
+  {
     name: 'judge-voids-log-ignored-outs',
     claim: 'deleting the voids log does not reset the count: the voided --out files count too',
     edits: [[J, 'Math.max(logLines(file), voidedOuts(dirs))', 'logLines(file)']],
@@ -808,9 +826,42 @@ const MUTANTS = [
     tests: [SETB],
   },
   {
-    name: 'judge-voids-other-dir',
-    claim: 'voided --out files in the directory of a new --out are counted',
-    edits: [['bench/setb/cli.ts', '[values.dir, dirname(resolve(out))]', '[values.dir]']],
+    name: 'judge-one-strips-contract',
+    claim: 'judgeOne hands the whole rendered prompt to the model',
+    edits: [
+      [J, 'await model(renderPrompt(packet))', "await model(renderPrompt(packet).replace(/Reason briefly[^#]*/, ''))"],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'claude-model-strips-contract',
+    claim: 'claudeModel pipes the whole prompt to the claude process',
+    edits: [[J, 'input: prompt,', "input: prompt.replace(/Reason briefly[^#]*/, ''),"]],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-void-after-output',
+    claim: 'the void is recorded before the output is written',
+    edits: [
+      ['bench/setb/cli.ts', 'if (run.voided !== null) recordVoid(voids, run.voided);\n', ''],
+      [
+        'bench/setb/cli.ts',
+        '    console.log(\n      run.voided === null',
+        '    if (run.voided !== null) recordVoid(voids, run.voided);\n    console.log(\n      run.voided === null',
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-out-any-extension',
+    claim: '--out must be a .json file',
+    edits: [[J, "if (!target.endsWith('.json'))", 'if (false)']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-scan-json-only',
+    claim: 'a voided output under any file name counts',
+    edits: [[J, 'readdirSync(dir)) {', "readdirSync(dir).filter((f) => f.endsWith('.json'))) {"]],
     tests: [SETB],
   },
   {

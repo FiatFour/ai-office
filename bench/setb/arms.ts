@@ -7,13 +7,14 @@ import {
   allPages,
   branchProblem,
   type ChangeFact,
+  type ChangeSnapshot,
   type GitHost,
   guard,
   type Transport,
   WriteRefused,
   type WriteRule,
 } from '../../server/githost/host.ts';
-import { cagesMode, changeTitle, workOrder } from '../../server/modes/cages.ts';
+import { cagesMode, changeTitle, REVIEW_MARK, workOrder } from '../../server/modes/cages.ts';
 import { type FactoryEnv, removedVia } from '../arms-live.ts';
 import { TaskRefused } from '../model.ts';
 import { oneSessionEach } from '../scratch.ts';
@@ -228,41 +229,94 @@ export const publicEnv = (o: PublicOptions): FactoryEnv => {
 export const saltOf = (ticketId: string): string => createHash('sha256').update(ticketId).digest('hex').slice(0, 8);
 
 /**
- * Only provider messages are matched, each anchored on a known prefix, so a task text that says "rate-limit" or "usage limit"
- * is never read as a stop. A usage limit has a reset time and ends the run; an overload or provider rate limit is transient.
+ * A provider message starts a line, or follows the `claude ended with <subtype>: ` wrapper of `parseStream`. Matching anywhere
+ * would read a model's own words ("You've hit your max turns") or a task that talks about rate limits as a stop.
  */
-const QUOTA =
-  /You've hit your|(?:Claude AI )?usage limit reached|5-hour limit reached|weekly limit reached|out of (?:extra )?usage/i;
-const TRANSIENT =
-  /API Error: (?:429|529)\b|"?type"?\s*[:=]\s*"?(?:overloaded_error|rate_limit_error)|\boverloaded_error\b/i;
-const AUTH = /OAuth token revoked|Failed to authenticate/i;
+const providerSays = (...forms: string[]): RegExp =>
+  new RegExp(String.raw`(?:^|claude ended with [\w ]+?: )[ \t]*(?:(?:API )?Error: )?(?:${forms.join('|')})`, 'im');
+/** What follows the word "limit" or "usage" in a provider message: a separator, the reset time, or nothing. */
+const END = String.raw`(?=[ \t]*(?:[·∙•|.]|resets\b|$))`;
+const EMPTY_REPLY = 'claude gave an empty reply with exit 0';
+
+/** A usage limit has a reset time and ends the run; an overload or provider rate limit is transient. */
+const QUOTA = providerSays(
+  `You['’]ve hit your (?:(?:org's|monthly|daily|weekly|usage|session|5-hour|Opus|Sonnet|Fable) ){0,3}limit${END}`,
+  `(?:Claude AI )?usage limit reached${END}`,
+  `(?:5-hour|weekly) limit reached${END}`,
+  `(?:You['’]re )?out of (?:extra )?usage${END}`,
+);
+const TRANSIENT = providerSays(
+  String.raw`API Error: (?:429|529)\b`,
+  String.raw`(?:overloaded|rate_limit)_error\b`,
+  String.raw`\{"type":"error","error":\{"type":"(?:overloaded|rate_limit)_error"`,
+  EMPTY_REPLY,
+);
+const AUTH = providerSays('OAuth token revoked', 'Failed to authenticate');
 
 export type Stop = 'quota' | 'transient' | 'auth' | null;
 
 export const stopOf = (message: string): Stop =>
   AUTH.test(message) ? 'auth' : QUOTA.test(message) ? 'quota' : TRANSIENT.test(message) ? 'transient' : null;
 
-/** The line of a claude stderr that states a stop, or its first 200 characters. */
-export const stopLine = (stderr: string): string => {
-  const lines = stderr.split('\n').map((l) => l.trim());
-  return (lines.find((l) => l !== '' && stopOf(l) !== null) ?? stderr.trim()).slice(0, 200);
+/** The line that states the stop, auth before quota before transient wherever each stands, else the first 200 characters. */
+export const stopLine = (text: string): string => {
+  const lines = text.split('\n').map((l) => l.trim());
+  for (const stop of ['auth', 'quota', 'transient'] as const) {
+    const line = lines.find((l) => stopOf(l) === stop);
+    if (line !== undefined) return line.slice(0, 200);
+  }
+  return text.trim().slice(0, 200);
+};
+
+interface ResultLine {
+  readonly type?: string;
+  readonly subtype?: string;
+  readonly is_error?: boolean;
+  readonly result?: string;
+}
+
+const resultLine = (out: string): ResultLine | undefined =>
+  out
+    .split('\n')
+    .flatMap((line) => {
+      try {
+        const parsed = JSON.parse(line) as ResultLine | null;
+        return parsed?.type === 'result' ? [parsed] : [];
+      } catch {
+        return [];
+      }
+    })
+    .at(-1);
+
+/** The failure text to put in a synthetic result line, or null to leave the stream as claude printed it. */
+const unsaid = (ran: { readonly code: number; readonly out: string; readonly err: string }): string | null => {
+  const result = resultLine(ran.out);
+  if (result === undefined) {
+    const printed = ran.out.split('\n').filter((l) => !l.startsWith('{'));
+    const line = stopLine([ran.err, ...printed].join('\n'));
+    if (stopOf(line) !== null) return line;
+    if (ran.code === 0 && ran.out.trim() === '') return EMPTY_REPLY;
+    return ran.err.trim() === '' ? null : stopLine(ran.err);
+  }
+  if (result.is_error !== true && result.subtype === 'success') return null;
+  const line = stopLine(ran.err);
+  const stop = stopOf(line);
+  const said = (result.result ?? '').trim();
+  const generic = /^(?:Execution error\.?)?$/i.test(said);
+  return (stop === 'auth' && stopOf(said) !== 'auth') || (generic && stop !== null) ? line : null;
 };
 
 /**
- * Hands claude's stderr to the stream reader. `claudeCode` reads only stdout, so a usage limit or an overload printed to
- * stderr alone would read as "claude printed no result line", a task failure. When stdout has no result line and stderr says
- * something, a synthetic error result line carrying that text is appended.
+ * `claudeCode` reads only stdout, so a usage limit or an overload printed to stderr would read as a task failure. When stdout
+ * does not say why claude stopped, a synthetic error result line that does is appended.
  */
 export const withStderr = (shell: CageShell): CageShell => ({
   async exec(argv, options) {
     const ran = await shell.exec(argv, options);
-    if (!argv.includes('--output-format') || ran.err.trim() === '' || /"type"\s*:\s*"result"/.test(ran.out)) return ran;
-    const line = JSON.stringify({
-      type: 'result',
-      subtype: 'error_during_execution',
-      is_error: true,
-      result: stopLine(ran.err),
-    });
+    if (!argv.includes('--output-format')) return ran;
+    const result = unsaid(ran);
+    if (result === null) return ran;
+    const line = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result });
     return { ...ran, out: `${ran.out}${ran.out.endsWith('\n') || ran.out === '' ? '' : '\n'}${line}\n` };
   },
 });
@@ -385,6 +439,21 @@ export const resumeBranch = async (
   }
   await bench.dropRefs(branch);
   return null;
+};
+
+/**
+ * Whether a resumed factory arm keeps the PR it left: the reviewer's last review of the head does not ask for changes, and no
+ * review after it does. Marks carry the reviewer and verdict, since every bench review comes from one GitHub account.
+ */
+export const adoptable = (snapshot: ChangeSnapshot, reviewer: string): boolean => {
+  const { reviews, change } = snapshot;
+  const last = reviews.findLastIndex(
+    (r) => r.commitId === change.headSha && REVIEW_MARK.exec(r.body)?.[1] === reviewer,
+  );
+  return (
+    last >= 0 &&
+    reviews.slice(last).every((r) => r.verdict !== 'changes' && REVIEW_MARK.exec(r.body)?.[2] !== 'changes')
+  );
 };
 
 export interface BenchPull {

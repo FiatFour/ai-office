@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { CageShell } from '../../../server/agents/claude-code.ts';
 import { claudeCode } from '../../../server/agents/claude-code.ts';
@@ -7,11 +9,12 @@ import { parseReview } from '../../../server/agents/runtime.ts';
 import { scripted } from '../../../server/agents/scripted.ts';
 import { type HttpRequest, type Transport, WriteRefused, writeProblem } from '../../../server/githost/host.ts';
 import { FakeGithub } from '../../../server/test/fakes/github-api.ts';
-import { hasSqlite, tempDir } from '../../../server/test/helpers.ts';
+import { canSpawnTs, hasSqlite, tempDir } from '../../../server/test/helpers.ts';
 import { factoryArm, ticketOf } from '../../arms-live.ts';
 import { TaskRefused } from '../../model.ts';
 import {
   AUTHOR,
+  adoptable,
   BASE_PREFIX,
   BENCH_LABEL,
   baseNameOf,
@@ -28,14 +31,25 @@ import {
   resetAt,
   resumeBranch,
   type Step,
+  stopLine,
   stopOf,
   sweepRemote,
   waitForCiSlot,
   withStderr,
 } from '../arms.ts';
-import { claimIntent, newSalt, pinBase, readJournal, TRANSIENT_CAP, transientCount } from '../journal.ts';
+import {
+  appendLine,
+  claimIntent,
+  newSalt,
+  pinBase,
+  readJournal,
+  setAsideTorn,
+  TRANSIENT_CAP,
+  transientCount,
+} from '../journal.ts';
+import { acquireLock } from '../lock.ts';
 import type { Ci } from '../packet.ts';
-import { appendRun, classify, entriesOf, finish, isFinal, type RunRecord, readRuns, todo } from '../run.ts';
+import { appendRun, classify, driveArms, entriesOf, finish, isFinal, type RunRecord, readRuns, todo } from '../run.ts';
 import { loadFrozen, type SetBTask } from '../task.ts';
 
 const REPO = 'acme/app';
@@ -290,11 +304,38 @@ describe('the quota and login stops', () => {
       expect(stopOf(text), text).toBeNull();
   });
 
+  it('matches only a provider message at the start of a line or of what claude ended with, not a model sentence', () => {
+    for (const text of [
+      "claude ended with error_max_turns: You've hit your max turns; tests still fail",
+      "claude ended with success: You've hit your limit of retries in this test",
+      'claude ended with success: I handled the case where Claude AI usage limit reached|1 is printed',
+      'claude ended with success: the code now retries on API Error: 529',
+      'claude ended with success: it logs OAuth token revoked and Failed to authenticate',
+    ])
+      expect(stopOf(text), text).toBeNull();
+    for (const text of [
+      "You've hit your limit · resets 3pm (UTC)",
+      "You've hit your session limit · resets 3pm (UTC)",
+      "You've hit your org's monthly usage limit",
+      '5-hour limit reached ∙ resets 3pm (Asia/Bangkok)',
+      "bench/t-0a1b2c3d-r1 author 0 failed: claude ended with success: You've hit your weekly limit · resets 9am",
+      'no retry after the first failure: x failed: claude ended with an error: Claude AI usage limit reached|1764000000',
+      'Error: out of extra usage · resets 3pm',
+    ])
+      expect(stopOf(text), text).toBe('quota');
+  });
+
+  it('puts an auth line before a usage-limit line, in whatever order they were printed', () => {
+    const both = 'Claude AI usage limit reached|1764000000\nFailed to authenticate. API Error: 401\n';
+    expect(stopLine(both)).toMatch(/^Failed to authenticate/);
+    expect(stopOf(both)).toBe('auth');
+  });
+
   describe('claude stderr', () => {
-    const shell = (err: string, out = ''): CageShell => ({
+    const shell = (err: string, out: string, code: number): CageShell => ({
       async exec(argv) {
         if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
-        return { code: 1, out, err, timedOut: false };
+        return { code, out, err, timedOut: false };
       },
     });
     const job = {
@@ -306,9 +347,9 @@ describe('the quota and login stops', () => {
       comments: [],
       signal: new AbortController().signal,
     };
-    const message = async (err: string, out = ''): Promise<string> => {
+    const message = async (err: string, out = '', code = 1): Promise<string> => {
       try {
-        await claudeCode({ shell: () => withStderr(shell(err, out)) }).run(job);
+        await claudeCode({ shell: () => withStderr(shell(err, out, code)) }).run(job);
       } catch (error) {
         return (error as Error).message;
       }
@@ -334,6 +375,43 @@ describe('the quota and login stops', () => {
       expect(classify(await message('Segmentation fault\n'), new Date()).status).toBe('failed');
     });
 
+    const resultOf = (result: string, subtype = 'error_during_execution', is_error = true): string =>
+      `${JSON.stringify({ type: 'result', subtype, is_error, result })}\n`;
+    const status = async (err: string, out = '', code = 1) =>
+      classify(await message(err, out, code), new Date()).status;
+    const QUOTA_LINE = 'Claude AI usage limit reached|1764000000\n';
+    const AUTH_LINE = 'Failed to authenticate. API Error: 401\n';
+
+    it('reads auth when a usage limit and an auth line are both printed, wherever each is', async () => {
+      expect(await status(`${QUOTA_LINE}${AUTH_LINE}`)).toBe('auth');
+      expect(await status(AUTH_LINE, resultOf("You've hit your limit · resets 3pm"))).toBe('auth');
+      expect(await status(AUTH_LINE, resultOf('tests broke', 'success'))).toBe('auth');
+      expect(await status(QUOTA_LINE, AUTH_LINE)).toBe('auth');
+      expect(await status(QUOTA_LINE, resultOf('OAuth token revoked'))).toBe('auth');
+    });
+
+    it('reads an empty reply with exit 0 as transient, and an empty reply with exit 1 as a failure', async () => {
+      expect(await status('', '', 0)).toBe('transient');
+      expect(await status('some warning\n', '', 0)).toBe('transient');
+      expect(await status(QUOTA_LINE, '', 0)).toBe('quota');
+      expect(await status('', '', 1)).toBe('failed');
+    });
+
+    it('reads a quota on stderr when stdout says only Execution error', async () => {
+      expect(await status(QUOTA_LINE, 'Execution error\n')).toBe('quota');
+      expect(await status(QUOTA_LINE, resultOf('Execution error'))).toBe('quota');
+      expect(await status(QUOTA_LINE, resultOf(''))).toBe('quota');
+    });
+
+    it('does not override a successful result with what stderr says', async () => {
+      const ran = await withStderr(shell(AUTH_LINE, resultOf('done', 'success', false), 0)).exec([
+        'claude',
+        '--output-format',
+        'stream-json',
+      ]);
+      expect(ran.out).toBe(resultOf('done', 'success', false));
+    });
+
     it('leaves a stream that has its own result line alone', async () => {
       const out = `${JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'tests broke' })}\n`;
       const m = await message("You've hit your limit", out);
@@ -354,7 +432,7 @@ describe('the quota and login stops', () => {
 });
 
 describe('the CI cap', () => {
-  const ci = (state: Ci['state']): Ci => ({ sha: 'a'.repeat(40), state, note: '' });
+  const ci = (state: Ci['state']): Ci => ({ sha: 'a'.repeat(40), state, note: '', checks: 1 });
 
   it('treats running CI as pending, and a head with no checks yet as pending only while it is fresh', () => {
     expect(ciPending(ci('pending'), 0, 1e9)).toBe(true);
@@ -615,6 +693,42 @@ describe('the journal', () => {
     expect(readFileSync(file, 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
   });
 
+  it('refuses a header that disagrees with the base of an intent or of a run record', () => {
+    const A = 'a'.repeat(40);
+    const B = 'b'.repeat(40);
+    for (const record of [
+      { kind: 'intent', task: 'x', arm: 'factory', baseSha: A },
+      { task: 'x', arm: 'factory', status: 'done', baseSha: A },
+    ]) {
+      const file = join(tempDir('setb-journal'), 'runs.jsonl');
+      appendLine(file, { kind: 'header', baseSha: B, createdAt: 'x' });
+      appendLine(file, record);
+      expect(() => pinBase(file, B)).toThrow(/a record for x factory says a+/);
+    }
+  });
+
+  it('skips a torn last line without losing a whole one, and sets it aside before the next append', () => {
+    const file = join(tempDir('setb-journal'), 'runs.jsonl');
+    pinBase(file, 'a'.repeat(40));
+    const { intent } = claimIntent(file, task, 'factory', 'a'.repeat(40));
+    const torn = '{"kind":"intent","task":"x';
+    appendFileSync(file, torn);
+    expect(readJournal(file)).toMatchObject({ intents: [intent], torn });
+    pinBase(file, 'a'.repeat(40));
+    const next = claimIntent(file, task, 'baseline', 'a'.repeat(40));
+    expect(readJournal(file)).toMatchObject({ intents: [intent, next.intent], torn: null });
+    expect(readFileSync(`${file}.torn`, 'utf8')).toBe(`${torn}\n`);
+    expect(setAsideTorn(file)).toBeNull();
+  });
+
+  it('keeps a whole last line that only lacks its newline, and appends after it', () => {
+    const file = join(tempDir('setb-journal'), 'runs.jsonl');
+    writeFileSync(file, JSON.stringify({ kind: 'intent', task: 'x' }));
+    appendLine(file, { kind: 'intent', task: 'y' });
+    expect(readJournal(file).intents.map((i) => i.task)).toEqual(['x', 'y']);
+    expect(existsSync(`${file}.torn`)).toBe(false);
+  });
+
   it('refuses a journal that has records but no header', () => {
     const file = join(tempDir('setb-journal'), 'runs.jsonl');
     claimIntent(file, task, 'factory', 'a'.repeat(40));
@@ -697,5 +811,292 @@ describe.skipIf(!hasSqlite)('a factory refusal after round 0', () => {
     );
     expect(arm.refused).toBe(true);
     expect(arm.note).toMatch(/nothing is graded/);
+  });
+});
+
+describe('a PR killed before it was labelled', () => {
+  it('is still found by its head prefix and closed', async () => {
+    const h = harness();
+    const unlabelled: Transport = async (request) => {
+      if (/\/labels$/.test(request.path)) throw new Killed('labels');
+      return h.send(request);
+    };
+    const [task] = tasks as [SetBTask];
+    const intent = claimIntent(join(tempDir('setb-label'), 'runs.jsonl'), task, 'baseline', h.root).intent;
+    const bench = benchHost({ repo: REPO, base: intent.base, baseSha: h.root, send: unlabelled, log: h.note });
+    await expect(
+      publishBaseline({
+        bench,
+        repo: REPO,
+        branch: intent.branch,
+        base: intent.base,
+        ticket: ticketOf(hiddenTask(task, intent.salt) as never, 1),
+        files: [{ path: FILE, content: 'x\n' }],
+      }),
+    ).rejects.toBeInstanceOf(Killed);
+    const remote = await listRemote(h.send, REPO);
+    expect(remote.pulls.map((p) => ({ number: p.number, labelled: p.labelled }))).toEqual([
+      { number: 1, labelled: false },
+    ]);
+    expect((await sweepRemote(bench, remote)).closed).toEqual([1]);
+  });
+});
+
+describe('which open factory PR a resume keeps', () => {
+  const HEAD = 'a'.repeat(40);
+  type Seen = [verdict: 'approve' | 'changes' | 'comment', commit: string, worker?: string];
+  const snapshot = (...reviews: Seen[]) =>
+    ({
+      change: { headSha: HEAD },
+      reviews: reviews.map(([verdict, commitId, worker = REVIEWER]) => ({
+        commitId,
+        verdict: 'comment',
+        body: `<!-- agent-works:review worker=${worker} verdict=${verdict} -->\nx`,
+      })),
+      checks: [],
+    }) as never;
+  const OLD = 'b'.repeat(40);
+
+  it.each<[string, Seen[], boolean]>([
+    ['no review', [], false],
+    ['an approval of the head', [['approve', HEAD]], true],
+    ['a comment on the head', [['comment', HEAD]], true],
+    ['an approval of an older head only', [['approve', OLD]], false],
+    ['another worker only', [['approve', HEAD, AUTHOR]], false],
+    ['changes asked on the head', [['changes', HEAD]], false],
+    [
+      'an approval and then changes on the head',
+      [
+        ['approve', HEAD],
+        ['changes', HEAD],
+      ],
+      false,
+    ],
+    [
+      'changes and then an approval of the head',
+      [
+        ['changes', HEAD],
+        ['approve', HEAD],
+      ],
+      true,
+    ],
+    [
+      'an approval of the head and then changes elsewhere',
+      [
+        ['approve', HEAD],
+        ['changes', OLD],
+      ],
+      false,
+    ],
+  ])('%s', (_name, reviews, kept) => {
+    expect(adoptable(snapshot(...reviews), REVIEWER)).toBe(kept);
+  });
+
+  it('does not keep a PR someone asked changes on through the host after the reviewer approved', () => {
+    const seen = snapshot(['approve', HEAD]) as unknown as { reviews: object[] };
+    seen.reviews.push({ commitId: HEAD, verdict: 'changes', body: 'please' });
+    expect(adoptable(seen as never, REVIEWER)).toBe(false);
+  });
+});
+
+describe('the drive loop stops', () => {
+  const [first, second] = tasks as [SetBTask, SetBTask];
+  const items = [
+    { task: first, arm: 'factory' as const },
+    { task: second, arm: 'factory' as const },
+  ];
+  const drive = async (statuses: RunRecord['status'][], prior = 0) => {
+    const dir = tempDir('setb-drive');
+    const runsFile = join(dir, 'runs.jsonl');
+    const stopFile = join(dir, 'STOP');
+    const record = (task: SetBTask, status: RunRecord['status']): RunRecord => ({
+      task: task.id,
+      arm: 'factory',
+      status,
+      stage: 1,
+      branch: null,
+      pr: null,
+      readyHeadSha: null,
+      wallMs: 1,
+      tokens: null,
+      reviewRounds: null,
+      note: 'why',
+      startedAt: '2026-11-25T00:00:00Z',
+      resetAt: null,
+      baseSha: 'c'.repeat(40),
+    });
+    for (let i = 0; i < prior; i += 1) appendRun(runsFile, record(first, 'transient'));
+    const ran: string[] = [];
+    const slept: number[] = [];
+    const code = await driveArms(items, {
+      runsFile,
+      stopFile,
+      stage: 1,
+      run: async (task) => {
+        ran.push(task.id);
+        return record(task, statuses.shift() ?? 'done');
+      },
+      waitSlot: async () => {},
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    return { code, ran, slept, stop: existsSync(stopFile), records: readRuns(runsFile).length };
+  };
+
+  it('runs every arm and exits 0', async () => {
+    expect(await drive(['done', 'failed'])).toMatchObject({ code: 0, ran: [first.id, second.id], stop: false });
+  });
+
+  it('retries a transient error, waiting longer each time, and exits 75 at the third', async () => {
+    expect(await drive(['transient', 'transient', 'transient'])).toMatchObject({
+      code: 75,
+      ran: [first.id, first.id, first.id],
+      slept: [60_000, 120_000],
+      records: 3,
+    });
+    expect(await drive([], TRANSIENT_CAP)).toMatchObject({ code: 75, ran: [] });
+    expect(await drive(['transient', 'done'])).toMatchObject({ code: 0, ran: [first.id, first.id, second.id] });
+  });
+
+  it('exits 75 on a usage limit without starting another arm', async () => {
+    expect(await drive(['quota'])).toMatchObject({ code: 75, ran: [first.id], stop: false, records: 1 });
+  });
+
+  it('writes the STOP file and exits 5 on a login failure', async () => {
+    expect(await drive(['auth'])).toMatchObject({ code: 5, ran: [first.id], stop: true });
+  });
+});
+
+describe('one driver at a time', () => {
+  const lockIn = () => join(tempDir('setb-lock'), 'runs.jsonl.lock');
+  const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid;
+  const holder = (pid: number) => JSON.stringify({ pid, startedAt: '2026-11-25T00:00:00Z', command: 'drive' });
+
+  it('refuses a second holder, and gives the lock again after a release', () => {
+    const file = lockIn();
+    const release = acquireLock(file, 'drive');
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ pid: process.pid, command: 'drive' });
+    expect(Date.parse(JSON.parse(readFileSync(file, 'utf8')).startedAt)).not.toBeNaN();
+    expect(() => acquireLock(file, 'close')).toThrow(/held by pid \d+ \(drive, started .*one driver at a time/);
+    release();
+    expect(existsSync(file)).toBe(false);
+    acquireLock(file, 'close')();
+  });
+
+  it('takes over a lock whose process is gone, and leaves a lock it cannot read', () => {
+    const file = lockIn();
+    writeFileSync(file, holder(deadPid()));
+    acquireLock(file, 'drive')();
+    expect(existsSync(`${file}.break`)).toBe(false);
+    writeFileSync(file, '');
+    expect(() => acquireLock(file, 'drive')).toThrow(/unreadable lock/);
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it('lets only one process at a time clear a stale lock', () => {
+    const file = lockIn();
+    writeFileSync(file, holder(deadPid()));
+    writeFileSync(`${file}.break`, '1');
+    expect(() => acquireLock(file, 'drive')).toThrow(/clearing a stale lock/);
+    expect(readFileSync(file, 'utf8')).toContain('"command":"drive"');
+  });
+
+  it('releases only its own lock', () => {
+    const file = lockIn();
+    const release = acquireLock(file, 'drive');
+    writeFileSync(file, holder(process.pid));
+    release();
+    expect(existsSync(file)).toBe(true);
+  });
+
+  describe.skipIf(process.platform === 'win32' || !canSpawnTs)('in a real process', () => {
+    const module = pathToFileURL(join(import.meta.dirname, '..', 'lock.ts')).href;
+
+    it.each(['exit', 'SIGINT', 'SIGTERM', 'SIGHUP'] as const)('releases the lock on %s', async (how) => {
+      const file = lockIn();
+      const script = join(tempDir('setb-holder'), 'hold.mjs');
+      writeFileSync(
+        script,
+        `import { holdLock } from ${JSON.stringify(module)};
+holdLock(${JSON.stringify(file)}, 'drive');
+console.log('held');
+if (${JSON.stringify(how)} !== 'exit') setInterval(() => {}, 1000);
+`,
+      );
+      const child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'inherit'] });
+      const done = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+      await new Promise((resolve) => child.stdout.once('data', resolve));
+      if (how !== 'exit') {
+        expect(existsSync(file)).toBe(true);
+        child.kill(how);
+      }
+      expect(await done).toBe({ exit: 0, SIGINT: 130, SIGTERM: 143, SIGHUP: 129 }[how]);
+      expect(existsSync(file)).toBe(false);
+    });
+
+    const stage = () => {
+      const out = tempDir('setb-cli-lock');
+      const bin = join(out, 'bin');
+      mkdirSync(bin);
+      const touched = join(out, 'touched');
+      for (const tool of ['gh', 'git']) {
+        writeFileSync(join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> '${touched}'\nexit 1\n`);
+        chmodSync(join(bin, tool), 0o755);
+      }
+      const cli = (command: string) =>
+        spawnSync(
+          process.execPath,
+          [
+            join(import.meta.dirname, '..', 'run.ts'),
+            command,
+            '--base-sha',
+            'a'.repeat(40),
+            '--home',
+            out,
+            '--out',
+            out,
+            '--cache',
+            join(out, 'cache'),
+          ],
+          {
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              AW_BENCH_LOGIN_CONFIRMED: '1',
+              GH_HOST: '',
+              PATH: `${bin}:${process.env.PATH ?? ''}`,
+            },
+          },
+        );
+      return { out, touched, cli, lock: join(out, 'runs.jsonl.lock') };
+    };
+
+    it.each(['drive', 'close', 'reconcile'])(
+      '%s stops before touching the host while another holds the lock',
+      (command) => {
+        const { touched, cli, lock } = stage();
+        writeFileSync(lock, holder(process.pid));
+        const ran = cli(command);
+        expect(ran.stderr).toMatch(/held by pid/);
+        expect(ran.status).toBe(3);
+        expect(existsSync(touched)).toBe(false);
+        expect(readFileSync(lock, 'utf8')).toBe(holder(process.pid));
+      },
+    );
+
+    it.each(['drive', 'close', 'reconcile'])('%s reports a torn journal line and goes on to the host', (command) => {
+      const { out, touched, cli, lock } = stage();
+      const runs = join(out, 'runs.jsonl');
+      writeFileSync(
+        runs,
+        `${JSON.stringify({ kind: 'header', baseSha: 'a'.repeat(40), createdAt: 'x' })}\n{"kind":"inte`,
+      );
+      const ran = cli(command);
+      expect(ran.stderr).toMatch(/ends in a torn line, which is skipped: "\{\\"kind\\":\\"inte"/);
+      expect(readFileSync(touched, 'utf8')).toMatch(/^(gh|git) /);
+      expect(existsSync(lock), 'the lock is released after a failure').toBe(false);
+      expect(existsSync(`${runs}.torn`), 'only drive writes the journal').toBe(command === 'drive');
+    });
   });
 });

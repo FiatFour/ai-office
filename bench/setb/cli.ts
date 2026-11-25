@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +28,6 @@ export interface Seed {
   readonly task: string;
   readonly why: string;
   readonly diff: string;
-  readonly checks: number;
 }
 
 export function refuseSeededGrade<E extends { readonly arm: string }>(
@@ -36,14 +36,33 @@ export function refuseSeededGrade<E extends { readonly arm: string }>(
   if (entry.arm === 'seeded') throw new TaskRefused('a seeded-bad PR is never graded');
 }
 
-export const seededPackets = (seeds: readonly Seed[], key: readonly Sealed[], list: TaskList): Packet[] =>
-  seeds.map((seed) => {
+/**
+ * The check count a seeded PR shows: that of one real PR of the same run, drawn at random, so a count never marks a PR as
+ * seeded. Green heads are drawn from, because a seeded PR is green; with no green head, any head that has checks.
+ */
+const countsFrom = (real: readonly Packet[]): number[] => {
+  const green = real.filter((p) => p.ci.state === 'green');
+  const counts = (green.length > 0 ? green : real).map((p) => p.ci.checks).filter((n) => n > 0);
+  if (counts.length === 0)
+    throw new TaskRefused('no real PR of this run has check runs, so a seeded PR has no count to copy');
+  return counts;
+};
+
+export const seededPackets = (
+  seeds: readonly Seed[],
+  key: readonly Sealed[],
+  list: TaskList,
+  real: readonly Packet[],
+  draw: (below: number) => number = randomInt,
+): Packet[] => {
+  const counts = countsFrom(real);
+  return seeds.map((seed) => {
     const sealed = key.find((s) => s.entry.arm === 'seeded' && s.entry.task === seed.task);
     if (sealed === undefined) throw new TaskRefused(`no label for the seeded PR on ${seed.task}`);
     const task = list.tasks.find((t) => t.id === seed.task);
     if (task === undefined) throw new TaskRefused(`the seeded PR names ${seed.task}, which is not a Set B task`);
     const sha = sealed.entry.readyHeadSha;
-    const runs = Array.from({ length: seed.checks }, () => ({
+    const runs = Array.from({ length: counts[draw(counts.length)] as number }, () => ({
       head_sha: sha,
       status: 'completed',
       conclusion: 'success',
@@ -56,6 +75,7 @@ export const seededPackets = (seeds: readonly Seed[], key: readonly Sealed[], li
       ci: ciFrom(sha, runs),
     });
   });
+};
 
 export const realPackets = async (
   hub: Hub,
@@ -145,7 +165,7 @@ const main = async (argv: string[]): Promise<number> => {
     const voids = voidsLogPath(values.dir, shaOf(readFileSync(join(values.dir, TASKS_FILE))));
     refuseAfterVoids(voids, voidScanDirs(values.dir));
     const { packets, unreadable } = await realPackets(ghHub, list, key);
-    const seeded = seededPackets(read<Seed[]>(values.seeded), key, list);
+    const seeded = seededPackets(read<Seed[]>(values.seeded), key, list, packets);
     const run = await runJudge(
       claudeModel(values.home === undefined ? {} : { configDir: resolve(values.home) }),
       packets,

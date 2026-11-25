@@ -3,7 +3,8 @@
 //   1. lists the task's test files and the relative-import closure of those files, and says whether any blob differs
 //      between the freeze commit and the pinned base;
 //   2. says whether the task's source files differ between the two commits;
-//   3. runs the task's test command in a scratch worktree of each commit and compares the exit codes and counts.
+//   3. runs the task's test command in a scratch worktree of each commit and compares the exit codes and the total, passed
+//      and failed counts. "Same result" means only those four numbers, not byte-identical output.
 // A task whose test file or source files moved, or whose test result differs between the two commits, is reported as DROP.
 // Modules in the import closure that moved are listed under `moved` and are judged by the test result.
 //

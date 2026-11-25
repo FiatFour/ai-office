@@ -17,6 +17,10 @@ const J = 'bench/setb/judge.ts';
 const O = 'bench/setb/outcome.ts';
 const AR = 'bench/setb/arms.ts';
 const ARMT = 'bench/setb/test/arms.test.ts';
+const JN = 'bench/setb/journal.ts';
+const LK = 'bench/setb/lock.ts';
+const RN = 'bench/setb/run.ts';
+const C = 'bench/setb/cli.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -162,12 +166,6 @@ const MUTANTS = [
     name: 'prompt-fence-short',
     claim: 'a diff holding triple backticks cannot close the prompt fence',
     edits: [[P, 'm[0].length + 1', '0']],
-    tests: [SETB],
-  },
-  {
-    name: 'seeded-checks-unreal',
-    claim: 'a seeded PR shows the real check count of the pinned base, 26, so its CI note matches a real PR',
-    edits: [['bench/setb/calibration/seeded.json', '"checks": 26', '"checks": 9']],
     tests: [SETB],
   },
   {
@@ -660,7 +658,9 @@ const MUTANTS = [
   {
     name: 'arms-quota-loose-rate-limit',
     claim: 'a task text that says rate-limit or usage limit is not a quota stop: only provider messages are matched',
-    edits: [[AR, '(?:Claude AI )?usage limit reached|', 'usage limit|rate.?limit|']],
+    edits: [
+      [AR, 'const QUOTA = providerSays(', 'const QUOTA = /usage limit|rate.?limit/i;\nconst unused = providerSays('],
+    ],
     tests: [ARMT],
   },
   {
@@ -672,13 +672,13 @@ const MUTANTS = [
   {
     name: 'arms-stderr-ignored',
     claim: 'a usage limit or overload printed only to claude stderr is read, not turned into no result line',
-    edits: [[AR, "ran.err.trim() === '' ||", 'true ||']],
+    edits: [[AR, 'const result = unsaid(ran);', 'const result = null as string | null;']],
     tests: [ARMT],
   },
   {
     name: 'arms-stderr-overrides-result',
     claim: 'a stream that has its own result line keeps it',
-    edits: [[AR, '/"type"\\s*:\\s*"result"/.test(ran.out)', 'false']],
+    edits: [[AR, 'if (result === undefined) {', 'if (true as boolean) {']],
     tests: [ARMT],
   },
   {
@@ -726,7 +726,7 @@ const MUTANTS = [
   {
     name: 'journal-base-unpinned',
     claim: 'a different --base-sha than the journal header is refused',
-    edits: [['bench/setb/journal.ts', 'if (header.baseSha !== baseSha)', 'if (false)']],
+    edits: [['bench/setb/journal.ts', 'if (header !== null && header.baseSha !== baseSha)', 'if (false)']],
     tests: [ARMT],
   },
   {
@@ -967,6 +967,267 @@ const MUTANTS = [
     claim: 'Set A output carries no Set B baseline line',
     edits: [['bench/report.ts', '...(hasSetB(live(all))', '...(true']],
     tests: [REPORT],
+  },
+  {
+    name: 'seeded-count-hardcoded',
+    claim: 'a seeded PR shows the check count of a real PR of the run, no fixed one',
+    edits: [[C, '{ length: counts[draw(counts.length)] as number }', '{ length: 26 }']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-not-random',
+    claim: 'when the real counts differ each seeded PR draws one',
+    edits: [[C, 'counts[draw(counts.length)]', 'counts[0]']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-any-state',
+    claim: 'green PRs are drawn from when there are any',
+    edits: [[C, '(green.length > 0 ? green : real)', 'real']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-no-fallback',
+    claim: 'with no green PR the count of a red one is used',
+    edits: [[C, '(green.length > 0 ? green : real)', 'green']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-invented',
+    claim: 'a run with no real check count is refused',
+    edits: [[C, 'if (counts.length === 0)\n', 'if (counts.length === 0) return [26];\n  if (false)\n']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-unwired',
+    claim: 'judge hands the real packets of the run to the seeded ones',
+    edits: [
+      [
+        C,
+        'key, list, packets);',
+        "key, list, [{ ...(packets[0] as Packet), ci: ciFrom('a', Array(26).fill({ head_sha: 'a', status: 'completed', conclusion: 'success' })) }]);",
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'claude-model-drops-packet',
+    claim: 'the issue body and diff reach the model, not only the rubric',
+    edits: [[J, 'input: prompt,', "input: prompt.split('## Issue:')[0] ?? '',"]],
+    tests: [SETB],
+  },
+  {
+    name: 'claude-model-strips-additions',
+    claim: 'every added line of the diff reaches the model',
+    edits: [[J, 'input: prompt,', "input: prompt.replace(/^\\+.*$/gm, ''),"]],
+    tests: [SETB],
+  },
+  {
+    name: 'lock-drive-unheld',
+    claim: 'drive takes the lock before it touches the host',
+    edits: [[RN, '    holdLock(lockFile, command);\n    if (setAsideTorn', '    if (setAsideTorn']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-close-unheld',
+    claim: 'close and reconcile take the lock before they touch the host',
+    edits: [[RN, '    holdLock(lockFile, command);\n    checkBase(', '    checkBase(']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-not-exclusive',
+    claim: 'the lock file is created exclusively',
+    edits: [[LK, "{ flag: 'wx' }", "{ flag: 'w' }"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-live-broken',
+    claim: 'a lock whose process runs is never taken over',
+    edits: [[LK, 'if (alive(held.pid))', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-stale-kept',
+    claim: 'a lock whose process is gone is taken over',
+    edits: [[LK, 'if (alive(held.pid))', 'if (true)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-break-shared',
+    claim: 'only one process at a time clears a stale lock',
+    edits: [[LK, 'if (!createExclusive(breaker, String(process.pid)))', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-release-any',
+    claim: 'only the own lock is released',
+    edits: [[LK, "if (readFileSync(file, 'utf8') === mine) unlinkSync(file);", 'unlinkSync(file);']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-kept-on-exit',
+    claim: 'the lock is released on exit',
+    edits: [[LK, "process.on('exit', acquireLock(file, command));", 'acquireLock(file, command);']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-kept-on-signal',
+    claim: 'the lock is released on signals',
+    edits: [[LK, 'process.on(signal, () => process.exit(code));', 'void signal, void code;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-torn-crashes',
+    claim: 'a torn last line is skipped, not a crash',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[JN, "`${whole}${torn === null ? tail : ''}`", '`${whole}${tail}`']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-torn-glued',
+    claim: 'a torn line is set aside before the next append',
+    edits: [[JN, '  setAsideTorn(file);\n  const gap', '  const gap']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-torn-discarded',
+    claim: 'the torn text is kept in a side file',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[JN, '  writeDurably(`${file}.torn`, `${tail}\\n`);\n', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-newline-missing',
+    claim: 'a whole last line without newline is not glued onto',
+    edits: [[JN, "textOf(file).tail === '' ? '' : '\\n'", "''"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-torn-silent',
+    claim: 'every command reports the torn line',
+    edits: [[RN, 'if (torn !== null)\n', 'if (false)\n']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-records-base-unchecked',
+    claim: 'a header that disagrees with intent or run records is refused',
+    edits: [[JN, 'if (header !== null && other !== undefined)', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-unanchored',
+    claim: 'a stop is a provider message, not a word anywhere',
+    edits: [[AR, 'String.raw`(?:^|claude ended with [\\w ]+?: )', 'String.raw`']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-max-turns-is-quota',
+    claim: 'a model result about max turns is not a usage limit',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[AR, 'limit${END}`,\n  `(?:Claude AI ', '`,\n  `(?:Claude AI ']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-line-first-wins',
+    claim: 'an auth line anywhere wins over a usage-limit line',
+    edits: [
+      [
+        AR,
+        "for (const stop of ['auth', 'quota', 'transient'] as const) {\n    const line = lines.find((l) => stopOf(l) === stop);",
+        'for (const _ of [0]) {\n    const line = lines.find((l) => stopOf(l) !== null);',
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-auth-under-result',
+    claim: 'auth on stderr beats a non-successful result',
+    edits: [[AR, "(stop === 'auth' && stopOf(said) !== 'auth') || ", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-overrides-success',
+    claim: 'a successful result is left alone',
+    edits: [[AR, "if (result.is_error !== true && result.subtype === 'success') return null;\n", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-stdout-auth-ignored',
+    claim: 'an auth line on stdout counts too',
+    edits: [[AR, 'stopLine([ran.err, ...printed].join', 'stopLine([ran.err].join']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-empty-reply-failed',
+    claim: 'an empty reply with exit 0 is transient',
+    edits: [[AR, 'return EMPTY_REPLY;', 'return null;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-execution-error-opaque',
+    claim: 'Execution error plus a quota on stderr is quota',
+    edits: [[AR, '(generic && stop !== null)', 'false']],
+    tests: [ARMT],
+  },
+  {
+    name: 'adopt-any-review',
+    claim: "vega's last review of the head decides",
+    edits: [[AR, 'reviews.slice(last).every(', 'reviews.slice(reviews.length).every(']],
+    tests: [ARMT],
+  },
+  {
+    name: 'adopt-first-review',
+    claim: 'the last review of the head counts, not the first',
+    edits: [[AR, 'reviews.findLastIndex(', 'reviews.findIndex(']],
+    tests: [ARMT],
+  },
+  {
+    name: 'adopt-host-changes-ignored',
+    claim: 'a host changes verdict after the approval blocks the adopt',
+    edits: [[AR, "r.verdict !== 'changes' && ", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'adopt-no-review-needed',
+    claim: 'a head vega never reviewed is not adopted',
+    edits: [[AR, 'last >= 0 &&', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'sweep-label-only',
+    claim: 'close finds a PR that was never labelled, by its head prefix',
+    edits: [[AR, "!p.head.ref.startsWith('aw/bench/') && !labelled", '!labelled']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-transient-uncapped',
+    claim: 'the third transient error stops with 75',
+    edits: [[RN, 'if (tried + 1 >= TRANSIENT_CAP) {', 'if (tried + 1 >= TRANSIENT_CAP + 1) {']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-prior-transients-ignored',
+    claim: 'transient errors recorded earlier count',
+    edits: [[RN, 'if (tried >= TRANSIENT_CAP) {', 'if (false) {']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-quota-continues',
+    claim: 'a usage limit stops the loop with 75',
+    edits: [[RN, "if (record.status === 'quota') return 75;\n", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-no-stop-file',
+    claim: 'a login failure writes STOP',
+    edits: [[RN, 'writeFileSync(deps.stopFile,', 'void (deps.stopFile,']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-auth-code',
+    claim: 'a login failure exits 5',
+    edits: [[RN, '        return 5;', '        return 75;']],
+    tests: [ARMT],
   },
 ];
 

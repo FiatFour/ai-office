@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, truncateSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ticketOf } from '../arms-live.ts';
 import { TaskRefused, type Tokens } from '../model.ts';
@@ -52,31 +52,68 @@ export interface Journal {
   readonly header: Header | null;
   readonly intents: readonly Intent[];
   readonly runs: readonly RunRecord[];
+  /** The text after the last newline when it is not a whole JSON line: an append that a crash cut short. */
+  readonly torn: string | null;
 }
 
-/** Appends one JSON line and forces it to disk before returning. */
-export const appendLine = (file: string, value: object): void => {
-  mkdirSync(dirname(file), { recursive: true });
+const parses = (line: string): boolean => {
+  try {
+    JSON.parse(line);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const textOf = (file: string): { whole: string; tail: string } => {
+  const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  const end = text.lastIndexOf('\n') + 1;
+  return { whole: text.slice(0, end), tail: text.slice(end) };
+};
+
+const writeDurably = (file: string, text: string): void => {
   const fd = openSync(file, 'a');
   try {
-    writeSync(fd, `${JSON.stringify(value)}\n`);
+    writeSync(fd, text);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
 };
 
+/**
+ * Moves a torn last line to `<file>.torn` and cuts it from the journal, so the next append does not glue onto it. Returns the
+ * moved text, or null when the journal ends cleanly. An intent is on disk in full before any remote write, so a torn intent
+ * line has no remote write behind it.
+ */
+export const setAsideTorn = (file: string): string | null => {
+  const { whole, tail } = textOf(file);
+  if (tail === '' || parses(tail)) return null;
+  writeDurably(`${file}.torn`, `${tail}\n`);
+  truncateSync(file, Buffer.byteLength(whole));
+  return tail;
+};
+
+/** Appends one JSON line and forces it to disk before returning. */
+export const appendLine = (file: string, value: object): void => {
+  mkdirSync(dirname(file), { recursive: true });
+  setAsideTorn(file);
+  const gap = textOf(file).tail === '' ? '' : '\n';
+  writeDurably(file, `${gap}${JSON.stringify(value)}\n`);
+};
+
 export const readJournal = (file: string): Journal => {
-  const lines = existsSync(file)
-    ? readFileSync(file, 'utf8')
-        .split('\n')
-        .filter((l) => l !== '')
-        .map((l) => JSON.parse(l) as { kind?: string })
-    : [];
+  const { whole, tail } = textOf(file);
+  const torn = tail !== '' && !parses(tail) ? tail : null;
+  const lines = `${whole}${torn === null ? tail : ''}`
+    .split('\n')
+    .filter((l) => l !== '')
+    .map((l) => JSON.parse(l) as { kind?: string });
   return {
     header: (lines.find((l) => l.kind === 'header') as Header | undefined) ?? null,
     intents: lines.filter((l) => l.kind === 'intent') as unknown as Intent[],
     runs: lines.filter((l) => l.kind === undefined || l.kind === 'run') as unknown as RunRecord[],
+    torn,
   };
 };
 
@@ -84,20 +121,31 @@ export const readRuns = (file: string): RunRecord[] => [...readJournal(file).run
 
 export const appendRun = (file: string, record: RunRecord): void => appendLine(file, record);
 
+/** Refuses a base sha that differs from the header's, and a header that differs from any intent or run record. */
+export const checkBase = (file: string, baseSha: string): void => {
+  const { header, intents, runs } = readJournal(file);
+  if (header !== null && header.baseSha !== baseSha)
+    throw new TaskRefused(`${file} is pinned to base ${header.baseSha}, not ${baseSha}; the base never moves`);
+  const other = [...intents, ...runs].find((r) => r.baseSha !== baseSha);
+  if (header !== null && other !== undefined)
+    throw new TaskRefused(
+      `${file} says base ${header.baseSha} in its header, but a record for ${other.task} ${other.arm} says ${other.baseSha}`,
+    );
+};
+
 /**
  * Pins the journal to one base sha. A new journal gets a header; an existing one must name the same sha, so the base is never
  * moved after the first live PR.
  */
 export const pinBase = (file: string, baseSha: string, now: () => Date = () => new Date()): void => {
   const { header, intents, runs } = readJournal(file);
-  if (header === null) {
-    if (intents.length > 0 || runs.length > 0)
-      throw new TaskRefused(`${file} has records but no header, so its base sha is unknown`);
-    appendLine(file, { kind: 'header', baseSha, createdAt: now().toISOString() } satisfies Header);
+  if (header !== null) {
+    checkBase(file, baseSha);
     return;
   }
-  if (header.baseSha !== baseSha)
-    throw new TaskRefused(`${file} is pinned to base ${header.baseSha}, not ${baseSha}; the base never moves`);
+  if (intents.length > 0 || runs.length > 0)
+    throw new TaskRefused(`${file} has records but no header, so its base sha is unknown`);
+  appendLine(file, { kind: 'header', baseSha, createdAt: now().toISOString() } satisfies Header);
 };
 
 export const newSalt = (): string => randomBytes(4).toString('hex');

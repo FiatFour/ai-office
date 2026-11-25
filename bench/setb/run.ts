@@ -10,13 +10,14 @@ import { imageFor } from '../../server/config.ts';
 import { cliTransport, fileLog, type GitHost } from '../../server/githost/host.ts';
 import { pickEngine, runBinary } from '../../server/sandbox/engine.ts';
 import type { ArmRun } from '../arms.ts';
-import { baselineArm, factoryArm, reviewSettled, ticketOf } from '../arms-live.ts';
+import { baselineArm, factoryArm, ticketOf } from '../arms-live.ts';
 import { BenchCage } from '../cage.ts';
 import { ghReadPull } from '../merge-state.ts';
 import { type Row, TaskRefused, type Tokens } from '../model.ts';
 import { logged } from '../scratch.ts';
 import {
   AUTHOR,
+  adoptable,
   BASE_PREFIX,
   type BenchHost,
   benchHost,
@@ -40,6 +41,7 @@ import {
   ARMS,
   type Arm,
   appendRun,
+  checkBase,
   claimIntent,
   isFinal,
   pinBase,
@@ -47,11 +49,13 @@ import {
   readJournal,
   readRuns,
   type Status,
+  setAsideTorn,
   TRANSIENT_CAP,
   transientCount,
 } from './journal.ts';
 import type { Judged } from './judge.ts';
 import { type Entry, type Sealed, sealedEntry } from './labels.ts';
+import { holdLock } from './lock.ts';
 import { ghReadCi, gradeSetB, readWindow } from './outcome.ts';
 import type { Unreadable } from './packet.ts';
 import { loadFrozen, type SetBTask } from './task.ts';
@@ -263,7 +267,7 @@ const runArm = async (
       const adopted = await resumeBranch(mine, live.repo, branch, (change) =>
         arm === 'baseline'
           ? Promise.resolve(true)
-          : mine.host.snapshot(live.repo, change.number).then((snap) => reviewSettled(snap, REVIEWER)),
+          : mine.host.snapshot(live.repo, change.number).then((snap) => adoptable(snap, REVIEWER)),
       );
       if (adopted !== null)
         return base({
@@ -338,6 +342,46 @@ const heads = (runs: readonly RunRecord[]): Head[] =>
     r.readyHeadSha === null ? [] : [{ sha: r.readyHeadSha, since: Date.parse(r.startedAt) + r.wallMs }],
   );
 
+export interface DriveDeps {
+  readonly runsFile: string;
+  readonly stopFile: string;
+  readonly stage: number;
+  readonly run: (task: SetBTask, arm: Arm) => Promise<RunRecord>;
+  readonly waitSlot: () => Promise<void>;
+  readonly sleep: (ms: number) => Promise<unknown>;
+}
+
+/** Runs the arms in order and returns the exit code: 5 on a login failure (STOP file written), 75 on a stop to wait out. */
+export const driveArms = async (items: ReturnType<typeof todo>, deps: DriveDeps): Promise<number> => {
+  for (const { task, arm } of items) {
+    await deps.waitSlot();
+    console.log(`stage ${deps.stage}: ${task.id} ${arm}`);
+    for (;;) {
+      const tried = transientCount(readRuns(deps.runsFile), task.id, arm);
+      if (tried >= TRANSIENT_CAP) {
+        console.error(`${task.id} ${arm}: ${tried} transient provider errors already recorded, stopping for root`);
+        return 75;
+      }
+      const record = await deps.run(task, arm);
+      appendRun(deps.runsFile, record);
+      console.log(JSON.stringify({ ...record, note: record.note.slice(0, 120) }));
+      if (record.status === 'auth') {
+        writeFileSync(deps.stopFile, `login revoked or failed: ${record.note}\n`);
+        return 5;
+      }
+      if (record.status === 'quota') return 75;
+      if (record.status !== 'transient') break;
+      // A provider overload or rate limit: counted against neither arm, run again after a wait, up to a cap.
+      if (tried + 1 >= TRANSIENT_CAP) {
+        console.error(`${task.id} ${arm}: ${tried + 1} transient provider errors, stopping for root`);
+        return 75;
+      }
+      await deps.sleep(60_000 * (tried + 1));
+    }
+  }
+  return 0;
+};
+
 const main = async (argv: string[]): Promise<number> => {
   const [command = '', ...rest] = argv;
   const { values } = parseArgs({
@@ -364,6 +408,10 @@ const main = async (argv: string[]): Promise<number> => {
   const list = loadFrozen(values.dir);
   const runsFile = join(values.out, 'runs.jsonl');
   const stopFile = join(values.out, 'STOP');
+  const lockFile = `${runsFile}.lock`;
+  const { torn } = readJournal(runsFile);
+  if (torn !== null)
+    console.error(`${runsFile} ends in a torn line, which is skipped: ${JSON.stringify(torn.slice(0, 300))}`);
   if (command === 'prepare') {
     const work = await prepareWorkspace(values.cache, need('base-sha', values['base-sha']));
     console.log(JSON.stringify(work));
@@ -372,6 +420,8 @@ const main = async (argv: string[]): Promise<number> => {
   if (command === 'drive') {
     if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1')
       throw new TaskRefused('not run, needs operator login confirmation');
+    holdLock(lockFile, command);
+    if (setAsideTorn(runsFile) !== null) console.error(`moved the torn line to ${runsFile}.torn`);
     if (existsSync(stopFile)) throw new TaskRefused(`${stopFile} exists: ${readFileSync(stopFile, 'utf8').trim()}`);
     const baseSha = need('base-sha', values['base-sha']);
     // The journal names its base on the first line; a different --base-sha is refused, so the base never moves after the first PR.
@@ -394,43 +444,28 @@ const main = async (argv: string[]): Promise<number> => {
       ...(values.bin === undefined ? {} : { bin: values.bin }),
       ...(values.model === undefined ? {} : { model: values.model }),
     };
-    for (const { task, arm } of todo(
-      list.tasks.filter((t) => only === null || only.has(t.id)),
-      readRuns(runsFile),
-      arms,
-    )) {
-      await waitForCiSlot(
-        heads(readRuns(runsFile)),
-        (sha) => ghReadCi(live.repo, sha),
-        (ms) => sleep(ms),
-        Date.now,
-        CI_PARALLEL,
-      );
-      console.log(`stage ${stage}: ${task.id} ${arm}`);
-      for (;;) {
-        const tried = transientCount(readRuns(runsFile), task.id, arm);
-        if (tried >= TRANSIENT_CAP) {
-          console.error(`${task.id} ${arm}: ${tried} transient provider errors already recorded, stopping for root`);
-          return 75;
-        }
-        const record = await runArm(task, arm, live, work);
-        appendRun(runsFile, record);
-        console.log(JSON.stringify({ ...record, note: record.note.slice(0, 120) }));
-        if (record.status === 'auth') {
-          writeFileSync(stopFile, `login revoked or failed: ${record.note}\n`);
-          return 5;
-        }
-        if (record.status === 'quota') return 75;
-        if (record.status !== 'transient') break;
-        // A provider overload or rate limit: counted against neither arm, run again after a wait, up to a cap.
-        if (tried + 1 >= TRANSIENT_CAP) {
-          console.error(`${task.id} ${arm}: ${tried + 1} transient provider errors, stopping for root`);
-          return 75;
-        }
-        await sleep(60_000 * (tried + 1));
-      }
-    }
-    return 0;
+    return driveArms(
+      todo(
+        list.tasks.filter((t) => only === null || only.has(t.id)),
+        readRuns(runsFile),
+        arms,
+      ),
+      {
+        runsFile,
+        stopFile,
+        stage,
+        run: (task, arm) => runArm(task, arm, live, work),
+        waitSlot: () =>
+          waitForCiSlot(
+            heads(readRuns(runsFile)),
+            (sha) => ghReadCi(live.repo, sha),
+            (ms) => sleep(ms),
+            Date.now,
+            CI_PARALLEL,
+          ),
+        sleep: (ms) => sleep(ms),
+      },
+    );
   }
   if (command === 'entries') {
     writeFileSync(
@@ -499,9 +534,8 @@ const main = async (argv: string[]): Promise<number> => {
   }
   if (command === 'close' || command === 'reconcile') {
     const baseSha = need('base-sha', values['base-sha']);
-    const { header } = readJournal(runsFile);
-    if (header !== null && header.baseSha !== baseSha)
-      throw new TaskRefused(`${runsFile} is pinned to base ${header.baseSha}, not ${baseSha}`);
+    holdLock(lockFile, command);
+    checkBase(runsFile, baseSha);
     const send = cliTransport('gh', 'github.com');
     const bench = benchHost({
       repo: REPO,
@@ -520,9 +554,13 @@ const main = async (argv: string[]): Promise<number> => {
         (i) => !readRuns(runsFile).some((r) => r.task === i.task && r.arm === i.arm && isFinal(r)),
       );
       console.log(
-        JSON.stringify({ refs: remote.refs, pulls: remote.pulls, orphans, unfinishedIntents: pending.length }, null, 2),
+        JSON.stringify(
+          { refs: remote.refs, pulls: remote.pulls, orphans, unfinishedIntents: pending.length, torn },
+          null,
+          2,
+        ),
       );
-      return orphans.refs.length === 0 && orphans.pulls.length === 0 ? 0 : 6;
+      return orphans.refs.length === 0 && orphans.pulls.length === 0 && torn === null ? 0 : 6;
     }
     const swept = await sweepRemote(bench, remote);
     console.log(`closed ${swept.closed.length} bench PRs, deleted ${swept.deleted.length} bench refs`);

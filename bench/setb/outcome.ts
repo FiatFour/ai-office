@@ -21,14 +21,15 @@ const shaOfRuns = (asked: string, runs: readonly CheckRun[]): string => {
 };
 
 export const ciFrom = (asked: string, runs: readonly CheckRun[]): Ci => {
-  if (runs.length === 0) return { sha: asked, state: 'none', note: 'no check runs on this head' };
+  const checks = runs.length;
+  if (checks === 0) return { sha: asked, state: 'none', note: 'no check runs on this head', checks };
   const sha = shaOfRuns(asked, runs);
   if (runs.some((r) => r.status !== 'completed'))
-    return { sha, state: 'pending', note: 'some checks have not finished' };
+    return { sha, state: 'pending', note: 'some checks have not finished', checks };
   const bad = runs.filter((r) => r.conclusion === null || BAD.has(r.conclusion)).length;
-  if (bad > 0) return { sha, state: 'red', note: `${bad} of ${runs.length} checks did not pass` };
-  if (!runs.some((r) => r.conclusion === 'success')) return { sha, state: 'none', note: 'no check succeeded' };
-  return { sha, state: 'green', note: `${runs.length} checks passed or were skipped` };
+  if (bad > 0) return { sha, state: 'red', note: `${bad} of ${checks} checks did not pass`, checks };
+  if (!runs.some((r) => r.conclusion === 'success')) return { sha, state: 'none', note: 'no check succeeded', checks };
+  return { sha, state: 'green', note: `${checks} checks passed or were skipped`, checks };
 };
 
 export const ghReadCi = async (repo: string, sha: string): Promise<Ci> => {

@@ -35,21 +35,20 @@ jobs:
           docker build -t aw-test-cage:1 -f server/test/sandbox/Containerfile.test server/test/sandbox 2>&1 | Select-Object -Last 3
           function T($label, $a) { Write-Host "=== $label"; $o = & docker.exe @a 2>&1; Write-Host "exit=$LASTEXITCODE out=[$($o -join '|')]" }
           $img = 'aw-test-cage:1'
-          $d = Join-Path $env:RUNNER_TEMP 'bindtest'; New-Item -ItemType Directory -Force $d | Out-Null
-          Write-Host "RUNNER_TEMP=$env:RUNNER_TEMP"
-          $m = "type=bind,src=/mnt/d/a/_temp/bindtest,dst=/work"
-          T 'echo+sleep2' @('run','--rm','--entrypoint','sh',$img,'-c','echo hi; sleep 2')
-          T 'echo -i' @('run','--rm','-i','--entrypoint','sh',$img,'-c','echo hi')
-          T 'echo -a stdout' @('run','--rm','-a','stdout','--entrypoint','sh',$img,'-c','echo hi')
-          T 'file in bind' @('run','--rm','--mount',$m,'--entrypoint','sh',$img,'-c','echo viafile > /work/o1; id > /work/o2; ls -ld /work >> /work/o2')
-          Get-ChildItem $d | ForEach-Object { Write-Host "FILE $($_.Name): $(Get-Content $_.FullName -Raw)" }
-          T 'git init to file' @('run','--rm','--mount',$m,'-e','HOME=/tmp','--entrypoint','sh',$img,'-c','cd /work && git init -q -b main > /work/o3 2>&1; echo rc=$? >> /work/o3')
-          Get-ChildItem $d -Force | ForEach-Object { Write-Host "FILE $($_.Name): $(if (-not $_.PSIsContainer) { Get-Content $_.FullName -Raw })" }
-          T 'git init hardened to file' @('run','--rm','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges','--read-only','--tmpfs','/tmp:rw,size=256m','--mount',$m,'-e','HOME=/tmp','--entrypoint','sh',$img,'-c','cd /work && rm -rf .git && git init -q -b main > /work/o4 2>&1; echo rc=$? >> /work/o4')
-          Get-Content "$d/o4"
-          T 'create+start -a' @('create','--name','c1','--entrypoint','sh',$img,'-c','echo hi')
-          T 'start' @('start','-a','c1')
-          T 'run -d + logs' @('run','-d','--name','c2','--entrypoint','sh',$img,'-c','echo hi')
-          Start-Sleep 2
-          T 'logs' @('logs','c2')
-          Write-Host (docker.exe version 2>&1 | Out-String)
+          T 'plain' @('run','--rm',$img,'echo','hi')
+          T 'tty' @('run','--rm','-t',$img,'echo','hi')
+          T 'tty -i' @('run','--rm','-it',$img,'echo','hi')
+          $env:DOCKER_API_VERSION = '1.45'
+          T 'api1.45' @('run','--rm',$img,'echo','hi')
+          Remove-Item Env:DOCKER_API_VERSION
+          T 'debug' @('-D','run','--rm',$img,'echo','hi')
+          Write-Host "--- cmd redirect"
+          cmd /c "docker run --rm $img echo viacmd > $env:RUNNER_TEMP\cmdout.txt 2>&1"
+          Get-Content "$env:RUNNER_TEMP\cmdout.txt"
+          Write-Host "--- wsl docker"
+          wsl -d Debian -u root -- docker run --rm $img echo viawsl
+          Write-Host "--- node execFile"
+          node -e "require('child_process').execFile('docker',['run','--rm','$img','echo','vianode'],(e,o,r)=>console.log('node',e&&e.code,JSON.stringify(o),JSON.stringify(r)))"
+          Write-Host "--- git versions"
+          docker.exe context ls
+          wsl -d Debian -u root -- sh -c 'mount | grep -E "drvfs|9p" | head; cat /etc/wsl.conf 2>/dev/null; uname -r'

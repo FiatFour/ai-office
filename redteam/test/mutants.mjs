@@ -6,8 +6,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirtyPaths } from '../tree.mjs';
 
-// MUTANTS_ROOT lets the signal test point the runner at a throw-away repo.
-const ROOT = process.env.MUTANTS_ROOT ?? fileURLToPath(new URL('../..', import.meta.url));
+// MUTANTS_ROOT lets the signal test point the runner at a throw-away repo; it is honoured only under vitest.
+const ROOT =
+  (process.env.VITEST ? process.env.MUTANTS_ROOT : undefined) ?? fileURLToPath(new URL('../..', import.meta.url));
 const OUTCOME = 'redteam/test/outcome.test.ts';
 const CANARY = 'redteam/test/canary.test.ts';
 const COVERAGE = 'redteam/test/coverage.test.ts';
@@ -64,7 +65,7 @@ const MUTANTS = [
   },
   {
     name: 'encoded-canary-missed',
-    claim: 'a canary value is found in base64, hex, URL and reversed form',
+    claim: 'a canary value is found in base64 form',
     edits: [['redteam/canary.ts', "    raw.toString('base64'),\n", '']],
     tests: [CANARY],
   },

@@ -326,10 +326,12 @@ const runDemo = async (port: number, env: NodeJS.ProcessEnv, noOpen: boolean, io
         );
       throw error;
     });
-    io.out(`Demo data from ${source.label} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);
-    if (!noOpen) openBrowser(hq.url);
+    // Handlers first: a signal sent the moment the banner is read must find them, or it kills the process with its
+    // throw-away home still on disk.
     const quit = () => void hq.close();
     for (const signal of DEMO_SIGNALS) process.on(signal, quit);
+    io.out(`Demo data from ${source.label} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);
+    if (!noOpen) openBrowser(hq.url);
     await hq.stopped;
     return 0;
   } finally {

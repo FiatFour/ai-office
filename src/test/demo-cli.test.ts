@@ -76,21 +76,6 @@ describe.skipIf(!canSpawnTs)('agent-works --demo', () => {
     for (let i = 0; i < 300 && !out.includes('Demo data from'); i += 1)
       await new Promise((resolve) => setTimeout(resolve, 50));
     expect(out).toContain('Demo data from');
-    // The banner is written one statement before the signal handlers are installed, so a signal sent the moment the
-    // banner is read can beat them and kill the process with its throw-away home still on disk. A served request
-    // proves the child's event loop turned, so its handlers are in.
-    const url = /http:\/\/127\.0\.0\.1:\d+/.exec(out)?.[0];
-    for (let i = 0; i < 100; i += 1) {
-      if (
-        await fetch(`${url}/api/health`).then(
-          (res) => res.ok,
-          () => false,
-        )
-      )
-        return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    throw new Error('the demo never answered /api/health');
   };
 
   it('refuses every write with 403 while it replays', async () => {
@@ -183,6 +168,37 @@ await main(['--demo', '--no-open', '--port', '${port}'], process.env);
       expect(demoDirs(tmp)).toEqual([]);
       expect(existsSync(join(home, '.agent-works'))).toBe(false);
       if (process.platform !== 'win32') expect(child.exitCode).toBe(0);
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'a SIGTERM sent the moment the banner appears still removes the throw-away home',
+    async () => {
+      const port = await freePort();
+      const { tmp, env } = cleanEnv({});
+      const script = join(tmp, 'stall-after-banner.mjs');
+      const cli = join(import.meta.dirname, '../../server/cli.ts');
+      // Stalls the child for a second right after the banner is written, so the signal always lands in the window in
+      // which a handler installed after the banner would not exist yet.
+      writeFileSync(
+        script,
+        `import { main } from ${JSON.stringify(pathToFileURL(cli).href)};
+const write = process.stdout.write.bind(process.stdout);
+process.stdout.write = (chunk, ...rest) => {
+  const done = write(chunk, ...rest);
+  if (String(chunk).includes('Demo data from')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+  return done;
+};
+process.exitCode = await main(['--demo', '--no-open', '--port', '${port}'], process.env);
+`,
+      );
+      const child = spawn(process.execPath, [script], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      await started(child);
+      child.kill('SIGTERM');
+      await exited(child);
+      expect(child.exitCode).toBe(0);
+      expect(demoDirs(tmp)).toEqual([]);
     },
     30_000,
   );

@@ -33,7 +33,7 @@ export const tabulate = (rows, { drivers = DRIVERS, oses = OSES } = {}) => {
     if (!DRIVERS.includes(row.driver)) problems.push(`${what} names a driver the table does not know`);
     else if (!OSES.includes(row.os)) problems.push(`${what} names an OS the table does not know`);
     if (!STATUSES.includes(row.status))
-      problems.push(`${what} has status ${JSON.stringify(row.status)}, which is not pass, fail or not-run`);
+      problems.push(`${what} has status ${JSON.stringify(row.status)}, which is not pass, fail, not-run or expected`);
   }
   /** @param {string} driver @param {string} os */
   const text = (driver, os) => {

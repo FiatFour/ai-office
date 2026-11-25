@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inShard, parseArgs } from '../../scripts/shard.mjs';
+import { applyEdit, selectMutants } from '../../scripts/mutate.mjs';
+import { parseArgs } from '../../scripts/shard.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SETUP = 'bench/test/task-setup.test.ts';
@@ -20,7 +21,7 @@ const CONTRACT = 'server/test/githost.contract.test.ts';
 const CAGES = 'server/test/cages.test.ts';
 const AGENTS = 'server/test/agents.test.ts';
 
-/** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[] }>} */
+/** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string, all?: 'all']>, tests: string[] }>} */
 const MUTANTS = [
   {
     name: 'hidden-test-stays-in-source',
@@ -1456,7 +1457,7 @@ const MUTANTS = [
   {
     name: 'review-failure-hides-reviewer-text',
     claim: 'a review with no verdict block fails with the start of the reviewer text in the message',
-    edits: [['server/agents/runtime.ts', 'Reviewer text: ${text.slice(0, EXCERPT)}', 'Reviewer text.']],
+    edits: [['server/agents/runtime.ts', 'Reviewer text: ${text.slice(0, EXCERPT)}', 'Reviewer text.', 'all']],
     tests: [AGENTS],
   },
   {
@@ -1588,24 +1589,18 @@ const vitest = (tests) =>
   });
 
 const { names: only, shard } = parseArgs(process.argv.slice(2));
-const selected = inShard(
-  MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name)),
-  shard,
-);
-for (const name of only)
-  if (!MUTANTS.some((mutant) => mutant.name === name)) throw new Error(`no mutant is named ${name}`);
+const selected = selectMutants(MUTANTS, only, shard);
 const lines = [];
 let caught = 0;
 for (const mutant of selected) {
   const originals = new Map();
   let line;
   try {
-    for (const [file, find, replace] of mutant.edits) {
+    for (const [file, find, replace, all] of mutant.edits) {
       const path = `${ROOT}/${file}`;
       const current = readFileSync(path, 'utf8');
       if (!originals.has(path)) originals.set(path, current);
-      if (!current.includes(find)) throw new Error(`pattern not found in ${file}: ${find}`);
-      writeFileSync(path, current.replace(find, replace));
+      writeFileSync(path, applyEdit(file, current, find, replace, all === 'all'));
     }
     const survived = vitest(mutant.tests).status === 0;
     if (!survived) caught += 1;

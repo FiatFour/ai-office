@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Engine, type EngineName } from '../../server/sandbox/engine.ts';
+import { mount } from '../../server/sandbox/export.ts';
 
 export interface Found {
   readonly engine: Engine | null;
@@ -26,14 +27,11 @@ export const find = async (name: EngineName, env: NodeJS.ProcessEnv = process.en
       reason: `${name} ${version} runs ${kind === '' ? 'no' : kind} containers, and the cage image is linux`,
     };
   if (process.platform === 'win32') {
-    const mount = await engine.run(
-      ['create', '--mount', `type=bind,src=${tmpdir()},dst=/m`, 'aw-no-such-image:0', 'true'],
-      { timeoutMs: 60_000 },
-    );
-    if (mountRefused(`${mount.out}${mount.err}`))
+    const probe = await engine.run(probeArgs(tmpdir()), { timeoutMs: 60_000 });
+    if (mountRefused(`${probe.out}${probe.err}`))
       return {
         engine: null,
-        reason: `${name} ${version} answers from a Linux daemon that cannot see Windows paths, and the driver binds the host path as given: ${firstLine(`${mount.out}${mount.err}`)}`,
+        reason: `${name} ${version} answers from a Linux daemon that cannot see Windows paths, and the driver binds the host path as given: ${firstLine(`${probe.out}${probe.err}`)}`,
       };
   }
   if (name === 'podman' && !info.rootless)
@@ -43,6 +41,10 @@ export const find = async (name: EngineName, env: NodeJS.ProcessEnv = process.en
     };
   return { engine, reason: null };
 };
+
+/** Creates a container that cannot start, with the bind built by the driver's own builder. Once the driver turns a Windows path
+ * into one the daemon accepts, this probe stops being refused and the cases run. */
+export const probeArgs = (dir: string): string[] => ['create', ...mount(dir, '/m'), 'aw-no-such-image:0', 'true'];
 
 export const kvmReason = (): string =>
   existsSync('/dev/kvm')

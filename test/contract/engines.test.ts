@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { mountRefused } from './engines.ts';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../server/sandbox/export.ts', async (original) => ({
+  ...(await original<typeof import('../../server/sandbox/export.ts')>()),
+  mount: (src: string, dst: string) => ['--mount', `type=bind,src=translated(${src}),dst=${dst}`],
+}));
+
+import { mountRefused, probeArgs } from './engines.ts';
+
+describe('the Windows bind mount probe builds its bind with the driver', () => {
+  it('uses whatever path the driver mount builder produces, not the raw host path', () => {
+    const args = probeArgs('C:/Users/x');
+    expect(args).toContain('type=bind,src=translated(C:/Users/x),dst=/m');
+    expect(args.join(' ')).not.toContain('src=C:/Users/x');
+  });
+});
 
 describe('the Windows bind mount probe', () => {
   it('reads a daemon that cannot see the Windows path as a refusal', () => {

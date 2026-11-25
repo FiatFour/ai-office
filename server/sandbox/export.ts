@@ -19,7 +19,8 @@ export const userArgs = (engine: Engine, rootless: boolean): string[] => {
     : ['--user', `${uid}:${gid}`];
 };
 
-const mount = (src: string, dst: string, readonly = false): string[] => [
+/** The one place a host path becomes a bind mount argument. The cage and the contract engine probe both build theirs here. */
+export const mount = (src: string, dst: string, readonly = false): string[] => [
   '--mount',
   `type=bind,src=${src},dst=${dst}${readonly ? ',readonly' : ''}`,
 ];

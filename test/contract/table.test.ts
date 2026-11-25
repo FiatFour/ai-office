@@ -148,13 +148,13 @@ describe('the CI table', () => {
     expect(tabulate(rows).problems).toContain('docker on freebsd case a names an OS the table does not know');
   });
 
-  it('fails a row whose status is neither pass, fail nor not-run', () => {
+  it('fails a row whose status is neither pass, fail, not-run nor expected', () => {
     const rows = [
       ...without('docker', 'linux'),
       ...ran('docker', 'linux', { a: 'pass', b: 'passed' as Row['status'] }),
     ];
     expect(tabulate(rows).problems).toContain(
-      'docker on linux case b has status "passed", which is not pass, fail or not-run',
+      'docker on linux case b has status "passed", which is not pass, fail, not-run or expected',
     );
   });
 

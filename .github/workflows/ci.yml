@@ -171,7 +171,7 @@ jobs:
           if ($status -ne 0) { throw "a contract mutant survived or could not be applied" }
 
   bench-mutants:
-    name: bench mutants (shard ${{ matrix.shard }} of 3, every mutant caught)
+    name: bench mutants (shard ${{ matrix.shard }} of ${{ strategy.job-total }}, every mutant caught)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -189,13 +189,13 @@ jobs:
       - name: Break each guard in turn and require a test to fail
         run: |
           $env:MUTANT_OUT = Join-Path $env:RUNNER_TEMP 'mutants.txt'
-          node bench/test/mutants.mjs --shard ${{ matrix.shard }}/3
+          node bench/test/mutants.mjs --shard ${{ matrix.shard }}/${{ strategy.job-total }}
           $status = $LASTEXITCODE
           Get-Content $env:MUTANT_OUT | Select-Object -Last 1 | Add-Content $env:GITHUB_STEP_SUMMARY
           if ($status -ne 0) { throw "a bench mutant survived or could not be applied" }
 
   mutants-p1-2:
-    name: mutants p1-2 (shard ${{ matrix.shard }} of 2, every mutant caught)
+    name: mutants p1-2 (shard ${{ matrix.shard }} of ${{ strategy.job-total }}, every mutant caught)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -213,7 +213,7 @@ jobs:
       - name: Break each guard in turn and require a test to fail
         run: |
           $env:MUTANT_OUT = Join-Path $env:RUNNER_TEMP 'mutants-p1-2.txt'
-          node server/test/mutants-p1-2.mjs --shard ${{ matrix.shard }}/2
+          node server/test/mutants-p1-2.mjs --shard ${{ matrix.shard }}/${{ strategy.job-total }}
           $status = $LASTEXITCODE
           Get-Content $env:MUTANT_OUT | Select-Object -Last 1 | Add-Content $env:GITHUB_STEP_SUMMARY
           if ($status -ne 0) { throw "a P1-2 mutant survived or could not be applied" }

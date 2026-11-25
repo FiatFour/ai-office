@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inShard, parseArgs } from '../../scripts/shard.mjs';
+import { applyEdit, selectMutants } from '../../scripts/mutate.mjs';
+import { parseArgs } from '../../scripts/shard.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const STORE = 'server/test/store.test.ts';
@@ -20,7 +21,7 @@ const CLI = 'server/test/cli.test.ts';
 const SITE = 'server/test/site.test.ts';
 const TMP = 'server/test/tmp-cleanup.test.ts';
 
-/** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string]>, tests: string[], survives?: boolean }>} */
+/** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string, all?: 'all']>, tests: string[], survives?: boolean }>} */
 const MUTANTS = [
   {
     name: 'id-without-epoch',
@@ -474,8 +475,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/runtime.ts',
-        'Number.isSafeInteger(c.line) && (c.line as number) >= 1 ?',
-        'Number.isSafeInteger(c.line) ?',
+        'return Number.isSafeInteger(n) && (n as number) >= 1 ? (n as number) : null;',
+        'return Number.isSafeInteger(n) ? (n as number) : null;',
       ],
     ],
     tests: [AGENTS],
@@ -1123,10 +1124,7 @@ const MUTANTS = [
 class PatternMissing extends Error {}
 
 const { names: only, shard } = parseArgs(process.argv.slice(2));
-const chosen = inShard(
-  MUTANTS.filter((mutant) => only.length === 0 || only.includes(mutant.name)),
-  shard,
-);
+const chosen = selectMutants(MUTANTS, only, shard);
 /** @param {string[]} tests */
 const vitest = (tests) =>
   spawnSync('pnpm', ['vitest', 'run', ...tests], {
@@ -1155,12 +1153,15 @@ let bad = 0;
 for (const mutant of chosen) {
   const originals = new Map();
   try {
-    for (const [file, find, replace] of mutant.edits) {
+    for (const [file, find, replace, all] of mutant.edits) {
       const path = `${ROOT}/${file}`;
       const current = readFileSync(path, 'utf8');
       if (!originals.has(path)) originals.set(path, current);
-      if (!current.includes(find)) throw new PatternMissing(`${mutant.name}: pattern not found in ${file}`);
-      writeFileSync(path, current.replace(find, replace));
+      try {
+        writeFileSync(path, applyEdit(file, current, find, replace, all === 'all'));
+      } catch (error) {
+        throw new PatternMissing(`${mutant.name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     const result = vitest(mutant.tests);
     const caught = result.status !== 0;

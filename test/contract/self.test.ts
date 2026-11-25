@@ -88,6 +88,10 @@ const failingCases = async (subject: GithostSubject, cases = [...githostCases, .
 };
 
 describe('the GitHost contract against an in-memory fake', () => {
+  it('declares that its logins keep their case, so the contract compares them byte for byte', () => {
+    expect(memorySubject([], PAYLOADS).exactLogin).toBe(true);
+  });
+
   it('passes every host case on the fake that keeps every rule, and says why it skips none', async () => {
     const subject = memorySubject([], PAYLOADS);
     expect(await failingCases(subject)).toEqual([]);

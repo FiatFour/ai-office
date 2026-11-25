@@ -229,7 +229,7 @@ jobs:
           node-version: "lts/*"
       - name: Time three cold and three warm runs
         run: |
-          $budgetSeconds = 60
+          $budgetSeconds = 90
           $root = Join-Path $env:RUNNER_TEMP 'perf'
           $warmStore = Join-Path $root 'store-warm'
           function Measure-Run([string] $store, [string] $label) {

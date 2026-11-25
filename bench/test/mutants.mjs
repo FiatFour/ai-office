@@ -1171,8 +1171,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/runtime.ts',
-        "const path = typeof c.path === 'string' && c.path !== '' ? c.path : null;",
-        "const path = typeof c.path === 'string' && c.path !== '' ? c.path : ((): never => { throw new Error('a review comment needs a path'); })();",
+        'return key === undefined ? null : (c[key] as string);',
+        "return key === undefined ? (() => { throw new Error('a review comment needs a path'); })() : (c[key] as string);",
       ],
     ],
     tests: [AGENTS, FACTORY],
@@ -1180,7 +1180,7 @@ const MUTANTS = [
   {
     name: 'review-comment-zero-line-placed',
     claim: 'a reviewer comment whose line is below 1 is kept as a whole-file comment, never placed inline',
-    edits: [['server/agents/runtime.ts', '(c.line as number) >= 1', 'true']],
+    edits: [['server/agents/runtime.ts', '(n as number) >= 1', 'true']],
     tests: [AGENTS],
   },
   {
@@ -1259,7 +1259,7 @@ const MUTANTS = [
     edits: [
       [
         'server/modes/cages.ts',
-        ".map((r) => ({ r, text: r.body.replace(REVIEW_MARK, '').replace(DROPPED_MARK, '\\n').trim() }))",
+        ".map((r) => ({ r, text: r.body.replace(REVIEW_MARKS, '').replaceAll(DROPPED_MARK, '\\n').trim() }))",
         ".map((r) => ({ r, text: r.body.includes(DROPPED_MARK) ? r.body.slice(r.body.indexOf(DROPPED_MARK) + DROPPED_MARK.length).trim() : '' }))",
       ],
     ],
@@ -1297,18 +1297,158 @@ const MUTANTS = [
   },
   {
     name: 'review-first-verdict-block-wins',
-    claim: 'the last json block with a verdict is the review, so an earlier quoted block never wins',
-    edits: [['server/agents/runtime.ts', 'objectsIn(text).findLast(hasVerdict)', 'objectsIn(text).find(hasVerdict)']],
+    claim: 'among blocks that do not include changes, the last verdict block is the review',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "reviews.findLast((x) => x.verdict === 'changes') ?? reviews.at(-1)",
+        "reviews.findLast((x) => x.verdict === 'changes') ?? reviews[0]",
+      ],
+    ],
     tests: [AGENTS],
+  },
+  {
+    name: 'review-last-block-beats-changes',
+    claim: 'a review with any changes block parses as changes, so a quoted approve block never moves a box to merge',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "reviews.findLast((x) => x.verdict === 'changes') ?? reviews.at(-1)",
+        'reviews.at(-1)',
+      ],
+    ],
+    tests: [AGENTS, CAGES],
+  },
+  {
+    name: 'review-first-changes-block-wins',
+    claim: 'the last changes block is the review when several changes blocks exist',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "reviews.findLast((x) => x.verdict === 'changes')",
+        "reviews.find((x) => x.verdict === 'changes')",
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-summary-dropped',
+    claim: 'a top-level summary is carried as the review body when body is empty',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "if (typeof o.summary === 'string' && o.summary.trim() !== '') return o.summary;",
+        '',
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-non-string-body-dropped',
+    claim: 'a review body that is not a string is carried as its JSON text',
+    edits: [['server/agents/runtime.ts', 'return JSON.stringify(o.body);', "return '';"]],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-file-key-ignored',
+    claim: 'a comment that names its file under file instead of path keeps the file name',
+    edits: [['server/agents/runtime.ts', "['path', 'file']", "['path']"]],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-string-line-dropped',
+    claim: 'a comment line written as a numeric string keeps its line',
+    edits: [
+      ['server/agents/runtime.ts', "typeof raw === 'string' && /^\\s*\\d+\\s*$/.test(raw) ? Number(raw) : raw", 'raw'],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-fence-scan-quadratic',
+    claim: 'a block scan stops at the next fence outside a string, so many unclosed blocks scan in linear time',
+    edits: [['server/agents/runtime.ts', "else if (ch === '`' && text.startsWith('```', i)) return i;", '']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'fix-round-gets-dropped-mark',
+    claim: 'the carried-comments mark never reaches the author of a fix round',
+    edits: [['server/modes/cages.ts', ".replaceAll(DROPPED_MARK, '\\n')", '']],
+    tests: [CAGES],
   },
   {
     name: 'review-block-ends-at-first-fence',
     claim: 'a verdict block holding triple backticks inside a comment still parses',
+    edits: [['server/agents/runtime.ts', 'if (inString) {', 'if (false) {']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'fix-round-keeps-repeated-dropped-mark',
+    claim: 'every carried-comments mark is stripped from what the author of a fix round reads, not only the first',
+    edits: [['server/modes/cages.ts', ".replaceAll(DROPPED_MARK, '\\n')", ".replace(DROPPED_MARK, '\\n')"]],
+    tests: [CAGES],
+  },
+  {
+    name: 'review-skips-rest-of-fence-after-first-object',
+    claim: 'a changes object behind an approve object in the same fence, or on the same line, is still seen',
     edits: [
       [
         'server/agents/runtime.ts',
-        'for (const end of closers) if (end > start && take(text.slice(start, end))) break;',
-        'for (const end of closers) if (end > start) { take(text.slice(start, end)); break; }',
+        "pos = text.indexOf('{', end);",
+        "pos = text.indexOf('{', Math.max(end, text.indexOf('```', end)));",
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-verdict-case-sensitive',
+    claim: 'a verdict written as Changes or CHANGES is still a changes verdict',
+    edits: [['server/agents/runtime.ts', 'c.verdict.trim().toLowerCase()', 'c.verdict.trim()']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-verdict-space-sensitive',
+    claim: 'a verdict with space around it is still read',
+    edits: [['server/agents/runtime.ts', 'c.verdict.trim().toLowerCase()', 'c.verdict.toLowerCase()']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-bare-changes-after-fenced-approve-ignored',
+    claim: 'a bare changes object after a fenced approve block counts',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))",
+        "if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) && (found.length === 0 || text.slice(Math.max(0, pos - 12), pos).includes('```')))",
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-unreadable-changes-approves',
+    claim: 'a changes verdict that cannot be read as json never lets the review count as approve or comment',
+    edits: [['server/agents/runtime.ts', "chosen.verdict !== 'changes' && CHANGES_KEY.test(text)", 'false']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-mention-of-changes-fails-approve',
+    claim: 'an approve whose comments only mention the word changes or a quoted verdict is still an approve',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        'const CHANGES_KEY = /"verdict"\\s*:\\s*"\\s*changes/i;',
+        'const CHANGES_KEY = /verdict\\W+changes|changes/i;',
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'review-brace-search-backtracks-on-fence-whitespace',
+    claim: 'finding the next object takes linear time however much whitespace follows a fence',
+    edits: [
+      [
+        'server/agents/runtime.ts',
+        "pos = text.indexOf('{', end);",
+        "{ const m = /```[ \\t]*(?:json)?[ \\t]*\\r?\\n?\\s*(?=\\{)|\\{/g; m.lastIndex = end; const r = m.exec(text); pos = r === null ? -1 : r.index + r[0].length - (r[0] === '{' ? 1 : 0); }",
       ],
     ],
     tests: [AGENTS],
@@ -1325,8 +1465,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/runtime.ts',
-        'verdict: o.verdict as Verdict,',
-        "verdict: o.verdict === 'changes' && commentsOf(o.comments).every((c) => c.line === null) ? 'comment' : (o.verdict as Verdict),",
+        'verdict: chosen.verdict,',
+        "verdict: chosen.verdict === 'changes' && commentsOf(chosen.r.comments).every((c) => c.line === null) ? 'comment' : chosen.verdict,",
       ],
     ],
     tests: [AGENTS, FACTORY],

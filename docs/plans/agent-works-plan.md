@@ -122,7 +122,7 @@ Claude Code has no cloud VMs. Each live lane runs in its own git worktree on thi
 - [ ] Metric. Wall time of a cold `pnpm install && pnpm lint && pnpm typecheck && pnpm test`. Trunk lacks the workspace, so the budget is absolute.
 - [ ] Probe. Run the command three times in a fresh clone with an empty pnpm store, and three times with a warm store.
 - [ ] Baseline. Trunk has no workspace. Record "no baseline, trunk empty".
-- [ ] Rule. Fail when the warm median exceeds 60 seconds on `ubuntu-latest`.
+- [ ] Rule. Fail when the warm median exceeds 90 seconds (raised from 60 on 2026-11-24 by the operator: main measured 58.8 to 72.3 s on hosted runners) on `ubuntu-latest`.
 
 **Review gate.** None. P0-1 is not review-gated.
 

@@ -953,12 +953,12 @@ const MUTANTS = [
   {
     name: 'gates-contrast-unmeasured-passes',
     claim: 'text over a gradient or image that cannot be measured fails',
-    edits: [[GATES, 'if (row.unknown && (row.behind === undefined', 'if (false && (row.behind === undefined']],
+    edits: [[GATES, 'if (row.unknown && unmeasured) {', 'if (false && unmeasured) {']],
   },
   {
     name: 'gates-contrast-allowlist-ignored',
     claim: 'an allowlist entry with a reason excuses unmeasurable text, and nothing else does',
-    edits: [[GATES, 'if (row.unknown && row.allowed) {', 'if (false) {']],
+    edits: [[GATES, 'if (row.unknown && unmeasured && row.allowed) {', 'if (false) {']],
   },
   {
     name: 'gates-contrast-allowlist-no-reason',

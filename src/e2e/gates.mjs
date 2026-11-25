@@ -6,12 +6,14 @@ import {
   FIXTURE_FLAG,
   FIXTURE_PREFIX,
   human,
+  interruptible,
   launch,
   NEEDS_CHIP,
   ROOT,
   runAxe,
   startHqFree,
   stopAllHq,
+  within,
 } from './harness.mjs';
 import { restoreScreens, runFixtureLane } from './screen-fixture.mjs';
 
@@ -45,16 +47,24 @@ const COLLECT_TEXT = (/** @type {{ selector: string, reason: string }[]} */ extr
     (entry) => typeof entry.reason === 'string' && entry.reason.trim() !== '',
   );
   for (const el of document.querySelectorAll('[data-gate-i]')) el.removeAttribute('data-gate-i');
+  const pageRoots = [
+    document.documentElement,
+    document.body,
+    ...document.querySelectorAll('#root, [data-screen], main'),
+  ];
   const entries = allow.map((entry) => {
     try {
+      const matched = [...document.querySelectorAll(entry.selector)];
       return {
         selector: entry.selector,
         reason: entry.reason,
-        count: document.querySelectorAll(entry.selector).length,
+        count: matched.length,
+        roots: matched.some((el) => pageRoots.some((root) => el.contains(root))),
+        rows: 0,
         valid: true,
       };
     } catch {
-      return { selector: entry.selector, reason: entry.reason, count: 0, valid: false };
+      return { selector: entry.selector, reason: entry.reason, count: 0, roots: false, rows: 0, valid: false };
     }
   });
   const rows = [];
@@ -71,19 +81,24 @@ const COLLECT_TEXT = (/** @type {{ selector: string, reason: string }[]} */ extr
     const layers = [];
     let unknown = false;
     let clipped = false;
+    const fg = norm(style.webkitTextFillColor || style.color);
+    const opaqueFill = (fg[3] ?? 255) === 255;
     for (let up = /** @type {Element | null} */ (el); up !== null; up = up.parentElement) {
       const cs = getComputedStyle(up);
       opacity *= Number(cs.opacity);
       if (unknown || layers.some((layer) => layer[3] === 255)) continue;
+      const clipsToText = cs.backgroundClip === 'text' || cs.getPropertyValue('-webkit-background-clip') === 'text';
+      // A background clipped to the glyphs is covered by an opaque fill, so it is not behind the text at all. Only a see-through fill shows it.
+      if (clipsToText && opaqueFill) continue;
+      if (clipsToText) clipped = true;
       if (cs.backgroundImage !== 'none') unknown = true;
-      if (cs.backgroundClip === 'text' || cs.getPropertyValue('-webkit-background-clip') === 'text') clipped = true;
       const bg = norm(cs.backgroundColor);
       if ((bg[3] ?? 0) > 0) layers.push(bg);
     }
     if (!layers.some((layer) => layer[3] === 255)) layers.push([255, 255, 255, 255]);
-    const fg = norm(style.color);
     const index = rows.length;
     if (unknown || clipped) el.setAttribute('data-gate-i', `${el.getAttribute('data-gate-i') ?? ''} ${index}`.trim());
+    for (const entry of entries) if (entry.valid && el.closest(entry.selector) !== null) entry.rows += 1;
     rows.push({
       text: text.slice(0, 40),
       html: el.outerHTML.slice(0, 160),
@@ -113,10 +128,15 @@ const PLACE_TEXT = (/** @type {number} */ index) => {
     range.selectNodeContents(child);
     for (const b of range.getClientRects()) rects.push([b.left, b.top, b.right, b.bottom]);
   }
-  const clipped = rects.some(
-    ([l, t, r, b]) => (l ?? 0) < 0 || (t ?? 0) < 0 || (r ?? 0) > innerWidth || (b ?? 0) > innerHeight,
-  );
-  return rects.length === 0 || clipped ? null : rects;
+  const visible = rects
+    .map(([l = 0, t = 0, r = 0, b = 0]) => [
+      Math.max(0, l),
+      Math.max(0, t),
+      Math.min(innerWidth, r),
+      Math.min(innerHeight, b),
+    ])
+    .filter(([l = 0, t = 0, r = 0, b = 0]) => r > l && b > t);
+  return visible.length === 0 ? null : visible;
 };
 
 const SAMPLE_PIXELS = async (/** @type {{ b64: string, rects: number[][] }} */ { b64, rects }) => {
@@ -163,25 +183,24 @@ const exactRatio = ({ fg, layers }) => {
 /** @param {{ fg: number[], layers: number[][] }} row */
 export const rowRatio = (row) => Number(exactRatio(row).toFixed(2));
 
-/** `*`, the page roots and a bare tag that matches more than this many elements are too broad to be an allowlist entry. */
-export const BROAD_TAG_LIMIT = 3;
-const ROOT_SELECTORS = ['*', 'body', 'html', 'main', '#root', ':root'];
+/** An allowlist entry that covers more text rows than this, or contains a page root, is too broad to be an allowlist entry. */
+export const BROAD_ROW_LIMIT = 3;
 
 /**
- * @param {Array<{ selector: string, count: number, valid: boolean }>} entries each allowlist entry with how many elements it matched on the page
+ * Broadness is decided by what a selector matches, not by how it is spelled: `p`, `BODY`, `[class]`, `:not(x)`, `html body`, `body *` and comma lists all count by what they reach.
+ * @param {Array<{ selector: string, roots: boolean, rows: number, valid: boolean }>} entries each allowlist entry with whether a match contains a page root (html, body, #root, a screen wrapper or main) and how many text rows its matches cover
  * @param {string} label @returns {{ problems: string[], refused: string[] }}
  */
 export const allowlistProblems = (entries, label) => {
   const problems = [];
   const refused = [];
-  for (const { selector, count, valid } of entries) {
-    const css = selector.trim();
+  for (const { selector, roots, rows, valid } of entries) {
     const why = !valid
       ? 'is not a valid selector'
-      : ROOT_SELECTORS.includes(css)
+      : roots
         ? 'matches the whole page'
-        : /^[a-z][a-z0-9-]*$/i.test(css) && count > BROAD_TAG_LIMIT
-          ? `is a bare tag that matches ${count} elements, more than ${BROAD_TAG_LIMIT}`
+        : rows > BROAD_ROW_LIMIT
+          ? `covers ${rows} text rows, more than ${BROAD_ROW_LIMIT}`
           : '';
     if (why === '') continue;
     refused.push(selector);
@@ -582,6 +601,75 @@ const BREAKERS = [
   },
   {
     gate: 'contrast',
+    what: 'text under stacked translucent backgrounds that together make it unreadable',
+    check: checkContrast,
+    clean: styled(
+      `.gate-stack-ok{${BOX}top:270px;background:rgba(0,0,0,.5)}.gate-stack-ok p{margin:0;background:rgba(0,0,0,.5);color:#fff}`,
+      '<div class="gate-stack-ok"><p>stacked</p></div>',
+    ),
+    inject: styled(
+      `.gate-stack{${BOX}top:300px;background:rgba(0,0,0,.6)}.gate-stack p{margin:0;background:rgba(0,0,0,.3);color:#000}`,
+      '<div class="gate-stack"><p>stacked</p></div>',
+    ),
+  },
+  {
+    gate: 'contrast',
+    what: 'an allowlist entry that reaches more than 3 text rows of clipped text',
+    check: async (page, label) =>
+      checkContrast(
+        page,
+        label,
+        (await page.$('.gate-rows')) === null ? [] : [{ selector: '.gate-rows', reason: 'because' }],
+      ),
+    inject: styled(
+      `.gate-rows{${BOX}top:330px;background-image:linear-gradient(#000,#000);-webkit-background-clip:text;background-clip:text;color:transparent}`,
+      '<div class="gate-rows"><p>one</p><p>two</p><p>three</p><p>four</p></div>',
+    ),
+  },
+  {
+    gate: 'contrast',
+    what: 'an allowlist of `html body` on clipped text it cannot measure',
+    check: async (page, label) =>
+      checkContrast(
+        page,
+        label,
+        (await page.$('.gate-star2')) === null ? [] : [{ selector: 'html body', reason: 'because' }],
+      ),
+    inject: probe(
+      'gate-star2',
+      360,
+      'background-image:linear-gradient(#000,#000);-webkit-background-clip:text;background-clip:text;color:transparent',
+    ),
+  },
+  {
+    gate: 'contrast',
+    what: 'text clipped to a gradient with an opaque fill, which is plain text on a plain background and must pass',
+    check: checkContrast,
+    clean: styled(
+      `.gate-fill-ok{${BOX}top:390px;background:#fff}.gate-fill-ok p{margin:0;background-image:linear-gradient(#000,#000);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:#111;color:#111}`,
+      '<div class="gate-fill-ok"><p>opaque fill</p></div>',
+    ),
+    inject: probe('gate-fill-bad', 420, 'background:#fff;color:#bbb'),
+  },
+  {
+    gate: 'contrast',
+    what: 'light grey text over a gradient whose rects run below the viewport',
+    check: checkContrast,
+    clean: probe(
+      'gate-off-ok',
+      870,
+      'height:80px;background-image:linear-gradient(#fff,#fff);color:#222',
+      'x<br>y<br>z',
+    ),
+    inject: probe(
+      'gate-off-bad',
+      885,
+      'height:80px;background-image:linear-gradient(#fff,#fff);color:#bbb',
+      'x<br>y<br>z',
+    ),
+  },
+  {
+    gate: 'contrast',
     what: 'an allowlist of `*` on clipped text it cannot measure',
     check: async (page, label) =>
       checkContrast(page, label, (await page.$('.gate-star')) === null ? [] : [{ selector: '*', reason: 'because' }]),
@@ -616,6 +704,22 @@ const BREAKERS = [
     what: 'an infinite animation that ignores prefers-reduced-motion',
     check: checkMotion,
     inject: sheet('@keyframes selftest{to{opacity:.5}}body{animation:selftest 1s infinite !important}'),
+    calm: true,
+  },
+  {
+    gate: 'motion',
+    what: 'a running CSS transition on a property the sampler does not compare',
+    check: checkMotion,
+    inject:
+      "{ const s = new CSSStyleSheet(); s.replaceSync('.gate-tr{width:4px;height:4px;background:#000;transition:background-color 30s linear}.gate-tr.on{background:#fff}'); document.adoptedStyleSheets = [...document.adoptedStyleSheets, s]; const el = document.createElement('div'); el.className = 'gate-tr'; document.body.append(el); getComputedStyle(el).backgroundColor; el.classList.add('on'); }",
+    calm: true,
+  },
+  {
+    gate: 'motion',
+    what: 'an el.animate() loop on a property the sampler does not compare',
+    check: checkMotion,
+    inject:
+      "{ const el = document.createElement('div'); el.style.cssText = 'width:4px;height:4px'; document.body.append(el); el.animate([{ backgroundColor: '#000' }, { backgroundColor: '#fff' }], { duration: 1000, iterations: Infinity }); }",
     calm: true,
   },
   {
@@ -727,26 +831,23 @@ export const runGateLane = async (browser) => {
 if (import.meta.main) {
   // Playwright would answer SIGINT and SIGTERM itself, close the browser and exit at once. This run has files and an HQ to clean up first.
   const browser = await launch({ handleSIGINT: false, handleSIGTERM: false });
-  let stopping = false;
-  /** An interrupted run stops the HQ it started, removes the synthetic screens and rebuilds `src/dist` without them. */
-  const interrupted = (/** @type {number} */ code) => () => {
-    if (stopping) return;
-    stopping = true;
-    (async () => {
+  /** An interrupted run stops the HQ it started, removes the synthetic screens and rebuilds `src/dist` without them. A second signal exits at once. */
+  const interrupt = interruptible({
+    cleanup: async () => {
       try {
         await stopAllHq();
-        await browser.close().catch(() => {});
+        await within(
+          browser.close().catch(() => {}),
+          10_000,
+        );
       } finally {
-        try {
-          restoreScreens();
-        } finally {
-          process.exit(code);
-        }
+        restoreScreens();
       }
-    })();
-  };
-  process.on('SIGINT', interrupted(130));
-  process.on('SIGTERM', interrupted(143));
+    },
+    exit: (code) => process.exit(code),
+  });
+  process.on('SIGINT', interrupt.on(130));
+  process.on('SIGTERM', interrupt.on(143));
   try {
     const verdict = await runGateLane(browser);
     for (const line of verdict.lines) console.log(line);
@@ -756,9 +857,9 @@ if (import.meta.main) {
     process.exitCode = verdict.ok && fixtures.ok ? 0 : 1;
   } catch (error) {
     // Stopping the HQ under a running lane makes it throw. The signal handler is cleaning up and exits, so that error is not the verdict.
-    if (!stopping) throw error;
+    if (!interrupt.stopping) throw error;
     await new Promise(() => {});
   } finally {
-    if (!stopping) await browser.close();
+    if (!interrupt.stopping) await within(browser.close(), 10_000);
   }
 }

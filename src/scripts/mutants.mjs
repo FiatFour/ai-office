@@ -989,13 +989,7 @@ const MUTANTS = [
     name: 'gates-contrast-clip-not-flagged',
     claim: 'text clipped to its own background is not measurable',
     tier: 'gates',
-    edits: [
-      [
-        GATES,
-        "if (cs.backgroundClip === 'text' || cs.getPropertyValue('-webkit-background-clip') === 'text') clipped = true;",
-        '',
-      ],
-    ],
+    edits: [[GATES, 'if (clipsToText) clipped = true;', '']],
   },
   {
     name: 'gates-contrast-opacity-ignored',
@@ -1101,13 +1095,14 @@ const MUTANTS = [
     name: 'gates-contrast-broad-allow-not-named',
     claim: 'a broad allowlist selector is refused with a named failure',
     tier: 'gates',
-    edits: [[GATES, "const ROOT_SELECTORS = ['*', 'body',", "const ROOT_SELECTORS = ['*none', 'body',"]],
+    edits: [
+      [GATES, "      : roots\n        ? 'matches the whole page'", "      : false\n        ? 'matches the whole page'"],
+    ],
   },
   {
-    name: 'gates-contrast-broad-tag-limit',
-    claim: 'a bare tag selector that matches more than 3 elements is refused',
-    tier: 'gates',
-    edits: [[GATES, 'export const BROAD_TAG_LIMIT = 3;', 'export const BROAD_TAG_LIMIT = 1e9;']],
+    name: 'gates-contrast-broad-row-limit',
+    claim: 'a selector that covers more than 3 text rows is refused',
+    edits: [[GATES, 'export const BROAD_ROW_LIMIT = 3;', 'export const BROAD_ROW_LIMIT = 1e9;']],
   },
   {
     name: 'gates-contrast-rounded',
@@ -1145,10 +1140,109 @@ const MUTANTS = [
     edits: [[GATES, '(synthetic || !id.startsWith(FIXTURE_PREFIX))', 'true']],
   },
   {
+    name: 'gates-contrast-rows-not-counted',
+    claim: 'an allowlist selector that covers more than 3 text rows is refused',
+    tier: 'gates',
+    edits: [[GATES, 'entry.rows += 1;', 'entry.rows += 0;']],
+  },
+  {
+    name: 'gates-contrast-opaque-fill-clipped',
+    claim: 'text with an opaque fill over a background clipped to its glyphs is measured, not unmeasurable',
+    tier: 'gates',
+    edits: [[GATES, 'if (clipsToText && opaqueFill) continue;', '']],
+  },
+  {
+    name: 'gates-contrast-offscreen-gives-up',
+    claim: 'text rects are clipped to the viewport, text partly outside it is still measured',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        'return visible.length === 0 ? null : visible;',
+        'return visible.length === rects.length ? visible : null;',
+      ],
+    ],
+  },
+  {
+    name: 'gates-contrast-stacked-layers-cut',
+    claim: 'stacked translucent backgrounds are all composited',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        'if (unknown || layers.some((layer) => layer[3] === 255)) continue;',
+        'if (unknown || layers.some((layer) => layer[3] > 0)) continue;',
+      ],
+      [
+        GATES,
+        'if (!layers.some((layer) => layer[3] === 255)) layers.push([255, 255, 255, 255]);',
+        'layers.push([255, 255, 255, 255]);',
+      ],
+    ],
+  },
+  {
+    name: 'gates-motion-css-animations-only',
+    claim: 'a running CSS transition fails the reduced-motion gate',
+    tier: 'gates',
+    edits: [[GATES, "a.playState === 'running'", "a.playState === 'running' && !(a instanceof CSSTransition)"]],
+  },
+  {
+    name: 'gates-motion-no-script-animations',
+    claim: 'an el.animate() loop fails the reduced-motion gate',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        "a.playState === 'running'",
+        "a.playState === 'running' && (a instanceof CSSAnimation || a instanceof CSSTransition)",
+      ],
+    ],
+  },
+  {
+    name: 'gates-hq-joins-live-late',
+    claim: 'an HQ is stopped on a signal even while it is still starting',
+    edits: [
+      [HARNESS, '  live.add(stop);\n  const url', '  const url'],
+      [HARNESS, '  return {\n    url,', '  live.add(stop);\n  return {\n    url,'],
+    ],
+  },
+  {
+    name: 'gates-hq-start-not-refused',
+    claim: 'no HQ starts once the run is stopping',
+    edits: [[HARNESS, "if (halted) throw new Error('HQ start refused", "if (false) throw new Error('HQ start refused"]],
+  },
+  {
+    name: 'gates-hq-exit-orphan',
+    claim: 'HQ children are killed when the process exits without cleaning up',
+    edits: [[HARNESS, "for (const child of children) child.kill('SIGKILL');", 'for (const child of children) child;']],
+  },
+  {
+    name: 'gates-interrupt-second-ignored',
+    claim: 'a second signal exits at once',
+    edits: [[HARNESS, '        exit(code);\n        return;', '        return;']],
+  },
+  {
+    name: 'gates-interrupt-cleanup-unbounded',
+    claim: 'a cleanup that hangs is abandoned after its limit',
+    edits: [[HARNESS, 'Promise.race([cleanup().catch(() => {}), limit])', 'cleanup().catch(() => {})']],
+  },
+  {
+    name: 'gates-browser-close-unbounded',
+    claim: 'browser.close has a timeout',
+    edits: [
+      [HARNESS, 'Promise.race([work, new Promise((resolve) => setTimeout(resolve, ms, undefined).unref())])', 'work'],
+    ],
+  },
+  {
+    name: 'gates-fixture-tracked-unseen',
+    claim: 'a tracked file under the zz-gate- prefix fails the unit tests',
+    edits: [[HARNESS, 'files.filter((file) => file.includes(FIXTURE_PREFIX))', 'files.filter(() => false)']],
+  },
+  {
     name: 'gates-interrupt-no-handler',
     claim: 'an interrupted gates run cleans up (SIGINT handler)',
     tier: 'interrupt',
-    edits: [[GATES, "process.on('SIGINT', interrupted(130));", '']],
+    edits: [[GATES, "process.on('SIGINT', interrupt.on(130));", '']],
   },
   {
     name: 'gates-interrupt-hq-left',
@@ -1160,7 +1254,7 @@ const MUTANTS = [
     name: 'gates-interrupt-no-restore',
     claim: 'an interrupted gates run removes the synthetic screens and rebuilds src/dist',
     tier: 'interrupt',
-    edits: [[GATES, '          restoreScreens();\n        } finally {', '          0;\n        } finally {']],
+    edits: [[GATES, '        restoreScreens();\n      }\n    },', '        0;\n      }\n    },']],
   },
   {
     name: 'gates-compare-skip-silent',

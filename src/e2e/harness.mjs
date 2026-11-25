@@ -15,15 +15,56 @@ const BIN = join(ROOT, 'bin', 'agent-works.ts');
 /** Synthetic screens (lane 11b) live in `src/screens/zz-gate-*`. Nothing but that lane may see them: the registry listing and the parity test skip them unless this flag is set. */
 export const FIXTURE_PREFIX = 'zz-gate-';
 export const FIXTURE_FLAG = 'AW_GATE_FIXTURES';
+/** The files among `files` (repo-relative paths) that belong to a synthetic screen. A tracked one would build into the app. */
+export const syntheticFiles = (/** @type {string[]} */ files) => files.filter((file) => file.includes(FIXTURE_PREFIX));
 
-/** Every HQ this process started and has not stopped, so an interrupted run can stop them. */
+/** Every HQ this process started and has not stopped, from the moment it is spawned (not when it answers), so an interrupted run can stop them. */
 const live = new Set(/** @type {Array<() => Promise<void>>} */ ([]));
-export const stopAllHq = () => Promise.all([...live].map((stop) => stop())).then(() => undefined);
+/** Every child still running, so a process that exits without cleaning up does not leave an HQ behind. */
+const children = new Set(/** @type {Set<import('node:child_process').ChildProcess>} */ (new Set()));
+let halted = false;
+process.on('exit', () => {
+  for (const child of children) child.kill('SIGKILL');
+});
+/** Stops every HQ, including one that is still starting, and refuses to start another. */
+export const haltHq = () => {
+  halted = true;
+  return Promise.all([...live].map((stop) => stop())).then(() => undefined);
+};
+export const stopAllHq = haltHq;
+
+/**
+ * One shared way for a script to handle SIGINT and SIGTERM. The first signal runs `cleanup` (bounded by `limitMs`), then exits with `code`.
+ * A second signal exits at once, so a cleanup that hangs cannot trap the operator.
+ * @param {{ cleanup: () => Promise<void>, exit: (code: number) => void, limitMs?: number }} options
+ */
+export const interruptible = ({ cleanup, exit, limitMs = 15_000 }) => {
+  let stopping = false;
+  return {
+    get stopping() {
+      return stopping;
+    },
+    on: (/** @type {number} */ code) => () => {
+      if (stopping) {
+        exit(code);
+        return;
+      }
+      stopping = true;
+      const limit = new Promise((resolve) => setTimeout(resolve, limitMs).unref());
+      Promise.race([cleanup().catch(() => {}), limit]).finally(() => exit(code));
+    },
+  };
+};
+
+/** @template T @param {Promise<T>} work @param {number} ms @returns {Promise<T | undefined>} undefined when it took longer */
+export const within = (work, ms) =>
+  Promise.race([work, new Promise((resolve) => setTimeout(resolve, ms, undefined).unref())]);
 
 /**
  * @param {{ demo?: boolean, port: number, intervalMs?: number, args?: string[] }} options `args` go to `serve` after the port and home, for example a mode and its config
  */
 export const startHq = async ({ demo = false, port, intervalMs = 1500, args: extra = [] }) => {
+  if (halted) throw new Error('HQ start refused: the run is stopping');
   const home = mkdtempSync(join(tmpdir(), 'aw-e2e-'));
   const args = demo
     ? [BIN, '--demo', '--no-open', '--port', String(port)]
@@ -32,10 +73,25 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
     env: { ...process.env, AGENT_WORKS_HOME: home, AGENT_WORKS_DEMO_INTERVAL_MS: String(intervalMs) },
     stdio: 'ignore',
   });
+  children.add(child);
+  child.once('exit', () => children.delete(child));
+  const stop = async () => {
+    live.delete(stop);
+    child.kill('SIGTERM');
+    await new Promise((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) resolve(undefined);
+      child.once('exit', resolve);
+      setTimeout(resolve, 5000).unref();
+    });
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    rmSync(home, { recursive: true, force: true });
+  };
+  live.add(stop);
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 15_000;
   const gone = () => child.exitCode !== null || child.signalCode !== null;
   const abandon = (/** @type {string} */ why) => {
+    live.delete(stop);
     child.kill('SIGKILL');
     rmSync(home, { recursive: true, force: true });
     return new Error(why);
@@ -48,16 +104,6 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
     if (Date.now() > deadline) throw abandon('HQ did not start');
     await sleep(100);
   }
-  const stop = async () => {
-    live.delete(stop);
-    child.kill('SIGTERM');
-    await new Promise((resolve) => {
-      child.once('exit', resolve);
-      setTimeout(resolve, 5000);
-    });
-    rmSync(home, { recursive: true, force: true });
-  };
-  live.add(stop);
   return {
     url,
     stop,

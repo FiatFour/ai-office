@@ -10,7 +10,10 @@ const STATUSES = ['pass', 'fail', 'not-run', 'expected'];
 
 /** A case that cannot apply to a driver, with the reason the plan gives. */
 /** @type {Record<string, string[]>} */
-const NOT_APPLICABLE = { 'gitlab-recorded': ['a-github-signature-is-checked'] };
+const NOT_APPLICABLE = {
+  'gitlab-recorded': ['a-github-signature-is-checked'],
+  'docker|windows': ['cage-files-belong-to-the-host-user'],
+};
 
 /** @param {string} driver @param {string} os */
 const mustPass = (driver, os) =>
@@ -70,7 +73,8 @@ export const tabulate = (rows, { drivers = DRIVERS, oses = OSES } = {}) => {
     const skipped = found.filter((r) => r.status === 'not-run');
     const nameless = skipped.filter((r) => (r.reason ?? '').trim() === '');
     if (nameless.length > 0) problems.push(`${where} skipped ${nameless.length} without a reason`);
-    const unexcused = skipped.filter((r) => !(NOT_APPLICABLE[driver] ?? []).includes(r.case ?? ''));
+    const excused = [...(NOT_APPLICABLE[driver] ?? []), ...(NOT_APPLICABLE[`${driver}|${os}`] ?? [])];
+    const unexcused = skipped.filter((r) => !excused.includes(r.case ?? ''));
     if (required && unexcused.length > 0)
       problems.push(`${where} must pass every case and skipped ${unexcused.length}`);
     if (failed.length > 0) {

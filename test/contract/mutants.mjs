@@ -189,6 +189,39 @@ const MUTANTS = [
     caught: ['fails a row that names a driver the table does not know'],
   },
   {
+    name: 'windows-uid-skip-not-excused',
+    claim: 'docker on windows may skip the one case that compares a POSIX uid',
+    edits: [
+      [
+        'scripts/contract-table.mjs',
+        "'docker|windows': ['cage-files-belong-to-the-host-user'],",
+        "'docker|windows': [],",
+      ],
+    ],
+    test: TABLE,
+    caught: ['lets docker on windows skip the one case that compares a POSIX uid'],
+  },
+  {
+    name: 'windows-skip-excuse-widened-to-any-case',
+    claim: 'the windows excuse names one case and no other case may skip on docker on windows',
+    edits: [['scripts/contract-table.mjs', "!excused.includes(r.case ?? '')", 'false']],
+    test: TABLE,
+    caught: ['fails any other case skipped on docker on windows'],
+  },
+  {
+    name: 'windows-skip-excuse-leaks-to-linux',
+    claim: 'the windows excuse does not apply to docker on linux',
+    edits: [
+      [
+        'scripts/contract-table.mjs',
+        '...(NOT_APPLICABLE[`${driver}|${os}`] ?? [])',
+        '...(NOT_APPLICABLE[`${driver}|windows`] ?? [])',
+      ],
+    ],
+    test: TABLE,
+    caught: ['does not let the windows excuse reach docker on linux'],
+  },
+  {
     name: 'table-ignores-unknown-os',
     claim: 'a row for an OS the table does not know fails the table',
     edits: [['scripts/contract-table.mjs', 'else if (!OSES.includes(row.os))', 'else if (false)']],

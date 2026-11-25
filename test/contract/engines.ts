@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { Engine, type EngineName } from '../../server/sandbox/engine.ts';
 
 export interface Found {

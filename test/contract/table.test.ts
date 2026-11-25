@@ -98,6 +98,33 @@ describe('the CI table', () => {
     expect(tabulate(rows).problems).toEqual([]);
   });
 
+  const UID_CASE = 'cage-files-belong-to-the-host-user';
+  const dockerCell = (os: string, skipped: string) => {
+    const ids = ['a', skipped];
+    return [
+      ...without('docker', os),
+      ...ids.map((id) => ({ driver: 'docker', os, case: id, status: 'expected' as const, reason: null })),
+      { driver: 'docker', os, case: 'a', status: 'pass' as const, reason: null },
+      { driver: 'docker', os, case: skipped, status: 'not-run' as const, reason: 'this OS has no POSIX uid' },
+    ];
+  };
+
+  it('lets docker on windows skip the one case that compares a POSIX uid', () => {
+    expect(tabulate(dockerCell('windows', UID_CASE)).problems).toEqual([]);
+  });
+
+  it('fails any other case skipped on docker on windows', () => {
+    expect(tabulate(dockerCell('windows', 'b')).problems).toEqual([
+      'docker on windows must pass every case and skipped 1',
+    ]);
+  });
+
+  it('does not let the windows excuse reach docker on linux', () => {
+    expect(tabulate(dockerCell('linux', UID_CASE)).problems).toEqual([
+      'docker on linux must pass every case and skipped 1',
+    ]);
+  });
+
   it('fails results that come with no list of the cases to run', () => {
     const rows = everything().filter((r) => !(r.driver === 'docker' && r.os === 'linux' && r.status === 'expected'));
     expect(tabulate(rows).problems).toEqual(['docker on linux has results and no list of the cases it must run']);

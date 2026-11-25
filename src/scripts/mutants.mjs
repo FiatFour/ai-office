@@ -573,6 +573,17 @@ const MUTANTS = [
     edits: [[CLI, "['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']", "['SIGTERM', 'SIGINT', 'SIGHUP']"]],
   },
   {
+    name: 'cli-demo-handlers-after-banner',
+    claim: '--demo installs its signal handlers before it prints the banner a fast SIGTERM reacts to',
+    edits: [
+      [
+        CLI,
+        '    const quit = () => void hq.close();\n    for (const signal of DEMO_SIGNALS) process.on(signal, quit);\n    io.out(`Demo data from ${source.label} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);\n    if (!noOpen) openBrowser(hq.url);\n',
+        '    io.out(`Demo data from ${source.label} at ${hq.url} (pid ${hq.pid}). Press Ctrl-C to stop.`);\n    if (!noOpen) openBrowser(hq.url);\n    const quit = () => void hq.close();\n    for (const signal of DEMO_SIGNALS) process.on(signal, quit);\n',
+      ],
+    ],
+  },
+  {
     name: 'cli-demo-bad-fixture-code',
     claim: 'a bad events file exits 2',
     edits: [

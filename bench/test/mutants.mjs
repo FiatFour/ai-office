@@ -453,8 +453,8 @@ const MUTANTS = [
     edits: [
       [
         'bench/report.ts',
-        'const windows = sum(setB, (r) => r.quotaWindows);',
-        'const windows = sum(factory, (r) => r.quotaWindows);',
+        'const measuredWindows = sum(setB, (r) => r.quotaWindows);',
+        'const measuredWindows = sum(factory, (r) => r.quotaWindows);',
       ],
     ],
     tests: [REPORT],

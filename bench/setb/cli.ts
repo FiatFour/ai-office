@@ -5,7 +5,16 @@ import { parseArgs } from 'node:util';
 import { ghReadPull } from '../merge-state.ts';
 import { TaskRefused } from '../model.ts';
 import { fetchPacket, ghHub, ghPullFiles, type Hub } from './fetch.ts';
-import { claudeModel, type Judged, recordVoid, refuseAfterVoids, runJudge, voidsLogPath } from './judge.ts';
+import {
+  claudeModel,
+  type Judged,
+  judgedOutPath,
+  recordVoid,
+  refuseAfterVoids,
+  runJudge,
+  voidScanDirs,
+  voidsLogPath,
+} from './judge.ts';
 import { assignLabels, type Entry, type Sealed, sealedEntry } from './labels.ts';
 import { ciFrom, gradeSetB, readWindow } from './outcome.ts';
 import { buildPacket, isUnreadable, type Packet, type Unreadable } from './packet.ts';
@@ -131,10 +140,10 @@ const main = async (argv: string[]): Promise<number> => {
       throw new TaskRefused('not run, needs operator login confirmation');
     const list = loadFrozen(values.dir);
     const key = read<Sealed[]>(need('key'));
-    const out = need('out');
+    const out = judgedOutPath(values.dir, need('out'));
     if (existsSync(out)) throw new TaskRefused(`${out} already exists, judge writes a new file for each run`);
     const voids = voidsLogPath(values.dir, shaOf(readFileSync(join(values.dir, TASKS_FILE))));
-    refuseAfterVoids(voids, [values.dir, dirname(resolve(out))]);
+    refuseAfterVoids(voids, voidScanDirs(values.dir));
     const { packets, unreadable } = await realPackets(ghHub, list, key);
     const seeded = seededPackets(read<Seed[]>(values.seeded), key, list);
     const run = await runJudge(

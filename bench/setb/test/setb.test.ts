@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { GITHUB_WRITES } from '../../../server/githost/github.ts';
@@ -146,7 +146,7 @@ describe('the frozen task list', () => {
         spawnSync(process.execPath, [join(SETB, 'cli.ts'), ...args, '--dir', dir], { encoding: 'utf8', env });
       const labelled = run('label', '--entries', join(dir, 'entries.json'), '--key', join(dir, 'k.json'));
       expect(labelled.status, labelled.stderr).toBe(0);
-      const judge = (out: string) => run('judge', '--key', join(dir, 'k.json'), '--out', join(dir, out));
+      const judge = (out: string) => run('judge', '--key', join(dir, 'k.json'), '--out', join(dir, 'judged', out));
       return { dir, judge, log: voidsLogPath(dir, shaOf(bytes)) };
     };
 
@@ -162,12 +162,12 @@ describe('the frozen task list', () => {
         expect(ran.status, ran.stderr).toBe(4);
         expect(ran.stdout).toMatch(/^VOID: /);
         expect(readFileSync(log, 'utf8').split('\n').filter(Boolean), out).toHaveLength(i + 1);
-        expect(existsSync(join(dir, `${out}.voids.log`))).toBe(false);
+        expect(existsSync(join(dir, 'judged', `${out}.voids.log`))).toBe(false);
       }
       const fourth = judge('d.json');
       expect(fourth.status).toBe(3);
       expect(fourth.stderr).toMatch(/3 judge runs were void/);
-      expect(existsSync(join(dir, 'd.json'))).toBe(false);
+      expect(existsSync(join(dir, 'judged', 'd.json'))).toBe(false);
     });
 
     it('keeps the count when the voids log is deleted, because the voided --out files remain', () => {
@@ -180,14 +180,27 @@ describe('the frozen task list', () => {
       expect(fourth.stderr).toMatch(/3 judge runs were void/);
     });
 
-    it('counts the voided --out files of another directory named by --out', () => {
+    it('refuses an --out outside the fixed judged folder, so a new directory cannot reset the count', () => {
       const { dir, judge } = setup();
+      for (const out of ['a.json', 'b.json']) expect(judge(out).status).toBe(4);
       const elsewhere = tempDir('setb-elsewhere');
-      for (const out of ['x.json', 'y.json', 'z.json'])
-        writeFileSync(join(elsewhere, out), '{"voided":"a seeded PR passed","judged":[],"unreadable":[]}\n');
-      const ran = judge(join(relative(dir, elsewhere), 'new.json'));
-      expect(ran.status).toBe(3);
-      expect(existsSync(join(dir, 'voids'))).toBe(false);
+      for (const out of [join(elsewhere, 'new.json'), join(dir, 'new.json'), join(dir, 'judged', 'sub', 'new.json')]) {
+        const ran = spawnSync(
+          process.execPath,
+          [join(SETB, 'cli.ts'), 'judge', '--key', join(dir, 'k.json'), '--out', out, '--dir', dir],
+          { encoding: 'utf8', env: { ...process.env, AW_BENCH_LOGIN_CONFIRMED: '1' } },
+        );
+        expect(ran.status, out).toBe(3);
+        expect(ran.stderr).toMatch(/--out must be a file directly inside/);
+        expect(existsSync(out)).toBe(false);
+      }
+    });
+
+    it('creates the judged folder, so a void is recorded even when it did not exist', () => {
+      const { dir, judge, log } = setup();
+      expect(existsSync(join(dir, 'judged'))).toBe(false);
+      expect(judge('a.json').status).toBe(4);
+      expect(readFileSync(log, 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
     });
 
     it('refuses a run that finds the void limit already reached, whatever --out is named', () => {
@@ -201,11 +214,12 @@ describe('the frozen task list', () => {
 
     it('does not overwrite an --out that already exists', () => {
       const { dir, judge, log } = setup();
-      writeFileSync(join(dir, 'taken.json'), 'keep');
+      mkdirSync(join(dir, 'judged'), { recursive: true });
+      writeFileSync(join(dir, 'judged', 'taken.json'), 'keep');
       const ran = judge('taken.json');
       expect(ran.status).toBe(3);
       expect(ran.stderr).toMatch(/already exists/);
-      expect(readFileSync(join(dir, 'taken.json'), 'utf8')).toBe('keep');
+      expect(readFileSync(join(dir, 'judged', 'taken.json'), 'utf8')).toBe('keep');
       expect(existsSync(log)).toBe(false);
     });
   });
@@ -403,6 +417,15 @@ describe('the judge packet', () => {
     expect(text).not.toContain('pr-12345678');
     expect(text).not.toContain('a'.repeat(40));
     expect(text).not.toMatch(/factory|baseline/i);
+  });
+
+  it('puts the VERDICT contract sentence in the rendered prompt, after the rubric and before the issue', () => {
+    const text = renderPrompt(packet('pr-12345678'));
+    const contract = 'end your reply with exactly one final line';
+    expect(text).toContain(contract);
+    expect(text).toContain('No earlier line may begin with the word VERDICT and a colon');
+    expect(text.indexOf(contract)).toBeLessThan(text.indexOf('## Issue:'));
+    expect(text.startsWith(RUBRIC)).toBe(true);
   });
 
   it('refuses a diff that holds a trailer or a session line, and an extra secret', () => {

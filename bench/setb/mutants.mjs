@@ -177,7 +177,7 @@ const MUTANTS = [
   {
     name: 'judge-void-cap-unchecked',
     claim: 'the judge command refuses to run once the voids log holds three lines',
-    edits: [['bench/setb/cli.ts', '    refuseAfterVoids(voids, [values.dir, dirname(resolve(out))]);\n', '']],
+    edits: [['bench/setb/cli.ts', '    refuseAfterVoids(voids, voidScanDirs(values.dir));\n', '']],
     tests: [SETB],
   },
   {
@@ -548,6 +548,24 @@ const MUTANTS = [
         'if (false) candidates.push(forced as string);',
       ],
     ],
+    tests: [SETB],
+  },
+  {
+    name: 'prompt-drops-verdict-contract',
+    claim: 'the rendered judge prompt carries the VERDICT contract sentence',
+    edits: [[P, '    RUBRIC,\n', "    RUBRIC.split('Reason briefly')[0],\n"]],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-out-anywhere',
+    claim: '--out must sit in the fixed judged folder so a new directory cannot reset the void count',
+    edits: [['bench/setb/cli.ts', "judgedOutPath(values.dir, need('out'))", "need('out')"]],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-scan-narrowed',
+    claim: 'voided outputs in the judged folder count toward the cap',
+    edits: [[J, 'join(dir, JUDGED_DIR)]', ']']],
     tests: [SETB],
   },
   {

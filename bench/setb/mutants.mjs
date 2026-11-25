@@ -648,13 +648,13 @@ const MUTANTS = [
   {
     name: 'arms-final-rerun',
     claim: 'a finished arm is never run again, a quota stop is',
-    edits: [['bench/setb/run.ts', "r.status === 'done' || r.status === 'failed'", "r.status === 'done'"]],
+    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status === 'done'"]],
     tests: [ARMT],
   },
   {
     name: 'arms-quota-final',
     claim: 'a usage-limit stop says nothing about the arm and runs again',
-    edits: [['bench/setb/run.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'aborted'"]],
+    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'aborted'"]],
     tests: [ARMT],
   },
   {

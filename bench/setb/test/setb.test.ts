@@ -29,6 +29,7 @@ import { ownerOf } from '../owned.ts';
 import {
   armLeaks,
   buildPacket,
+  type Ci,
   fenceFor,
   isUnreadable,
   type Packet,
@@ -43,6 +44,7 @@ import {
   loadFrozen,
   parseTaskList,
   SET_B_SIZE,
+  type SetBTask,
   SHA_FILE,
   shaOf,
   TASKS_FILE,
@@ -53,6 +55,8 @@ const realGit: Git = (cwd, args) => {
   return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
 };
 
+const REAL_HEAD = 'e'.repeat(40);
+const REAL_DIFF = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old line\n+the real added line\n';
 const SETB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT = join(SETB, '..', '..');
 const raw = () => JSON.parse(readFileSync(join(SETB, TASKS_FILE), 'utf8')) as { tasks: Record<string, unknown>[] };
@@ -137,20 +141,42 @@ describe('the frozen task list', () => {
       const bytes = readFileSync(join(SETB, TASKS_FILE));
       writeFileSync(join(dir, TASKS_FILE), bytes);
       writeFileSync(join(dir, SHA_FILE), `${shaOf(bytes)}\n`);
-      writeFileSync(join(dir, 'entries.json'), '[]');
+      const real = loadFrozen(SETB).tasks[0] as SetBTask;
+      writeFileSync(
+        join(dir, 'entries.json'),
+        JSON.stringify([{ task: real.id, arm: 'factory', pr: 1, readyHeadSha: REAL_HEAD }]),
+      );
       const bin = join(dir, 'bin');
       mkdirSync(bin);
       writeFileSync(
         join(bin, 'claude'),
-        `#!/bin/sh\ncat > '${join(dir, 'stdin.txt')}'\necho 'VERDICT: MERGE AS IS'\n`,
+        `#!/bin/sh\ncat >> '${join(dir, 'stdin.txt')}'\necho 'VERDICT: MERGE AS IS'\n`,
+        { mode: 0o755 },
+      );
+      const run = { head_sha: REAL_HEAD, status: 'completed', conclusion: 'success' };
+      writeFileSync(join(dir, 'checks.json'), JSON.stringify({ total_count: 2, check_runs: [run, run] }));
+      writeFileSync(join(dir, 'real.diff'), REAL_DIFF);
+      writeFileSync(
+        join(bin, 'gh'),
+        [
+          '#!/bin/sh',
+          'for last; do :; done',
+          'case "$last" in',
+          `  */check-runs*) cat '${join(dir, 'checks.json')}';;`,
+          `  */compare/*) cat '${join(dir, 'real.diff')}';;`,
+          `  */pulls/1) echo '{"head":{"sha":"${REAL_HEAD}","ref":"aw/bench/t-0a1b2c3d-r1"},"base":{"sha":"b"},"labels":[]}';;`,
+          '  *) exit 1;;',
+          'esac',
+          '',
+        ].join('\n'),
         { mode: 0o755 },
       );
       const env = { ...process.env, AW_BENCH_LOGIN_CONFIRMED: '1', PATH: `${bin}:${process.env.PATH ?? ''}` };
-      const run = (...args: string[]) =>
+      const cli = (...args: string[]) =>
         spawnSync(process.execPath, [join(SETB, 'cli.ts'), ...args, '--dir', dir], { encoding: 'utf8', env });
-      const labelled = run('label', '--entries', join(dir, 'entries.json'), '--key', join(dir, 'k.json'));
+      const labelled = cli('label', '--entries', join(dir, 'entries.json'), '--key', join(dir, 'k.json'));
       expect(labelled.status, labelled.stderr).toBe(0);
-      const judge = (out: string) => run('judge', '--key', join(dir, 'k.json'), '--out', join(dir, 'judged', out));
+      const judge = (out: string) => cli('judge', '--key', join(dir, 'k.json'), '--out', join(dir, 'judged', out));
       return { dir, judge, log: voidsLogPath(dir, shaOf(bytes)) };
     };
 
@@ -182,6 +208,25 @@ describe('the frozen task list', () => {
       expect(piped).toContain('Reason briefly');
       expect(piped).toContain('No earlier line may begin with the word VERDICT and a colon');
       expect(piped.startsWith(RUBRIC)).toBe(true);
+    });
+
+    it('pipes the issue text, the diff and the CI result of every packet to the model process', () => {
+      const { dir, judge } = setup();
+      expect(judge('a.json').status).toBe(4);
+      const piped = readFileSync(join(dir, 'stdin.txt'), 'utf8');
+      const tasks = loadFrozen(SETB).tasks;
+      const seeds = JSON.parse(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')) as Seed[];
+      for (const id of [(tasks[0] as SetBTask).id, ...seeds.map((s) => s.task)])
+        expect(piped, id).toContain(tasks.find((t) => t.id === id)?.body);
+      for (const diff of [REAL_DIFF, ...seeds.map((s) => s.diff)]) {
+        const added = diff.split('\n').filter((l) => l.startsWith('+'));
+        expect(added.length).toBeGreaterThan(0);
+        for (const line of added) expect(piped).toContain(line);
+      }
+      expect(
+        piped.split('2 checks passed or were skipped'),
+        'seeded packets show the real run check count',
+      ).toHaveLength(4);
     });
 
     it('records the void before it writes the output, so a failed write loses nothing', () => {
@@ -445,7 +490,7 @@ const packet = (label: string, over: Partial<Packet> = {}): Packet => ({
   headSha: 'a'.repeat(40),
   issue: { title: 'issue title', body: 'issue body' },
   diff: 'diff --git a/x b/x\n+fix',
-  ci: { sha: 'a'.repeat(40), state: 'green', note: 'all passed' },
+  ci: { sha: 'a'.repeat(40), state: 'green', note: 'all passed', checks: 3 },
   ...over,
 });
 
@@ -705,6 +750,64 @@ describe('judge calibration', () => {
     expect(args).toContain('--no-session-persistence');
   });
 
+  const green = (sha: string, n: number) =>
+    ciFrom(
+      sha,
+      Array.from({ length: n }, () => ({ head_sha: sha, status: 'completed', conclusion: 'success' })),
+    );
+  const realPacket = (label: string, ci: Ci): Packet => ({
+    label,
+    headSha: 'd'.repeat(40),
+    issue: { title: 't', body: 'b' },
+    diff: REAL_DIFF,
+    ci,
+  });
+  const seededWith = (real: readonly Packet[], draw?: (below: number) => number) => {
+    const seeds = JSON.parse(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')) as Seed[];
+    const key = assignLabels(
+      seeds.map((s, i) => ({ task: s.task, arm: 'seeded' as const, pr: -(i + 1), readyHeadSha: 'c'.repeat(40) })),
+    );
+    return seededPackets(seeds, key, loadFrozen(SETB), real, draw);
+  };
+  const ciSection = (p: Packet): string => renderPrompt(p).split('## CI result: ')[1]?.split('## Diff')[0] as string;
+
+  it('renders the CI section of a seeded PR exactly as that of a real PR of the same run, whatever the count', () => {
+    for (const n of [22, 5]) {
+      const real = realPacket('pr-real', green('d'.repeat(40), n));
+      for (const p of seededWith([real, { ...real }])) {
+        expect(ciSection(p)).toBe(ciSection(real));
+        expect(p.ci.checks).toBe(n);
+      }
+    }
+    expect(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')).not.toContain('"checks"');
+  });
+
+  it('gives each seeded PR the count of one real green PR drawn at random when the real counts differ', () => {
+    const red = ciFrom('d'.repeat(40), [{ head_sha: 'd'.repeat(40), status: 'completed', conclusion: 'failure' }]);
+    const real = [22, 24, 23].map((n, i) => realPacket(`pr-${i}`, green('d'.repeat(40), n)));
+    const draws = [2, 1];
+    const asked: number[] = [];
+    const made = seededWith([realPacket('pr-red', red), ...real], (below) => {
+      asked.push(below);
+      return draws.shift() as number;
+    });
+    expect(asked, 'one draw per seeded PR, over the green PRs only').toEqual([3, 3]);
+    expect(made.map((p) => p.ci.checks)).toEqual([23, 24]);
+  });
+
+  it('copies the count of a red PR when no PR is green, and refuses when no real PR has checks', () => {
+    const red = ciFrom(
+      'd'.repeat(40),
+      [1, 2].map(() => ({ head_sha: 'd'.repeat(40), status: 'completed', conclusion: 'failure' })),
+    );
+    expect(seededWith([realPacket('pr-red', red)]).map((p) => p.ci.note)).toEqual([
+      '2 checks passed or were skipped',
+      '2 checks passed or were skipped',
+    ]);
+    for (const real of [[], [realPacket('pr-none', ciFrom('d'.repeat(40), []))]])
+      expect(() => seededWith(real)).toThrow(/no count to copy/);
+  });
+
   it('ships two seeded-bad PRs that read like real ones: the task issue text, a ciFrom note, a diff git applies', () => {
     const seeds = JSON.parse(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')) as Seed[];
     expect(seeds).toHaveLength(CALIBRATION_SIZE);
@@ -712,23 +815,12 @@ describe('judge calibration', () => {
     const key = assignLabels(
       seeds.map((s, i) => ({ task: s.task, arm: 'seeded' as const, pr: -(i + 1), readyHeadSha: 'c'.repeat(40) })),
     );
-    const made = seededPackets(seeds, key, list);
+    const made = seededPackets(seeds, key, list, [realPacket('pr-real', green('d'.repeat(40), 22))]);
     for (const [i, p] of made.entries()) {
       const seed = seeds.find((s) => key.find((k) => k.label === p.label)?.entry.task === s.task) as Seed;
       const task = list.tasks.find((t) => t.id === seed.task);
       expect(p.issue).toEqual({ title: task?.title, body: task?.body });
-      expect(p.ci).toEqual(
-        ciFrom(
-          'c'.repeat(40),
-          Array.from({ length: seed.checks }, () => ({
-            head_sha: 'c'.repeat(40),
-            status: 'completed',
-            conclusion: 'success',
-          })),
-        ),
-      );
-      expect(seed.checks, 'the check count of a green head of main').toBe(18);
-      expect(p.ci.note).toBe('18 checks passed or were skipped');
+      expect(p.ci).toEqual(green('c'.repeat(40), 22));
       expect(p.issue.title, String(i)).not.toMatch(/^#\d/);
       expect(armLeaks(p.diff)).toEqual([]);
     }
@@ -871,7 +963,7 @@ describe('Set B outcome', () => {
     entry: { task: 't1', arm: 'factory', pr: 7, readyHeadSha: READY },
     judged: { label: 'pr-1', verdict: 'MERGE AS IS', editLines: 0, headSha: READY, judgeMinutes: 2 },
     pull: { head: { sha: READY } },
-    ci: { sha: READY, state: 'green', note: '' },
+    ci: { sha: READY, state: 'green', note: '', checks: 3 },
     paths: ['src/a.ts'],
     wallMs: 1000,
     tokens: { input: 100, output: 100, cacheRead: 0, cacheCreation: 0 },
@@ -912,10 +1004,10 @@ describe('Set B outcome', () => {
   it.each<[string, Partial<Grading>, RegExp]>([
     ['a head that moved', { pull: { head: { sha: MOVED } } }, /head moved/],
     ['a judgement of another head', { judged: { ...grading().judged, headSha: MOVED } }, /judged bbbbbbb/],
-    ['CI read at another head', { ci: { sha: MOVED, state: 'green', note: '' } }, /CI read at bbbbbbb/],
-    ['red CI', { ci: { sha: READY, state: 'red', note: '1 of 3' } }, /CI red/],
-    ['pending CI', { ci: { sha: READY, state: 'pending', note: '' } }, /CI pending/],
-    ['no CI', { ci: { sha: READY, state: 'none', note: '' } }, /CI none/],
+    ['CI read at another head', { ci: { sha: MOVED, state: 'green', note: '', checks: 3 } }, /CI read at bbbbbbb/],
+    ['red CI', { ci: { sha: READY, state: 'red', note: '1 of 3', checks: 3 } }, /CI red/],
+    ['pending CI', { ci: { sha: READY, state: 'pending', note: '', checks: 3 } }, /CI pending/],
+    ['no CI', { ci: { sha: READY, state: 'none', note: '', checks: 3 } }, /CI none/],
     ['a reject', { judged: { ...grading().judged, verdict: 'REJECT' } }, /judge rejects/],
     ['a workflow edit', { paths: ['src/a.ts', '.github/workflows/ci.yml'] }, /touches \.github/],
   ])('fails on %s', (_name, over, why) => {
@@ -995,7 +1087,7 @@ describe('the packet is built from the PR at the ready head and the frozen task'
       calls.push(`${base}...${head}`);
       return 'diff --git a/x b/x\n+fix';
     },
-    ci: async (_r, sha) => ({ sha, state: 'green', note: '3 checks passed or were skipped' }),
+    ci: async (_r, sha) => ({ sha, state: 'green', note: '3 checks passed or were skipped', checks: 3 }),
     ...over,
   });
   const task = loadFrozen(SETB).tasks[0] as ReturnType<typeof loadFrozen>['tasks'][number];
@@ -1015,7 +1107,7 @@ describe('the packet is built from the PR at the ready head and the frozen task'
   });
 
   it('keeps a CI result of another head, so grading can see it', async () => {
-    const stale = hub({ ci: async () => ({ sha: 'b'.repeat(40), state: 'green' as const, note: 'n' }) });
+    const stale = hub({ ci: async () => ({ sha: 'b'.repeat(40), state: 'green' as const, note: 'n', checks: 3 }) });
     expect(await fetchPacket(stale, 'r', entry, 'pr-1', task)).toMatchObject({ ci: { sha: 'b'.repeat(40) } });
   });
 });
@@ -1035,7 +1127,7 @@ describe('one bad packet does not kill the batch', () => {
       labels: [],
     }),
     diff: async () => 'diff --git a/x b/x\n+fix',
-    ci: async (_r, sha) => ({ sha, state: 'green', note: '3 checks passed or were skipped' }),
+    ci: async (_r, sha) => ({ sha, state: 'green', note: '3 checks passed or were skipped', checks: 3 }),
   };
 
   it('turns a gh failure on one packet into an unreadable record and keeps reading the rest', async () => {
@@ -1053,6 +1145,22 @@ describe('one bad packet does not kill the batch', () => {
       { label: 'pr-1111aaaa', reason: expect.stringContaining('unreadable by fetch: gh failed on compare') },
     ]);
     expect(made.packets.map((p) => p.label)).toEqual(['pr-2222bbbb']);
+  });
+
+  it('refuses to judge while any real PR has CI still pending', async () => {
+    const sealed = assignLabels(
+      frozen.tasks
+        .slice(0, 2)
+        .map((t, i) => ({ task: t.id, arm: 'factory' as const, pr: i + 1, readyHeadSha: 'a'.repeat(40) })),
+    );
+    let reads = 0;
+    const hub: Hub = {
+      pull: async () => ({ head: { sha: 'a'.repeat(40), ref: 'aw/x' }, base: { sha: 'b'.repeat(40) }, labels: [] }),
+      diff: async () => 'diff --git a/x b/x\n+fix',
+      ci: async (_repo, sha) => ({ sha, state: ++reads === 2 ? 'pending' : 'green', note: 'n', checks: 1 }),
+    };
+    await expect(realPackets(hub, frozen, sealed)).rejects.toThrow(/CI is still pending on pr-/);
+    await expect(realPackets(hub, frozen, sealed)).resolves.toMatchObject({ unreadable: [] });
   });
 
   it('refuses a check-run list longer than the page it read', () => {

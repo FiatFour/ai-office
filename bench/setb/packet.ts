@@ -5,6 +5,8 @@ export interface Ci {
   readonly sha: string;
   readonly state: 'green' | 'red' | 'pending' | 'none';
   readonly note: string;
+  /** How many check runs the head has. */
+  readonly checks: number;
 }
 
 export interface Packet {

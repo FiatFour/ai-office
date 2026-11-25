@@ -232,6 +232,13 @@ export class FakeGithub {
       if (!this.refs.delete(name)) return fail(422, 'Reference does not exist');
       return { status: 204, body: null };
     }
+    m = method === 'GET' ? /^\/git\/matching-refs\/heads\/(.*)$/.exec(rest) : null;
+    if (m)
+      return ok(
+        [...this.refs]
+          .filter(([name]) => name.startsWith(m?.[1] ?? ''))
+          .map(([name, object]) => ({ ref: `refs/heads/${name}`, object: { sha: object } })),
+      );
     m = method === 'GET' ? /^\/git\/commits\/([0-9a-f]+)$/.exec(rest) : null;
     if (m) {
       const files = this.trees.get(m[1] ?? '');

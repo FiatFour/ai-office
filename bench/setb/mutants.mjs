@@ -15,6 +15,12 @@ const R = 'bench/setb/rubric.ts';
 const P = 'bench/setb/packet.ts';
 const J = 'bench/setb/judge.ts';
 const O = 'bench/setb/outcome.ts';
+const AR = 'bench/setb/arms.ts';
+const ARMT = 'bench/setb/test/arms.test.ts';
+const JN = 'bench/setb/journal.ts';
+const LK = 'bench/setb/lock.ts';
+const RN = 'bench/setb/run.ts';
+const C = 'bench/setb/cli.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -160,12 +166,6 @@ const MUTANTS = [
     name: 'prompt-fence-short',
     claim: 'a diff holding triple backticks cannot close the prompt fence',
     edits: [[P, 'm[0].length + 1', '0']],
-    tests: [SETB],
-  },
-  {
-    name: 'seeded-checks-unreal',
-    claim: 'a seeded PR shows the real check count of the frozen base, 18',
-    edits: [['bench/setb/calibration/seeded.json', '"checks": 18', '"checks": 9']],
     tests: [SETB],
   },
   {
@@ -551,6 +551,225 @@ const MUTANTS = [
     tests: [SETB],
   },
   {
+    name: 'arms-pr-not-draft',
+    claim: 'a bench PR opens as a draft',
+    edits: [[AR, "(b.draft === true ? null : 'a bench PR opens as a draft')", 'null']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-pr-opens-ready',
+    claim: 'the host wrapper opens the PR as a draft',
+    edits: [[AR, 'base: spec.base, draft: true', 'base: spec.base, draft: false']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-label-dropped',
+    claim: 'every bench PR carries the aw-bench label',
+    edits: [
+      [AR, 'body: { labels: [BENCH_LABEL] } });\n      const made', 'body: { labels: [] } });\n      const made'],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-any-label',
+    claim: 'the only label the bench may write is aw-bench',
+    edits: [[AR, 'b.labels.length === 1 && b.labels[0] === BENCH_LABEL', 'true']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-workflow-push-allowed',
+    claim: 'a push that changes .github or CODEOWNERS is refused before any write',
+    edits: [[AR, 'if (flows.length > 0) throw', 'if (false) throw']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-merge-allowed',
+    claim: 'no merge write is on the bench allowlist',
+    edits: [
+      [
+        AR,
+        "method: 'PATCH',\n    path: route('pulls/\\\\d+'),",
+        "method: 'PUT',\n    path: route('pulls/\\\\d+/merge'),",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-base-any-sha',
+    claim: 'the base ref is created at the pinned sha only',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[AR, 'b.ref === `refs/heads/${scope.base}` && b.sha === baseSha', 'b.ref === `refs/heads/${scope.base}`']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-base-any-name',
+    claim: 'the base ref lives under aw-bench-base/ only',
+    edits: [[AR, 'BASE_REF.test(scope.base) && ', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-close-any-branch',
+    claim: 'only a bench work branch is closed',
+    edits: [[AR, 'if (!WORK_REF.test(branch)) throw', 'if (false) throw']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-delete-any-ref',
+    claim: 'only the run own refs are deleted',
+    edits: [
+      [
+        AR,
+        'heads\\/(?:aw\\/bench\\/t-[0-9a-f]{8}-r[1-9]\\d{0,2}|aw-bench-base\\/t-[0-9a-f]{8}-r[1-9]\\d{0,2})$/',
+        'heads\\/.+$/',
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-ci-cap-off-by-one',
+    claim: 'at most two PRs run CI at once',
+    edits: [[AR, 'if (running < limit) return;', 'if (running <= limit) return;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-final-rerun',
+    claim: 'a finished arm is never run again, a quota stop is',
+    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status === 'done'"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-quota-final',
+    claim: 'an arm that did not finish says nothing about itself and runs again',
+    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'transient'"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-overload-is-failure',
+    claim: 'a provider overload or 429 is transient, so the capped retries apply',
+    edits: [[AR, "TRANSIENT.test(message) ? 'transient' : null", 'null']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-stderr-ignored',
+    claim: 'a usage limit or overload printed only to claude stderr is read, not turned into no result line',
+    edits: [[AR, 'const result = unsaid(ran);', 'const result = null as string | null;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-stderr-overrides-result',
+    claim: 'a stream that has its own result line keeps it',
+    edits: [[AR, 'if (result === undefined) {', 'if (true as boolean) {']],
+    tests: [ARMT],
+  },
+  {
+    name: 'run-transient-final',
+    claim: 'a transient provider error says nothing about the arm and is not final',
+    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'aborted'"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'run-transient-unclassified',
+    claim: 'classify turns a transient or auth stop into that status',
+    edits: [[RN, 'if (stop !== null) return { status: stop, resetAt: null };', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'run-refusal-done',
+    claim: 'a host refusal after round 0 is recorded as a failure, not as done on the rejected head',
+    edits: [['bench/setb/run.ts', 'if (ran.refused === true)', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-refusal-unflagged',
+    claim: 'the factory arm flags a host refusal so the live run can record it',
+    edits: [['bench/arms-live.ts', 'refused: true,', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-intent-not-written',
+    claim: 'the intent is written to the journal before the first remote write',
+    edits: [
+      [
+        'bench/setb/journal.ts',
+        '  appendLine(file, intent);\n  return { intent, resumed: false };',
+        '  return { intent, resumed: false };',
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-intent-not-reused',
+    claim: 'a resume reuses the journaled salt, branch and base',
+    edits: [['bench/setb/journal.ts', 'if (prior !== undefined) return', 'if (false) return']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-base-unpinned',
+    claim: 'a different --base-sha than the journal header is refused',
+    edits: [['bench/setb/journal.ts', 'if (header !== null && header.baseSha !== baseSha)', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-headerless-accepted',
+    claim: 'a journal with records and no header is refused',
+    edits: [['bench/setb/journal.ts', 'if (intents.length > 0 || runs.length > 0)', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-resume-keeps-unsettled-pr',
+    claim: 'a resumed arm closes an open PR it does not adopt, and drops its refs',
+    edits: [[AR, 'await bench.closeWork(branch);\n  }\n  await bench.dropRefs(branch);', '}']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-resume-never-adopts',
+    claim: 'a resumed baseline adopts the PR the interrupted run left open: one PR per task and arm',
+    edits: [[AR, 'if (await adopt(open)) return open;', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-resume-keeps-refs',
+    claim: 'a resumed arm deletes the refs an interrupted run left, so seeding the base cannot collide',
+    edits: [[AR, '  await bench.dropRefs(branch);\n  return null;', '  return null;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-remote-list-narrow',
+    claim: 'the sweep lists refs under aw/bench/ and aw-bench-base/, found by prefix on the remote',
+    edits: [[AR, "for (const prefix of ['aw/bench/', BASE_PREFIX])", "for (const prefix of ['aw/bench/'])"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-sweep-spares-refs',
+    claim: 'the sweep deletes every bench ref, including those with no PR',
+    edits: [[AR, 'for (const ref of remote.refs.filter(isBenchRef)) {', 'for (const ref of [] as string[]) {']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-sweep-spares-prs',
+    claim: 'the sweep closes every open bench PR',
+    edits: [[AR, "if (p.state === 'open')", 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-sweep-merged-ok',
+    claim: 'the sweep refuses when a bench PR was merged',
+    edits: [[AR, 'if (merged.length > 0)', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-baseline-pr-raw-template',
+    claim: 'the baseline PR uses the factory title and body template',
+    edits: [[AR, 'title: changeTitle(o.ticket),', 'title: o.ticket.title,']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-baseline-body-raw',
+    claim: 'the baseline PR body is the work order the factory writes',
+    edits: [[AR, 'body: workOrder(o.ticket),', 'body: o.ticket.body,']],
+    tests: [ARMT],
+  },
+  {
     name: 'prompt-drops-verdict-contract',
     claim: 'the rendered judge prompt carries the VERDICT contract sentence',
     edits: [[P, '    RUBRIC,\n', "    RUBRIC.split('Reason briefly')[0],\n"]],
@@ -728,6 +947,468 @@ const MUTANTS = [
     claim: 'Set A output carries no Set B baseline line',
     edits: [['bench/report.ts', '...(hasSetB(live(all))', '...(true']],
     tests: [REPORT],
+  },
+  {
+    name: 'seeded-count-hardcoded',
+    claim: 'a seeded PR shows the check count of a real PR of the run, no fixed one',
+    edits: [[C, '{ length: counts[draw(counts.length)] as number }', '{ length: 26 }']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-not-random',
+    claim: 'when the real counts differ each seeded PR draws one',
+    edits: [[C, 'counts[draw(counts.length)]', 'counts[0]']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-any-state',
+    claim: 'green PRs are drawn from when there are any',
+    edits: [[C, '(green.length > 0 ? green : real)', 'real']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-no-fallback',
+    claim: 'with no green PR the count of a red one is used',
+    edits: [[C, '(green.length > 0 ? green : real)', 'green']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-invented',
+    claim: 'a run with no real check count is refused',
+    edits: [[C, 'if (counts.length === 0)\n', 'if (counts.length === 0) return [26];\n  if (false)\n']],
+    tests: [SETB],
+  },
+  {
+    name: 'seeded-count-unwired',
+    claim: 'judge hands the real packets of the run to the seeded ones',
+    edits: [
+      [
+        C,
+        'key, list, packets);',
+        "key, list, [{ ...(packets[0] as Packet), ci: ciFrom('a', Array(26).fill({ head_sha: 'a', status: 'completed', conclusion: 'success' })) }]);",
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'claude-model-drops-packet',
+    claim: 'the issue body and diff reach the model, not only the rubric',
+    edits: [[J, 'input: prompt,', "input: prompt.split('## Issue:')[0] ?? '',"]],
+    tests: [SETB],
+  },
+  {
+    name: 'claude-model-strips-additions',
+    claim: 'every added line of the diff reaches the model',
+    edits: [[J, 'input: prompt,', "input: prompt.replace(/^\\+.*$/gm, ''),"]],
+    tests: [SETB],
+  },
+  {
+    name: 'lock-drive-unheld',
+    claim: 'drive takes the lock before it touches the host',
+    edits: [[RN, '    holdLock(lockFile, command);\n    if (setAsideTorn', '    if (setAsideTorn']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-close-unheld',
+    claim: 'close and reconcile take the lock before they touch the host',
+    edits: [[RN, '    holdLock(lockFile, command);\n    checkBase(', '    checkBase(']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-not-exclusive',
+    claim: 'the lock file is created exclusively',
+    edits: [[LK, "{ flag: 'wx' }", "{ flag: 'w' }"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-live-broken',
+    claim: 'a lock whose process runs is never taken over',
+    edits: [[LK, 'if (alive(held.pid))', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-stale-kept',
+    claim: 'a lock whose process is gone is taken over',
+    edits: [[LK, 'if (alive(held.pid))', 'if (true)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-break-shared',
+    claim: 'only one process at a time clears a stale lock',
+    edits: [[LK, 'if (!createExclusive(breaker, String(process.pid)))', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-release-any',
+    claim: 'only the own lock is released',
+    edits: [[LK, "if (readFileSync(file, 'utf8') === mine) unlinkSync(file);", 'unlinkSync(file);']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-kept-on-exit',
+    claim: 'the lock is released on exit',
+    edits: [[LK, "process.on('exit', acquireLock(file, command));", 'acquireLock(file, command);']],
+    tests: [ARMT],
+  },
+  {
+    name: 'lock-kept-on-signal',
+    claim: 'the lock is released on signals',
+    edits: [[LK, 'const exit = () => process.exit(code);', 'const exit = () => void code;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-torn-crashes',
+    claim: 'a torn last line is skipped, not a crash',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[JN, "`${whole}${torn === null ? tail : ''}`", '`${whole}${tail}`']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-torn-glued',
+    claim: 'a torn line is set aside before the next append',
+    edits: [[JN, '  setAsideTorn(file);\n  const gap', '  const gap']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-torn-discarded',
+    claim: 'the torn text is kept in a side file',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[JN, '  writeDurably(`${file}.torn`, `${tail}\\n`);\n', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-newline-missing',
+    claim: 'a whole last line without newline is not glued onto',
+    edits: [[JN, "textOf(file).tail === '' ? '' : '\\n'", "''"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-torn-silent',
+    claim: 'every command reports the torn line',
+    edits: [[RN, 'if (torn !== null)\n', 'if (false)\n']],
+    tests: [ARMT],
+  },
+  {
+    name: 'journal-records-base-unchecked',
+    claim: 'a header that disagrees with intent or run records is refused',
+    edits: [[JN, 'if (header !== null && other !== undefined)', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-unanchored',
+    claim: 'a transient stop is a provider message, not a word anywhere',
+    edits: [[AR, '/(?:^|claude ended with [\\w ]+?: )', '/(?:)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-line-first-wins',
+    claim: 'an auth line anywhere is the one reported',
+    edits: [[AR, "lines.find((l) => stopOf(l) === 'auth') ??", 'lines.find((l) => stopOf(l) !== null) ??']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-auth-under-result',
+    claim: 'auth on stderr beats a non-successful result',
+    edits: [[AR, "if (stopOf(line) === 'auth' && stopOf(said) !== 'auth') return line;", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-overrides-success',
+    claim: 'a successful result is left alone',
+    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-stdout-auth-ignored',
+    claim: 'a line claude printed on stdout counts too',
+    edits: [[AR, '[ran.err, ...printed].join', '[ran.err].join']],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-empty-reply-failed',
+    claim: 'an empty reply is recorded with its exit code',
+    edits: [[AR, "    return text === ''", "    if (text === '') return null;\n    return text === ''"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'stop-execution-error-opaque',
+    claim: 'Execution error is explained by what stderr says',
+    edits: [[AR, 'return generic ? line : null;', 'return null;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'adopt-any-review',
+    claim: "vega's last review of the head decides",
+    edits: [[AR, 'reviews.slice(last).every(', 'reviews.slice(reviews.length).every(']],
+    tests: [ARMT],
+  },
+  {
+    name: 'adopt-first-review',
+    claim: 'the last review of the head counts, not the first',
+    edits: [[AR, 'reviews.findLastIndex(', 'reviews.findIndex(']],
+    tests: [ARMT],
+  },
+  {
+    name: 'adopt-host-changes-ignored',
+    claim: 'a host changes verdict after the approval blocks the adopt',
+    edits: [[AR, "r.verdict !== 'changes' && ", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'adopt-no-review-needed',
+    claim: 'a head vega never reviewed is not adopted',
+    edits: [[AR, 'last >= 0 &&', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'sweep-label-only',
+    claim: 'close finds a PR that was never labelled, by its head prefix',
+    edits: [[AR, "!p.head.ref.startsWith('aw/bench/') && !labelled", '!labelled']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-transient-uncapped',
+    claim: 'the third transient error stops with 75',
+    edits: [[RN, 'if (tried + 1 >= TRANSIENT_CAP) {', 'if (tried + 1 >= TRANSIENT_CAP + 1) {']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-prior-transients-ignored',
+    claim: 'transient errors recorded earlier count',
+    edits: [[RN, 'if (tried >= TRANSIENT_CAP) {', 'if (false) {']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-no-stop-file',
+    claim: 'a login failure writes STOP',
+    edits: [[RN, 'writeFileSync(deps.stopFile,', 'void (deps.stopFile,']],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-auth-code',
+    claim: 'a login failure exits 5',
+    edits: [[RN, '        return 5;', '        return 75;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'default-final',
+    claim: 'an unknown failure is never final: flipping the default back is caught',
+    edits: [
+      [
+        RN,
+        "return { status: 'aborted', resetAt: resetAt(message, now) };",
+        "return { status: 'failed', resetAt: null };",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'unknown-is-outcome',
+    claim: 'a message nobody has seen is not a task outcome',
+    edits: [[AR, "'the fix round changed no file$',", "'the fix round changed no file$',\n  '',"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-unanchored',
+    claim: 'a task outcome is a message from its start, not a phrase inside another',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[AR, 'new RegExp(`${FACTORY_WRAPPERS}${form}`)', 'new RegExp(form)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-no-diff-dropped',
+    claim: 'a session that committed nothing is final',
+    edits: [[AR, "'claude finished without committing a change$',", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-max-turns-dropped',
+    claim: 'max turns is final',
+    edits: [[AR, "You['’]ve hit your max turns|", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-long-prompt-dropped',
+    claim: 'a prompt that is too long is final',
+    edits: [[AR, '|Prompt is too long)', '|x^)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-time-limit-dropped',
+    claim: 'the session time limit is final',
+    edits: [[AR, "'claude ran past its time limit$',", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-review-reader-dropped',
+    claim: 'an unreadable review is a review loop that ended without approval',
+    edits: [[AR, "'the reviewer gave no json block with a verdict ',", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-github-guard-dropped',
+    claim: 'a refused .github push is final',
+    edits: [[AR, 'String.raw`refusing to push a change under \\.github: `,', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-bench-line-counts',
+    claim: 'what the bench wrote from stderr is never a task outcome',
+    edits: [[AR, "const ABNORMAL = 'bench_abnormal';", "const ABNORMAL = 'error_during_execution';"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'auth-login-expired-missed',
+    claim: 'an expired login writes the STOP file',
+    edits: [[AR, 'Login expired|', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'success-nonzero-exit-accepted',
+    claim: 'a nonzero exit is never a finished session',
+    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", "if (said !== '') return null;"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'success-empty-reply-accepted',
+    claim: 'an empty reply is never a finished session',
+    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", 'if (ran.code === 0) return null;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'cage-git-failure-ignored',
+    claim: 'a failed git in the cage is not a session with no change',
+    edits: [[AR, "if (argv[0] === 'git' && ran.code !== 0)", 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'timeout-stderr-stop-ignored',
+    claim: 'a stop printed while claude ran out of time is not final',
+    edits: [[AR, 'return stopOf(line) === null ? ran : withResult({ ...ran, timedOut: false }, line);', 'return ran;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'reset-zone-throws',
+    claim: 'text in parentheses that is no time zone does not crash the driver',
+    edits: [[AR, '} catch {\n    return null;\n  }\n};', '} catch (error) {\n    throw error;\n  }\n};']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arm-timeout-not-final',
+    claim: "the arm's time limit is final",
+    edits: [[RN, 'signal.reason instanceof ArmTimeout &&', 'false &&']],
+    tests: [ARMT],
+  },
+  {
+    name: 'any-abort-final',
+    claim: 'only the arm time limit makes an abort final',
+    edits: [[RN, 'signal.reason instanceof ArmTimeout &&', 'signal.aborted &&']],
+    tests: [ARMT],
+  },
+  {
+    name: 'timeout-hides-other-errors',
+    claim: 'an error that is not the abort stays aborted even after the time limit',
+    edits: [[RN, '(error === signal.reason ||', '(true ||']],
+    tests: [ARMT],
+  },
+  {
+    name: 'no-pr-final',
+    claim: 'a finished arm with no PR found is not final',
+    edits: [
+      [RN, "return { ...common, status: 'aborted', pr: null,", "return { ...common, status: 'failed', pr: null,"],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'any-refusal-final',
+    claim: 'only a refused .github or hidden path push is final',
+    edits: [[RN, "const status = isTaskOutcome(ran.note) ? 'failed' : 'aborted';", "const status = 'failed';"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-goes-on-after-abort',
+    claim: 'an arm that did not finish stops the driver',
+    edits: [
+      [
+        RN,
+        "if (isFinal(record)) break;\n      if (record.status !== 'transient') {",
+        "if (record.status !== 'transient') break;\n      if (false) {",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'base-any',
+    claim: 'only the pinned base is accepted',
+    edits: [[RN, 'if (flag !== undefined && flag !== PINNED_BASE)', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'orphans-ignored',
+    claim: 'drive refuses a remote with bench work it does not know',
+    edits: [[RN, "await refuseOrphans(cliTransport('gh', 'github.com'), REPO, runsFile);", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'orphan-pulls-and-refs-passed',
+    claim: 'an unknown ref is an orphan',
+    edits: [[RN, 'if (refs.length === 0 && pulls.length === 0) return;', 'return;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'leftovers-kept-at-start',
+    claim: 'drive removes the containers a killed drive left',
+    edits: [[RN, 'const removed = await removeLeftovers(await engineOrRefuse());', 'const removed: string[] = [];']],
+    tests: [ARMT],
+  },
+  {
+    name: 'leftovers-any-container',
+    claim: 'only containers with the bench label are removed',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[RN, "'ps', '-aq', '--filter', `label=${PROJECT_LABEL}=${BENCH_PROJECT}`", "'ps', '-aq'"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'signal-leaves-cage',
+    claim: 'a signal removes the running cage',
+    edits: [[RN, 'await driver?.removeAll();\n  });', '});']],
+    tests: [ARMT],
+  },
+  {
+    name: 'signal-skips-cleanups',
+    claim: 'a signal runs the registered cleanups before it exits',
+    edits: [[LK, '[...cleanups].map(async (cleanup) => cleanup())', '[]']],
+    tests: [ARMT],
+  },
+  {
+    name: 'shared-lock-drive-absent',
+    claim: 'drive takes the lock every checkout shares',
+    edits: [
+      [
+        RN,
+        "const baseSha = baseShaOf(values['base-sha']);\n    holdLock(sharedLock, command);",
+        "const baseSha = baseShaOf(values['base-sha']);",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'judge-pending-ci',
+    claim: 'judge does not start while a real PR has pending CI',
+    edits: [[C, 'if (pending.length > 0)', 'if (false)']],
+    tests: [SETB],
+  },
+  {
+    name: 'shared-lock-close-absent',
+    claim: 'close and reconcile take the lock every checkout shares',
+    edits: [
+      [
+        RN,
+        'holdLock(sharedLock, command);\n    holdLock(lockFile, command);\n    checkBase',
+        'holdLock(lockFile, command);\n    checkBase',
+      ],
+    ],
+    tests: [ARMT],
   },
 ];
 

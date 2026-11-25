@@ -632,7 +632,7 @@ const BREAKERS = [
     what: 'a requestAnimationFrame loop moving an element by margin-left',
     check: checkMotion,
     inject:
-      "{ const el = document.createElement('div'); el.style.cssText = 'position:fixed;top:0;left:0;width:4px;height:4px'; document.body.append(el); let n = 0; const step = () => { el.style.marginLeft = (n++ % 40) + 'px'; requestAnimationFrame(step); }; step(); }",
+      "{ const el = document.createElement('div'); el.style.cssText = 'width:4px;height:4px'; document.body.append(el); let n = 0; const step = () => { el.style.marginLeft = (n++ % 40) + 'px'; requestAnimationFrame(step); }; step(); }",
     calm: true,
   },
   {

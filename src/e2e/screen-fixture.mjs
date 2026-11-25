@@ -85,6 +85,11 @@ const Mover = () => {
 
 export const screen = { id: 'zz-gate-motion', Component: Mover };
 `,
+  broad: screen(
+    'zz-gate-broad',
+    `<main style={{ padding: 24, background: '#fff' }}><p style={{ backgroundImage: 'linear-gradient(#000, #000)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>clipped text</p></main>`,
+    "contrastAllow: [{ selector: '*', reason: 'because' }],",
+  ),
   clipped: screen(
     'zz-gate-clipped',
     `<main style={{ padding: 24, background: '#fff' }}><p style={{ backgroundImage: 'linear-gradient(#000, #000)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>clipped text</p></main>`,
@@ -209,6 +214,16 @@ export const runFixtureLane = async (browser) => {
       expect(
         motion.problems.some((problem) => problem.includes('by script under prefers-reduced-motion')),
         `a registered screen that moves a transform by script under reduced motion did not fail: ${motion.problems.join('; ')}`,
+      );
+
+      const broad = await run('broad');
+      expect(
+        broad.problems.some((problem) => problem.includes('contrastAllow selector "*" is too broad')),
+        `a * allowlist was not refused by name: ${broad.problems.join('; ')}`,
+      );
+      expect(
+        broad.problems.some((problem) => problem.includes('not measurable')),
+        `a * allowlist excused text it cannot measure: ${broad.problems.join('; ')}`,
       );
 
       const clipped = await run('clipped');

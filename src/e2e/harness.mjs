@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -25,11 +26,18 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
   });
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 15_000;
+  const gone = () => child.exitCode !== null || child.signalCode !== null;
+  const abandon = (/** @type {string} */ why) => {
+    child.kill('SIGKILL');
+    rmSync(home, { recursive: true, force: true });
+    return new Error(why);
+  };
   for (;;) {
+    if (gone()) throw abandon(`HQ exited on port ${port}`);
     try {
-      if ((await fetch(`${url}/api/health`)).ok) break;
+      if ((await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1000) })).ok) break;
     } catch {}
-    if (Date.now() > deadline) throw new Error('HQ did not start');
+    if (Date.now() > deadline) throw abandon('HQ did not start');
     await sleep(100);
   }
   const stop = async () => {
@@ -55,6 +63,37 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
     },
   };
 };
+
+/** A port the OS says is free right now: bind port 0 and read it back. */
+export const freePort = () =>
+  new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = /** @type {import('node:net').AddressInfo} */ (server.address());
+      server.close(() => resolve(port));
+    });
+  });
+
+/**
+ * Another process can take the port between `freePort` and the bind, so a failed start gets a new port.
+ * @template T @param {(port: number) => Promise<T>} start @param {number} [tries] @param {() => Promise<number>} [pick]
+ */
+export const withFreePort = async (start, tries = 5, pick = /** @type {() => Promise<number>} */ (freePort)) => {
+  /** @type {unknown} */
+  let last;
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    try {
+      return await start(await pick());
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw last;
+};
+
+/** @param {Omit<Parameters<typeof startHq>[0], 'port'>} [options] */
+export const startHqFree = (options = {}) => withFreePort((port) => startHq({ ...options, port }));
 
 export const launch = () => chromium.launch();
 

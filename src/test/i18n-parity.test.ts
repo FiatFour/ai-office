@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: the tests feed source text with ${} to the key scanner
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -111,6 +112,75 @@ const readLocales = (): Locales => {
   return { en: read('en'), th: read('th') };
 };
 
+export type Ask =
+  | { kind: 'static'; line: number; key: string }
+  | { kind: 'dynamic'; line: number; prefix: string; suffix: string; registered: string[] | null };
+
+const KEY_LIST = /i18n-keys:([^\n]*)/;
+
+/**
+ * Every `t(...)` call in a source file. A call whose key is built at run time (a template with `${}`, a concatenation, a variable)
+ * must have `i18n-keys: a.b c.d` in a comment on its line or the two lines above, listing every key it can ask for.
+ */
+export const scanAsks = (source: string): Ask[] => {
+  const lines = source.split('\n');
+  const asks: Ask[] = [];
+  for (const call of source.matchAll(/(?<![\w$.])(?:i18n\.)?t\(\s*/g)) {
+    const at = call.index + call[0].length;
+    const line = source.slice(0, call.index).split('\n').length;
+    const quote = source[at] ?? '';
+    const registered = (): string[] | null => {
+      const found = lines
+        .slice(Math.max(0, line - 3), line)
+        .map((text) => KEY_LIST.exec(text)?.[1])
+        .findLast((list) => list !== undefined);
+      return found === undefined ? null : (found.match(/[\w-]+(?:\.[\w-]+)+/g) ?? []);
+    };
+    if (quote === "'" || quote === '"' || quote === '`') {
+      const end = source.indexOf(quote, at + 1);
+      const text = source.slice(at + 1, end);
+      const next = /^\s*([,)])/.exec(source.slice(end + 1));
+      if (next !== null && !(quote === '`' && text.includes('${'))) {
+        asks.push({ kind: 'static', line, key: text });
+        continue;
+      }
+      const hole = text.indexOf('${');
+      asks.push({
+        kind: 'dynamic',
+        line,
+        prefix: hole < 0 ? text : text.slice(0, hole),
+        suffix: hole < 0 || next === null ? '' : text.slice(text.lastIndexOf('}') + 1),
+        registered: registered(),
+      });
+    } else asks.push({ kind: 'dynamic', line, prefix: '', suffix: '', registered: registered() });
+  }
+  return asks;
+};
+
+/** Problems with the keys one source file asks for: a static key or a listed key that one language lacks, a dynamic call with no list, a list that strays from the call's own prefix. */
+export const askProblems = (name: string, source: string, locales: Locales): string[] => {
+  const has = (lang: 'en' | 'th', key: string): boolean => {
+    const [namespace = '', ...rest] = key.split('.');
+    return rest.join('.') in withoutPlurals(flatten(locales[lang][namespace] ?? {}));
+  };
+  const lacking = (key: string) => (['en', 'th'] as const).filter((lang) => !has(lang, key));
+  return scanAsks(source).flatMap((ask) => {
+    if (ask.kind === 'static')
+      return /^[\w-]+\./.test(ask.key)
+        ? lacking(ask.key).map((lang) => `${name}:${ask.line} ${lang} lacks ${ask.key}`)
+        : [];
+    if (ask.registered === null)
+      return [`${name}:${ask.line} builds a key at run time with no \`i18n-keys:\` list next to it`];
+    if (ask.registered.length === 0) return [`${name}:${ask.line} has an empty \`i18n-keys:\` list`];
+    return ask.registered.flatMap((key) => [
+      ...(key.startsWith(ask.prefix) && key.endsWith(ask.suffix)
+        ? []
+        : [`${name}:${ask.line} lists ${key}, which the call cannot ask for`]),
+      ...lacking(key).map((lang) => `${name}:${ask.line} ${lang} lacks ${key}`),
+    ]);
+  });
+};
+
 const screenIds = (): string[] => {
   const dir = join(SRC, 'screens');
   return existsSync(dir) ? readdirSync(dir).filter((name) => existsSync(join(dir, name, 'screen.tsx'))) : [];
@@ -119,7 +189,7 @@ const screenIds = (): string[] => {
 const sourceFiles = (): string[] => {
   const walk = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
-      entry.isDirectory() ? walk(join(dir, entry.name)) : entry.name.endsWith('.tsx') ? [join(dir, entry.name)] : [],
+      entry.isDirectory() ? walk(join(dir, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(dir, entry.name)] : [],
     );
   return [join(SRC, 'floor'), join(SRC, 'screens')].filter(existsSync).flatMap(walk);
 };
@@ -222,18 +292,52 @@ describe('locale files', () => {
     expect(wanted.filter((key) => !keys.includes(key.replace(/^floor\./, '')))).toEqual([]);
   });
 
-  it('every key a component asks for exists in both files of its namespace', () => {
-    const source = sourceFiles()
-      .map((file) => readFileSync(file, 'utf8'))
-      .join('\n');
-    const asked = [...source.matchAll(/\bt\('([\w-]+)\.([\w.]+)'/g)].map((match) => [match[1] ?? '', match[2] ?? '']);
-    expect(asked.filter(([namespace]) => namespace === 'floor').length).toBeGreaterThan(20);
+  it('every key a component asks for exists in both files of its namespace, dynamic keys through their listed keys', () => {
     const locales = readLocales();
-    const missing = (lang: 'en' | 'th') =>
-      asked
-        .filter(([namespace, key]) => !((key ?? '') in withoutPlurals(flatten(locales[lang][namespace ?? ''] ?? {}))))
-        .map(([namespace, key]) => `${lang}: ${namespace}.${key}`);
-    expect([...missing('en'), ...missing('th')]).toEqual([]);
+    const files = sourceFiles();
+    const asks = files.flatMap((file) => scanAsks(readFileSync(file, 'utf8')));
+    expect(asks.filter((ask) => ask.kind === 'static').length).toBeGreaterThan(20);
+    expect(asks.filter((ask) => ask.kind === 'dynamic').length).toBeGreaterThan(4);
+    expect(
+      files.flatMap((file) => askProblems(file.slice(SRC.length + 1), readFileSync(file, 'utf8'), locales)),
+    ).toEqual([]);
+  });
+
+  it('finds keys built with a template, a concatenation or a variable, and wants each one listed', () => {
+    const l: Locales = { en: { floor: { a: { x: 'x', y: 'y' } } }, th: { floor: { a: { x: 'x' } } } };
+    expect(scanAsks("t('floor.a.x'); t(`floor.a.${k}`); t('floor.a.' + k); t(key);").map((ask) => ask.kind)).toEqual([
+      'static',
+      'dynamic',
+      'dynamic',
+      'dynamic',
+    ]);
+    expect(scanAsks('t(`floor.a.x`, { n })')[0]?.kind).toBe('static');
+    expect(askProblems('f', 't(`floor.a.${k}`)', l)).toEqual([
+      'f:1 builds a key at run time with no `i18n-keys:` list next to it',
+    ]);
+    expect(askProblems('f', "t('floor.a.' + k)", l)).toHaveLength(1);
+    expect(askProblems('f', 't(key)', l)).toHaveLength(1);
+    expect(askProblems('f', '// i18n-keys: floor.a.x\nt(`floor.a.${k}`)', l)).toEqual([]);
+    expect(askProblems('f', '{/* i18n-keys: floor.a.x */}\n\n{t(`floor.a.${k}`)}', l)).toEqual([]);
+    expect(askProblems('f', '// i18n-keys: floor.a.x\n\n\n\nt(`floor.a.${k}`)', l)).toHaveLength(1);
+  });
+
+  it('fails a listed key that one language lacks, one the call cannot ask for, and a static key that is missing', () => {
+    const l: Locales = { en: { floor: { a: { x: 'x', y: 'y' } } }, th: { floor: { a: { x: 'x' } } } };
+    expect(askProblems('f', '// i18n-keys: floor.a.x floor.a.y\nt(`floor.a.${k}`)', l)).toEqual([
+      'f:2 th lacks floor.a.y',
+    ]);
+    expect(askProblems('f', '// i18n-keys: floor.a.x floor.b.x\nt(`floor.a.${k}`)', l)).toEqual([
+      'f:2 lists floor.b.x, which the call cannot ask for',
+      'f:2 en lacks floor.b.x',
+      'f:2 th lacks floor.b.x',
+    ]);
+    expect(askProblems('f', '// i18n-keys:\nt(`floor.a.${k}`)', l)).toEqual(['f:2 has an empty `i18n-keys:` list']);
+    expect(askProblems('f', "t('floor.a.y'); t('floor.a.z')", l)).toEqual([
+      'f:1 th lacks floor.a.y',
+      'f:1 en lacks floor.a.z',
+      'f:1 th lacks floor.a.z',
+    ]);
   });
 
   it('says Demo data in the chip and the Debug mode line, as the canvas does', () => {
@@ -278,8 +382,8 @@ describe('language choice', () => {
 
   it('falls back to English, not Thai, for a key one file lacks', async () => {
     await initI18n('th');
-    i18n.addResourceBundle('en', 'translation', { probe: 'english only' });
-    expect(i18n.t('probe', { lng: 'th' })).toBe('english only');
+    i18n.addResourceBundle('en', 'translation', { fallbackCheck: 'english only' });
+    expect(i18n.t('fallbackCheck', { lng: 'th' })).toBe('english only');
     expect(i18n.t('floor.hud.demo', { lng: 'th' })).toBe(th.hud.demo);
   });
 });

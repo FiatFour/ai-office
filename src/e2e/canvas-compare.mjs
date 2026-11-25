@@ -391,6 +391,12 @@ const negatives = (base, strict) => {
  * @param {{ inventory: Record<string, string>, text: string }} demo extra built inventory and text the page does not show itself (empty for a screen with no demo)
  * @param {Spec} [spec]
  */
+/** The verdict says so when a screen's differences file had no entries to build the entry negative tests from. @param {number} entryRuns */
+export const negativeNote = (entryRuns) =>
+  entryRuns === 0
+    ? 'the entry negative tests (a deleted or relabelled entry) were SKIPPED because the differences file lacks entries of every status; only the 2 layout negative tests ran'
+    : `${entryRuns + 2} negative tests each failed as they should`;
+
 export const canvasCompare = async (browser, builtPage, demo, spec = MAIN_SPEC) => {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const canvasPage = await ctx.newPage();
@@ -538,7 +544,7 @@ export const canvasCompare = async (browser, builtPage, demo, spec = MAIN_SPEC) 
     numbers,
     note:
       problems.length === 0
-        ? `canvas artboard rendered from its source; ${diffs.length} entries (${count('fixed')} fixed, ${count('changed')} changed, ${count('not-built')} not built, ${count('conflict')} conflict); ${numbers}; ${negativeRuns.length + 2} negative tests each failed as they should; comparison image ${layout.width}x${layout.height}, two ${COMPARE.pane} px panes and a legend, changes with either input`
+        ? `canvas artboard rendered from its source; ${diffs.length} entries (${count('fixed')} fixed, ${count('changed')} changed, ${count('not-built')} not built, ${count('conflict')} conflict); ${numbers}; ${negativeNote(negativeRuns.length)}; comparison image ${layout.width}x${layout.height}, two ${COMPARE.pane} px panes and a legend, changes with either input`
         : problems.slice(0, 12).join('; '),
   };
 };

@@ -1,30 +1,62 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { registerScreens, SCREENS, screenFromHash } from '../floor/screens.ts';
+import { type Loader, listRoutes, loadScreen, ROUTES, routeFromHash, validateScreen } from '../floor/screens.ts';
 
 const Component = () => null;
-const at = (dir: string, id = dir) => [`../screens/${dir}/screen.tsx`, { screen: { id, Component } }] as const;
+const ok =
+  (dir: string, id = dir): Loader =>
+  async () => ({ screen: { id, Component } });
+const at = (dir: string, load: Loader = ok(dir)) => [`../screens/${dir}/screen.tsx`, load] as const;
 
 describe('screen registry', () => {
-  it('finds every src/screens/<id>/screen.tsx by glob, so no shared file lists them', () => {
-    expect(SCREENS.map((screen) => screen.id)).toEqual([...SCREENS.map((screen) => screen.id)].sort());
+  it('lists every src/screens/<id>/screen.tsx by glob and every one of them loads, so a bad screen fails here', async () => {
+    expect(ROUTES.map((route) => route.id)).toEqual([...ROUTES.map((route) => route.id)].sort());
+    for (const route of ROUTES) expect(await route.load()).toMatchObject({ ok: true });
   });
 
-  it('registers screens sorted by id and routes #/<id> to them', () => {
-    const screens = registerScreens(Object.fromEntries([at('terminal'), at('preflight')]));
-    expect(screens.map((screen) => screen.id)).toEqual(['preflight', 'terminal']);
-    expect(screenFromHash('#/terminal', screens)?.id).toBe('terminal');
-    expect(screenFromHash('', screens)).toBeNull();
-    expect(screenFromHash('#/terminal/x', screens)).toBeNull();
+  it('sorts routes by id and routes #/<id> to them', () => {
+    const { routes, errors } = listRoutes(Object.fromEntries([at('terminal'), at('preflight')]));
+    expect(errors).toEqual([]);
+    expect(routes.map((route) => route.id)).toEqual(['preflight', 'terminal']);
+    expect(routeFromHash('#/terminal', routes)?.id).toBe('terminal');
+    expect(routeFromHash('', routes)).toBeNull();
+    expect(routeFromHash('#/terminal/x', routes)).toBeNull();
   });
 
-  it('refuses a screen whose id is not its directory, a file with no export, and a stray path', () => {
-    expect(() => registerScreens(Object.fromEntries([at('terminal', 'term')]))).toThrow('expected "terminal"');
-    expect(() => registerScreens({ '../screens/a/screen.tsx': {} })).toThrow('must export `screen`');
-    expect(() => registerScreens({ '../elsewhere/screen.tsx': { screen: { id: 'a', Component } } })).toThrow(
-      'not a screen file',
-    );
+  it('names the cause of a screen whose id is not its folder, one with no export, and a bad ready selector', () => {
+    expect(validateScreen('probe', { screen: { id: 'prob', Component } })).toEqual({
+      ok: false,
+      id: 'prob',
+      error: 'screen prob: exports id prob, expected probe',
+    });
+    expect(validateScreen('probe', {})).toMatchObject({ ok: false, error: 'screen probe: must export `screen`' });
+    expect(validateScreen('probe', { screen: { id: 'probe', Component, ready: 3 as never } })).toMatchObject({
+      ok: false,
+      error: 'screen probe: ready must be a selector',
+    });
+    expect(validateScreen('probe', { screen: { id: 'probe', Component, ready: '#x' } })).toMatchObject({ ok: true });
+  });
+
+  it('turns a module that throws into an error for that screen only', async () => {
+    const boom: Loader = async () => {
+      throw new Error('boom');
+    };
+    const { routes } = listRoutes(Object.fromEntries([at('a'), at('b', boom), at('c')]));
+    const loaded = await Promise.all(routes.map((route) => route.load()));
+    expect(loaded.map((one) => one.ok)).toEqual([true, false, true]);
+    expect(loaded[1]).toMatchObject({ error: 'screen b: failed to load: boom' });
+    expect(await loadScreen('b', boom)).toMatchObject({ ok: false });
+  });
+
+  it('reports a stray path and makes a folder with two screen files an error route', async () => {
+    const { routes, errors } = listRoutes({
+      '../elsewhere/screen.tsx': ok('a'),
+      '../screens/a/screen.tsx': ok('a'),
+      '../../screens/a/screen.tsx': ok('a'),
+    });
+    expect(errors).toEqual(['not a screen file: ../elsewhere/screen.tsx', 'screen a: two screens named a']);
+    expect(await routes[0]?.load()).toMatchObject({ ok: false, error: 'screen a: two screens named a' });
   });
 });
 

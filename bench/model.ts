@@ -62,6 +62,11 @@ export interface Row {
   readonly flag: Flag | null;
   readonly quotaWindows: number | null;
   readonly humanMinutes: number | null;
+  readonly editLines?: number | null;
+  readonly judgeMinutes?: number | null;
+  readonly rootMinutes?: number | null;
+  readonly judgeAttempts?: number | null;
+  readonly inferredWindows?: number | null;
   readonly note: string;
 }
 

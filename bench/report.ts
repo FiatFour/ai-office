@@ -41,15 +41,26 @@ export const cell = (values: readonly (number | null)[], scale = 1): string => {
 
 const outcomes = (rows: readonly Row[]): string => (rows.length === 0 ? '-' : rows.map((r) => r.outcome).join(', '));
 
-const columns: readonly { readonly head: string; readonly pick: (r: Row) => number | null; readonly scale?: number }[] =
-  [
-    { head: 'rounds', pick: (r) => r.reviewRounds },
-    { head: 'wall s', pick: (r) => r.wallMs, scale: 1000 },
-    { head: 'agent s', pick: (r) => r.agentMs, scale: 1000 },
-    { head: 'tokens', pick: (r) => (r.tokens === null ? null : totalTokens(r.tokens)) },
-    { head: 'windows', pick: (r) => r.quotaWindows },
-    { head: 'human min', pick: (r) => r.humanMinutes },
-  ];
+interface Column {
+  readonly head: string;
+  readonly pick: (r: Row) => number | null;
+  readonly scale?: number;
+  readonly setB?: true;
+}
+
+const columns: readonly Column[] = [
+  { head: 'rounds', pick: (r) => r.reviewRounds },
+  { head: 'wall s', pick: (r) => r.wallMs, scale: 1000 },
+  { head: 'agent s', pick: (r) => r.agentMs, scale: 1000 },
+  { head: 'tokens', pick: (r) => (r.tokens === null ? null : totalTokens(r.tokens)) },
+  { head: 'windows', pick: (r) => r.quotaWindows },
+  { head: 'windows (inferred)', pick: (r) => r.inferredWindows ?? null, setB: true },
+  { head: 'human min', pick: (r) => r.humanMinutes },
+  { head: 'edit lines', pick: (r) => r.editLines ?? null, setB: true },
+  { head: 'judge min', pick: (r) => r.judgeMinutes ?? null, setB: true },
+  { head: 'judge calls', pick: (r) => r.judgeAttempts ?? null, setB: true },
+  { head: 'root min', pick: (r) => r.rootMinutes ?? null, setB: true },
+];
 
 const sum = (rows: readonly Row[], pick: (r: Row) => number | null): number | null => {
   const values = rows.map(pick);
@@ -58,7 +69,23 @@ const sum = (rows: readonly Row[], pick: (r: Row) => number | null): number | nu
 
 const pct = (n: number, of: number): string => `${n} of ${of} (${fmt((n / of) * 100)}%)`;
 
+const hasSetB = (rows: readonly Row[]): boolean => rows.some((r) => r.set === 'B');
+
+const columnsFor = (rows: readonly Row[]): readonly Column[] =>
+  hasSetB(rows) ? columns : columns.filter((c) => c.setB !== true);
+
 const live = (rows: readonly Row[]): Row[] => rows.filter((r) => !r.scripted && r.flag === null);
+
+const meanOf = (rows: readonly Row[], pick: (r: Row) => number | null): string => {
+  const total = sum(rows, pick);
+  return total === null || rows.length === 0 ? 'n/a' : fmt(total / rows.length);
+};
+
+const separately = (rows: readonly Row[]): string => {
+  const root = meanOf(rows, (r) => r.rootMinutes ?? null);
+  const judge = meanOf(rows, (r) => r.judgeMinutes ?? null);
+  return root === 'n/a' && judge === 'n/a' ? '' : `; reported separately: root ${root} min, judge ${judge} min per PR`;
+};
 
 export const checks = (all: readonly Row[]): Check[] => {
   const rows = live(all);
@@ -66,7 +93,12 @@ export const checks = (all: readonly Row[]): Check[] => {
   const setA = (arm: ArmName) => rows.filter((r) => r.arm === arm && r.set === 'A');
   const setB = factory.filter((r) => r.set === 'B');
   const merged = setB.filter((r) => r.outcome === 'pass');
-  const windows = sum(setB, (r) => r.quotaWindows);
+  const measuredWindows = sum(setB, (r) => r.quotaWindows);
+  const inferredWindows = measuredWindows === null ? sum(setB, (r) => r.inferredWindows ?? null) : null;
+  const windows = measuredWindows ?? inferredWindows;
+  const label = measuredWindows === null && inferredWindows !== null ? ' (inferred from tokens)' : '';
+  const baselineB = live(all).filter((r) => r.arm === 'baseline' && r.set === 'B');
+  const baselinePass = baselineB.filter((r) => r.outcome === 'pass').length;
   const minutes = sum(setB, (r) => r.humanMinutes);
   const per5 = windows === null || merged.length === 0 ? null : (windows / merged.length) * 5;
   const perPr = minutes === null || setB.length === 0 ? null : minutes / setB.length;
@@ -98,7 +130,7 @@ export const checks = (all: readonly Row[]): Check[] => {
       name: 'Cost',
       value:
         per5 !== null
-          ? `${fmt(per5)} five-hour windows per 5 merged PRs`
+          ? `${fmt(per5)} five-hour windows per 5 merged PRs${label}`
           : setB.length > 0 && merged.length === 0
             ? 'no merged PR to divide by'
             : setB.length === 0
@@ -117,10 +149,20 @@ export const checks = (all: readonly Row[]): Check[] => {
           ? setB.length === 0
             ? 'no live Set B rows'
             : 'human minutes not recorded'
-          : `${fmt(perPr)} per Set B PR (${setB.length} PRs)`,
+          : `${fmt(perPr)} per Set B PR (${setB.length} PRs)${separately(setB)}`,
       threshold: `at most ${THRESHOLDS.maxHumanMinutesPerPr} per Set B PR`,
       verdict: verdict(perPr, (v) => v <= THRESHOLDS.maxHumanMinutesPerPr + 1e-9),
     },
+    ...(hasSetB(live(all))
+      ? [
+          {
+            name: 'Set B baseline pass rate',
+            value: baselineB.length === 0 ? 'no live Set B baseline rows' : pct(baselinePass, baselineB.length),
+            threshold: 'no bar set, read next to the factory',
+            verdict: baselineB.length === 0 ? 'UNMEASURED' : 'INFO',
+          } satisfies Check,
+        ]
+      : []),
   ];
 };
 
@@ -167,10 +209,11 @@ const totals = (rows: readonly Row[]): string[] => [
 
 const perTask = (rows: readonly Row[]): string[] => {
   const ids = [...new Set(rows.map((r) => r.task))].sort();
+  const shown = columnsFor(rows);
   const head = [
     'task',
     'set',
-    ...ARMS.flatMap((arm) => ['outcome', ...columns.map((c) => c.head)].map((h) => `${arm} ${h}`)),
+    ...ARMS.flatMap((arm) => ['outcome', ...shown.map((c) => c.head)].map((h) => `${arm} ${h}`)),
   ];
   return [
     `| ${head.join(' | ')} |`,
@@ -180,7 +223,7 @@ const perTask = (rows: readonly Row[]): string[] => {
       const set = mine[0]?.set ?? '';
       const cells = ARMS.flatMap((arm) => {
         const own = mine.filter((r) => r.arm === arm);
-        return [outcomes(own), ...columns.map((c) => (own.length === 0 ? '-' : cell(own.map(c.pick), c.scale)))];
+        return [outcomes(own), ...shown.map((c) => (own.length === 0 ? '-' : cell(own.map(c.pick), c.scale)))];
       });
       return `| ${[id, set, ...cells].join(' | ')} |`;
     }),

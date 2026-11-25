@@ -34,6 +34,7 @@ export interface RunContext {
   readonly scratch: string;
   readonly clock?: Clock;
   readonly settleMs?: number;
+  readonly log?: (line: string) => void;
 }
 
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -70,7 +71,14 @@ export const killOnAbort = (arm: Arm, kill: () => Promise<unknown>): Arm => ({
   },
 });
 
-const failure = (message: string): string => message.replace(/\s+/g, ' ').slice(0, 300);
+const NOTE_MAX = 300;
+
+const failure = (message: string): string => message.replace(/\s+/g, ' ').slice(0, NOTE_MAX);
+
+export const failureTail = (message: string): string => {
+  const flat = message.replace(/\s+/g, ' ').trim();
+  return flat.length <= NOTE_MAX ? flat : `…${flat.slice(-(NOTE_MAX - 1))}`;
+};
 
 const flagOf = (webRequests: number | null, suspect: readonly string[]): [Flag | null, string] =>
   webRequests !== null && webRequests > 0
@@ -128,7 +136,9 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
       note: `the agent ran past ${task.timeoutMs} ms${stopped ? '' : `; it had not stopped ${ctx.settleMs ?? SETTLE_MS} ms after the abort and is abandoned`}`,
     };
   }
-  if ('error' in outcome)
+  if ('error' in outcome) {
+    const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+    ctx.log?.(`${task.id} ${ctx.arm.name} run ${run}: ${message}`);
     return {
       ...base,
       ...empty,
@@ -136,8 +146,9 @@ export const runTask = async (task: TaskA, run: number, prepared: Prepared, ctx:
       outcome: 'error',
       wallMs: wall(),
       agentMs,
-      note: failure(outcome.error instanceof Error ? outcome.error.message : String(outcome.error)),
+      note: failureTail(message),
     };
+  }
   const { done } = outcome;
   const graded = await grade(
     task,
@@ -247,7 +258,12 @@ const runLive = async (
     const graded = { ...task, timeoutMs };
     for (let run = 1; run <= runs; run += 1) {
       const arm = killOnAbort(armFor(prepared, driver), () => driver.removeAll());
-      const row = await runTask(graded, run, prepared, { arm, runner: wiring.runner, scratch: wiring.scratch });
+      const row = await runTask(graded, run, prepared, {
+        arm,
+        runner: wiring.runner,
+        scratch: wiring.scratch,
+        log: (line) => appendFileSync(`${values.out}.errors.log`, `${line}\n`),
+      });
       await driver.removeAll();
       appendRow(values.out, row);
       console.log(JSON.stringify(row));

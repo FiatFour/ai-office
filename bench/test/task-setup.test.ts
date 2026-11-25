@@ -317,6 +317,19 @@ describe.skipIf(POSIX_ONLY)('rows', () => {
     expect(row).toMatchObject({ outcome: 'error', note: 'job failed: boom' });
   });
 
+  it('keeps the tail of a long failure in the row note and the whole message in the run log', async () => {
+    const { fx, scratch, prepared } = await verified();
+    const message = `${'opening prose '.repeat(60)}MALFORMED-VERDICT-AT-THE-END`;
+    const arm = scriptedArm('factory', { 'slug-1': { files: [], fail: message } });
+    const logged: string[] = [];
+    const row = await runTask(fx.task, 1, prepared, { arm, runner: localRunner, scratch, log: (l) => logged.push(l) });
+    expect(row.outcome).toBe('error');
+    expect(row.note.length).toBeLessThanOrEqual(300);
+    expect(row.note.endsWith('MALFORMED-VERDICT-AT-THE-END')).toBe(true);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain(message);
+  });
+
   it('records a timeout when the hidden tests themselves run too long', async () => {
     const { fx, scratch, prepared } = await verified();
     const slow = { ...fx.task, testCommand: ['node', '-e', 'setTimeout(() => {}, 5000)'], timeoutMs: 200 };

@@ -587,9 +587,42 @@ const MUTANTS = [
     tests: [SETB],
   },
   {
-    name: 'judge-voids-other-dir',
-    claim: 'voided --out files in the directory of a new --out are counted',
-    edits: [['bench/setb/cli.ts', '[values.dir, dirname(resolve(out))]', '[values.dir]']],
+    name: 'judge-one-strips-contract',
+    claim: 'judgeOne hands the whole rendered prompt to the model',
+    edits: [
+      [J, 'await model(renderPrompt(packet))', "await model(renderPrompt(packet).replace(/Reason briefly[^#]*/, ''))"],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'claude-model-strips-contract',
+    claim: 'claudeModel pipes the whole prompt to the claude process',
+    edits: [[J, 'input: prompt,', "input: prompt.replace(/Reason briefly[^#]*/, ''),"]],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-void-after-output',
+    claim: 'the void is recorded before the output is written',
+    edits: [
+      ['bench/setb/cli.ts', 'if (run.voided !== null) recordVoid(voids, run.voided);\n', ''],
+      [
+        'bench/setb/cli.ts',
+        '    console.log(\n      run.voided === null',
+        '    if (run.voided !== null) recordVoid(voids, run.voided);\n    console.log(\n      run.voided === null',
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-out-any-extension',
+    claim: '--out must be a .json file',
+    edits: [[J, "if (!target.endsWith('.json'))", 'if (false)']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-scan-json-only',
+    claim: 'a voided output under any file name counts',
+    edits: [[J, 'readdirSync(dir)) {', "readdirSync(dir).filter((f) => f.endsWith('.json'))) {"]],
     tests: [SETB],
   },
   {

@@ -153,8 +153,9 @@ const main = async (argv: string[]): Promise<number> => {
       Date,
       unreadable,
     );
-    writeFileSync(out, `${JSON.stringify(run, null, 2)}\n`, { flag: 'wx' });
+    // The void is logged before the output is written, so a write that fails afterwards cannot lose it.
     if (run.voided !== null) recordVoid(voids, run.voided);
+    writeFileSync(out, `${JSON.stringify(run, null, 2)}\n`, { flag: 'wx' });
     console.log(
       run.voided === null ? `${run.judged.length} judged, ${run.unreadable.length} unreadable` : `VOID: ${run.voided}`,
     );

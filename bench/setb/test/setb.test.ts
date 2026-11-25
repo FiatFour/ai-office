@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -140,7 +140,11 @@ describe('the frozen task list', () => {
       writeFileSync(join(dir, 'entries.json'), '[]');
       const bin = join(dir, 'bin');
       mkdirSync(bin);
-      writeFileSync(join(bin, 'claude'), "#!/bin/sh\ncat >/dev/null\necho 'VERDICT: MERGE AS IS'\n", { mode: 0o755 });
+      writeFileSync(
+        join(bin, 'claude'),
+        `#!/bin/sh\ncat > '${join(dir, 'stdin.txt')}'\necho 'VERDICT: MERGE AS IS'\n`,
+        { mode: 0o755 },
+      );
       const env = { ...process.env, AW_BENCH_LOGIN_CONFIRMED: '1', PATH: `${bin}:${process.env.PATH ?? ''}` };
       const run = (...args: string[]) =>
         spawnSync(process.execPath, [join(SETB, 'cli.ts'), ...args, '--dir', dir], { encoding: 'utf8', env });
@@ -168,6 +172,44 @@ describe('the frozen task list', () => {
       expect(fourth.status).toBe(3);
       expect(fourth.stderr).toMatch(/3 judge runs were void/);
       expect(existsSync(join(dir, 'judged', 'd.json'))).toBe(false);
+    });
+
+    it('pipes the whole rendered prompt, contract sentence included, to the model process', () => {
+      const { dir, judge } = setup();
+      expect(judge('a.json').status).toBe(4);
+      const piped = readFileSync(join(dir, 'stdin.txt'), 'utf8');
+      expect(piped).toContain('end your reply with exactly one final line');
+      expect(piped).toContain('Reason briefly');
+      expect(piped).toContain('No earlier line may begin with the word VERDICT and a colon');
+      expect(piped.startsWith(RUBRIC)).toBe(true);
+    });
+
+    it('records the void before it writes the output, so a failed write loses nothing', () => {
+      const { dir, judge, log } = setup();
+      mkdirSync(join(dir, 'judged'), { recursive: true });
+      symlinkSync(join(dir, 'nowhere'), join(dir, 'judged', 'a.json'));
+      const ran = judge('a.json');
+      expect(ran.status).not.toBe(0);
+      expect(readFileSync(log, 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
+      expect(existsSync(join(dir, 'nowhere'))).toBe(false);
+    });
+
+    it('refuses an --out that is not a .json file, so a void cannot hide under another extension', () => {
+      const { dir, judge } = setup();
+      const ran = judge('a.out');
+      expect(ran.status).toBe(3);
+      expect(ran.stderr).toMatch(/must be a \.json file/);
+      expect(existsSync(join(dir, 'judged', 'a.out'))).toBe(false);
+    });
+
+    it('counts a voided output under any file name in the judged folder', () => {
+      const { dir, judge } = setup();
+      mkdirSync(join(dir, 'judged'), { recursive: true });
+      for (const name of ['a.out', 'b.bak', 'c'])
+        writeFileSync(join(dir, 'judged', name), JSON.stringify({ voided: 'x', judged: [], unreadable: [] }));
+      const ran = judge('d.json');
+      expect(ran.status).toBe(3);
+      expect(ran.stderr).toMatch(/3 judge runs were void/);
     });
 
     it('keeps the count when the voids log is deleted, because the voided --out files remain', () => {

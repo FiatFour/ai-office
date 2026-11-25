@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runBinary } from '../../server/sandbox/engine.ts';
 import { TaskRefused } from '../model.ts';
@@ -37,6 +37,7 @@ export const voidScanDirs = (dir: string): string[] => [dir, join(dir, JUDGED_DI
 export const judgedOutPath = (dir: string, out: string): string => {
   const folder = resolve(dir, JUDGED_DIR);
   const target = resolve(out);
+  if (!target.endsWith('.json')) throw new TaskRefused(`--out must be a .json file, got ${out}`);
   if (dirname(target) !== folder) throw new TaskRefused(`--out must be a file directly inside ${folder}`);
   mkdirSync(folder, { recursive: true });
   return target;
@@ -56,7 +57,7 @@ const voidedOuts = (dirs: readonly string[]): number => {
   let n = 0;
   for (const dir of new Set(dirs.map((d) => resolve(d)))) {
     if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir).filter((f) => f.endsWith('.json'))) {
+    for (const name of readdirSync(dir)) {
       try {
         const body = JSON.parse(readFileSync(join(dir, name), 'utf8')) as { voided?: unknown; judged?: unknown } | null;
         if (body !== null && typeof body === 'object' && Array.isArray(body.judged) && typeof body.voided === 'string')
@@ -75,7 +76,13 @@ export const countVoids = (file: string, dirs: readonly string[] = [dirname(dirn
 
 export const recordVoid = (file: string, reason: string): number => {
   mkdirSync(dirname(file), { recursive: true });
-  appendFileSync(file, `${JSON.stringify({ reason })}\n`);
+  const fd = openSync(file, 'a');
+  try {
+    writeSync(fd, `${JSON.stringify({ reason })}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   return logLines(file);
 };
 

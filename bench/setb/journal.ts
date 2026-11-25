@@ -10,7 +10,7 @@ export const ARMS = ['factory', 'baseline'] as const;
 export type Arm = (typeof ARMS)[number];
 
 /** `transient` is a provider overload or rate limit: the arm is run again, up to a cap, and it says nothing about the arm. */
-export type Status = 'done' | 'failed' | 'quota' | 'transient' | 'auth' | 'aborted';
+export type Status = 'done' | 'failed' | 'transient' | 'auth' | 'aborted';
 
 export interface RunRecord {
   readonly task: string;

@@ -46,7 +46,7 @@ const breakStale = (file: string): void => {
     const held = holderOf(file);
     if (alive(held.pid))
       throw new TaskRefused(
-        `${file} is held by pid ${held.pid} (${held.command}, started ${held.startedAt}); one driver at a time`,
+        `${file} is held by pid ${held.pid} (${held.command}, started ${held.startedAt}); one driver at a time. If that pid is not a driver (a pid is reused after a reboot), delete the file by hand`,
       );
     unlinkSync(file);
   } finally {
@@ -71,13 +71,40 @@ export const acquireLock = (file: string, command: string): (() => void) => {
   };
 };
 
-/** Holds the lock for the rest of the process: released on exit and on SIGINT, SIGTERM and SIGHUP. */
-export const holdLock = (file: string, command: string): void => {
-  process.on('exit', acquireLock(file, command));
+type Cleanup = () => Promise<unknown>;
+
+const cleanups = new Set<Cleanup>();
+let listening = false;
+const CLEANUP_MS = 60_000;
+
+/** On SIGINT, SIGTERM and SIGHUP: runs every registered cleanup, then exits, which releases the locks. */
+const listen = (): void => {
+  if (listening) return;
+  listening = true;
+  let stopping = false;
   for (const [signal, code] of [
     ['SIGINT', 130],
     ['SIGTERM', 143],
     ['SIGHUP', 129],
   ] as const)
-    process.on(signal, () => process.exit(code));
+    process.on(signal, () => {
+      if (stopping) return;
+      stopping = true;
+      const exit = () => process.exit(code);
+      setTimeout(exit, CLEANUP_MS).unref();
+      void Promise.allSettled([...cleanups].map(async (cleanup) => cleanup())).then(exit);
+    });
+};
+
+/** Registers what a signal must stop before the process exits. The returned function removes it. */
+export const onStop = (cleanup: Cleanup): (() => void) => {
+  listen();
+  cleanups.add(cleanup);
+  return () => void cleanups.delete(cleanup);
+};
+
+/** Holds the lock for the rest of the process: released on exit, a signal's exit included. */
+export const holdLock = (file: string, command: string): void => {
+  process.on('exit', acquireLock(file, command));
+  listen();
 };

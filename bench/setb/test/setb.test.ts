@@ -1147,6 +1147,22 @@ describe('one bad packet does not kill the batch', () => {
     expect(made.packets.map((p) => p.label)).toEqual(['pr-2222bbbb']);
   });
 
+  it('refuses to judge while any real PR has CI still pending', async () => {
+    const sealed = assignLabels(
+      frozen.tasks
+        .slice(0, 2)
+        .map((t, i) => ({ task: t.id, arm: 'factory' as const, pr: i + 1, readyHeadSha: 'a'.repeat(40) })),
+    );
+    let reads = 0;
+    const hub: Hub = {
+      pull: async () => ({ head: { sha: 'a'.repeat(40), ref: 'aw/x' }, base: { sha: 'b'.repeat(40) }, labels: [] }),
+      diff: async () => 'diff --git a/x b/x\n+fix',
+      ci: async (_repo, sha) => ({ sha, state: ++reads === 2 ? 'pending' : 'green', note: 'n', checks: 1 }),
+    };
+    await expect(realPackets(hub, frozen, sealed)).rejects.toThrow(/CI is still pending on pr-/);
+    await expect(realPackets(hub, frozen, sealed)).resolves.toMatchObject({ unreadable: [] });
+  });
+
   it('refuses a check-run list longer than the page it read', () => {
     const run = { head_sha: 'a'.repeat(40), status: 'completed', conclusion: 'success' };
     expect(ciOfBody('a'.repeat(40), { total_count: 1, check_runs: [run] }).state).toBe('green');

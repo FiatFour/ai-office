@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CageShell } from '../../../server/agents/claude-code.ts';
 import { claudeCode } from '../../../server/agents/claude-code.ts';
 import { parseReview } from '../../../server/agents/runtime.ts';
@@ -32,7 +32,6 @@ import {
   resumeBranch,
   type Step,
   stopLine,
-  stopOf,
   sweepRemote,
   waitForCiSlot,
   withStderr,
@@ -49,7 +48,23 @@ import {
 } from '../journal.ts';
 import { acquireLock } from '../lock.ts';
 import type { Ci } from '../packet.ts';
-import { appendRun, classify, driveArms, entriesOf, finish, isFinal, type RunRecord, readRuns, todo } from '../run.ts';
+import {
+  ArmTimeout,
+  appendRun,
+  baseShaOf,
+  classify,
+  driveArms,
+  entriesOf,
+  finish,
+  isFinal,
+  PINNED_BASE,
+  type RunRecord,
+  readRuns,
+  refuseOrphans,
+  removeLeftovers,
+  todo,
+  verdictOf,
+} from '../run.ts';
 import { loadFrozen, type SetBTask } from '../task.ts';
 
 const REPO = 'acme/app';
@@ -276,148 +291,273 @@ describe.skipIf(!hasSqlite)('the factory arm on the public repo, with a scripted
   });
 });
 
-describe('the quota and login stops', () => {
-  it('reads a usage limit, a revoked login and an ordinary failure apart', () => {
-    expect(stopOf("You've hit your limit · resets 3pm (Asia/Bangkok)")).toBe('quota');
-    expect(stopOf('Claude AI usage limit reached|1764000000')).toBe('quota');
-    expect(stopOf('API Error: OAuth token revoked')).toBe('auth');
-    expect(stopOf('Failed to authenticate. API Error: 401')).toBe('auth');
-    expect(stopOf('Failed to authenticate; usage limit reached')).toBe('auth');
-    expect(stopOf('the agent ran past its timeout')).toBeNull();
+const claudeShell = (err: string, out: string, code: number, timedOut = false): CageShell => ({
+  async exec(argv) {
+    if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
+    if (!argv.includes('--output-format')) return { code: 0, out: '', err: '', timedOut: false };
+    return { code, out, err, timedOut };
+  },
+});
+const authorJob = {
+  role: 'author' as const,
+  task: 'bench/t-0a1b2c3d-r1',
+  worker: 'baseline',
+  ticket: { id: 'bench/t-0a1b2c3d-r1', kind: 'defect' as const, title: 't', body: 'b', url: null, risk: null },
+  round: 0,
+  comments: [],
+  signal: new AbortController().signal,
+};
+const thrownBy = async (shell: CageShell): Promise<string> => {
+  try {
+    await claudeCode({ shell: () => withStderr(shell) }).run(authorJob);
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error('claude did not fail');
+};
+const message = (err: string, out = '', code = 1) => thrownBy(claudeShell(err, out, code));
+const resultOf = (result: string, subtype = 'success', is_error = true): string =>
+  `${JSON.stringify({ type: 'result', subtype, is_error, result })}\n`;
+const statusOf = (m: string) => classify(m, new Date('2026-11-25T00:00:00Z')).status;
+const status = async (err: string, out = '', code = 1) => statusOf(await message(err, out, code));
+
+/** Every stop message the verifier of round 3 ran, with how it must be recorded whichever stream carries it. */
+const STOPS: ReadonlyArray<readonly [string, 'auth' | 'aborted']> = [
+  ["You've hit your session limit · resets 3pm", 'aborted'],
+  ["You've hit your weekly limit · resets Mon 8am", 'aborted'],
+  ["You've hit your monthly spend limit · /usage-credits to raise it", 'aborted'],
+  ["You've hit your channel's monthly spend limit.", 'aborted'],
+  ["You've reached your Fable limit for this week", 'aborted'],
+  ["You're out of usage credits · resets 3pm", 'aborted'],
+  ['Your org is out of usage · add funds to continue', 'aborted'],
+  ['Not logged in · Please run /login', 'auth'],
+  ['Login expired · Please run /login', 'auth'],
+  ['Login reached its time limit · Please run /login', 'auth'],
+  ['Authentication required · Sign in again to continue', 'auth'],
+  ['Invalid API key · Fix external API key', 'auth'],
+  ['API Error: 401 Invalid API key · Please run /login', 'auth'],
+  ['Failed to authenticate: OAuth session expired and could not be refreshed', 'auth'],
+  ['Credit balance is too low', 'aborted'],
+  ['API Error: Repeated 529 Overloaded errors', 'aborted'],
+  ['Repeated 529 Overloaded errors', 'aborted'],
+  ['Opus is experiencing high load, please use /model to switch to Sonnet', 'aborted'],
+  ['Server is temporarily limiting requests (not your usage limit)', 'aborted'],
+  ['The API is temporarily unavailable', 'aborted'],
+  ['API Error: Request timed out.', 'aborted'],
+  ['API Error: Connection error.', 'aborted'],
+  ['API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}', 'aborted'],
+  ['Claude AI usage limit reached|1795680000', 'aborted'],
+  ['5-hour limit reached ∙ resets 7pm', 'aborted'],
+  ["You've hit your limit · resets 3pm (Europe/London)", 'aborted'],
+];
+
+describe('a session that ends abnormally is never final', () => {
+  it.each(STOPS)('%s', async (text, expected) => {
+    for (const code of [1, 0]) {
+      expect(await status('', resultOf(text), code), `stdout, exit ${code}`).toBe(expected);
+      expect(await status(text, '', code), `stderr, exit ${code}`).toBe(expected);
+      expect(await status(text, resultOf('Execution error', 'error_during_execution'), code), 'both').toBe(expected);
+    }
+    expect(statusOf(`job failed: ${await message('', resultOf(text))}`)).toBe(expected);
   });
 
-  it('reads a provider overload or rate limit as transient, never as a usage limit or a task failure', () => {
-    expect(stopOf('API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}')).toBe('transient');
-    expect(stopOf('API Error: 429 rate_limit_error')).toBe('transient');
-    expect(stopOf('claude ended with error_during_execution: overloaded_error')).toBe('transient');
-    expect(classify('API Error: 529 overloaded_error', new Date()).status).toBe('transient');
-    expect(classify("You've hit your limit · resets 3pm (UTC)", new Date()).status).toBe('quota');
-    expect(classify('the tests failed', new Date()).status).toBe('failed');
+  it.each([
+    ['an empty reply with exit 0', '', '', 0],
+    ['an empty reply with exit 1', '', '', 1],
+    ['a kill with exit 137', '', '', 137],
+    ['text that is not json', '', 'Error: something\n', 1],
+    ['a crash on stderr', 'Segmentation fault\n', '', 139],
+    ['an error result nobody has seen', '', resultOf('A message from next year'), 1],
+    ['a success line with a nonzero exit', '', resultOf('done', 'success', false), 1],
+    ['a success line with an empty reply', '', resultOf('', 'success', false), 0],
+    ['max turns on stderr only', "You've hit your max turns\n", '', 1],
+    ['a long prompt on stderr only', 'Prompt is too long\n', '', 1],
+  ])('%s', async (_name, err, out, code) => {
+    expect(await status(err, out, code)).toBe('aborted');
   });
 
-  it('does not read a task text that talks about rate limits as a stop', () => {
+  it('records 429 and 529 as transient, so the capped retries apply', async () => {
     for (const text of [
-      'Make the rate-limit check reject a burst; the usage limit is 5 per minute',
-      'claude ended with success: I added a rate limit and a usage limit to the docs',
-      'the limit reached the end of the list',
-    ])
-      expect(stopOf(text), text).toBeNull();
+      'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}',
+      'API Error: 429 rate_limit_error',
+      'overloaded_error',
+    ]) {
+      expect(await status('', resultOf(text)), text).toBe('transient');
+      expect(await status(`${text}\n`), text).toBe('transient');
+    }
   });
 
-  it('matches only a provider message at the start of a line or of what claude ended with, not a model sentence', () => {
+  it('reads a transient stop only as a provider message, not as words inside another failure', () => {
     for (const text of [
-      "claude ended with error_max_turns: You've hit your max turns; tests still fail",
-      "claude ended with success: You've hit your limit of retries in this test",
-      'claude ended with success: I handled the case where Claude AI usage limit reached|1 is printed',
       'claude ended with success: the code now retries on API Error: 529',
-      'claude ended with success: it logs OAuth token revoked and Failed to authenticate',
+      'POST /repos/FiatFour/ai-office/pulls -> 422 {"message":"overloaded_error is not a branch"}',
     ])
-      expect(stopOf(text), text).toBeNull();
+      expect(statusOf(text), text).toBe('aborted');
+  });
+
+  it('reads a stop that claude printed on stdout outside the stream', async () => {
+    expect(await status('', 'Not logged in\n', 1)).toBe('auth');
+  });
+
+  it('explains Execution error with what stderr says', async () => {
+    const out = resultOf('Execution error', 'error_during_execution');
+    expect(await status('API Error: 529 overloaded\n', out)).toBe('transient');
+    expect(await message('container is gone\n', out)).toContain('container is gone');
+  });
+
+  it('records the exit code of an empty reply', async () => {
+    expect(await message('', '', 137)).toContain('empty reply with exit 137');
+  });
+
+  it('keeps the raw text, and the reset time when the message states one', async () => {
+    const m = await message('some warning\nClaude AI usage limit reached|1795680000\n');
+    expect(m).toContain('Claude AI usage limit reached|1795680000');
+    expect(classify(m, new Date())).toEqual({ status: 'aborted', resetAt: 1795680000_000 });
+    const timed = await message("You've hit your session limit · resets 3pm\n");
+    expect(classify(timed, new Date('2026-11-25T00:00:00Z')).resetAt).not.toBeNull();
+  });
+
+  it('records errors of the harness, the engine and GitHub as aborted', () => {
     for (const text of [
-      "You've hit your limit · resets 3pm (UTC)",
-      "You've hit your session limit · resets 3pm (UTC)",
-      "You've hit your org's monthly usage limit",
-      '5-hour limit reached ∙ resets 3pm (Asia/Bangkok)',
-      "bench/t-0a1b2c3d-r1 author 0 failed: claude ended with success: You've hit your weekly limit · resets 9am",
-      'no retry after the first failure: x failed: claude ended with an error: Claude AI usage limit reached|1764000000',
-      'Error: out of extra usage · resets 3pm',
+      'POST /repos/FiatFour/ai-office/git/refs -> 502 {"message":"Server Error"}',
+      'docker run -d --name failed (exit 125): no space left on device',
+      'no retry after the first failure: bench/t-0a1b2c3d-r1 author 0 failed: the cage repo has no HEAD: x',
+      'no retry after the first failure: the file path "x" is fine but GitHub said 500',
+      'HQ refused the ticket: x',
+      'no PR on aw/bench/t-0a1b2c3d-r1',
+      'bench/t-0a1b2c3d-r1 reviewer 1 failed: claude ended with success: it says claude finished without committing a change',
+      'refusing POST /repos/FiatFour/ai-office/pulls on github: a bench PR opens as a draft',
     ])
-      expect(stopOf(text), text).toBe('quota');
+      expect(statusOf(text), text).toBe('aborted');
   });
 
-  it('puts an auth line before a usage-limit line, in whatever order they were printed', () => {
-    const both = 'Claude AI usage limit reached|1764000000\nFailed to authenticate. API Error: 401\n';
-    expect(stopLine(both)).toMatch(/^Failed to authenticate/);
-    expect(stopOf(both)).toBe('auth');
-  });
-
-  describe('claude stderr', () => {
-    const shell = (err: string, out: string, code: number): CageShell => ({
+  it('stops a failed git command in the cage before it can read as a session with no change', async () => {
+    const shell: CageShell = {
       async exec(argv) {
         if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
-        return { code, out, err, timedOut: false };
+        if (argv.includes('diff')) return { code: 137, out: '', err: 'container is not running', timedOut: false };
+        return { code: 0, out: resultOf('done', 'success', false), err: '', timedOut: false };
       },
-    });
-    const job = {
-      role: 'author' as const,
-      task: 'bench/t-0a1b2c3d-r1',
-      worker: 'baseline',
-      ticket: { id: 'bench/t-0a1b2c3d-r1', kind: 'defect' as const, title: 't', body: 'b', url: null, risk: null },
-      round: 0,
-      comments: [],
-      signal: new AbortController().signal,
     };
-    const message = async (err: string, out = '', code = 1): Promise<string> => {
+    const m = await thrownBy(shell);
+    expect(m).toContain('git in the cage exited 137');
+    expect(statusOf(m)).toBe('aborted');
+  });
+});
+
+describe('what is a result of the task, and final', () => {
+  it.each([
+    ['max turns in the result', '', resultOf("You've hit your max turns"), 1],
+    [
+      'max turns by subtype',
+      '',
+      `${JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true })}\n`,
+      1,
+    ],
+    ['a long prompt', '', resultOf('Prompt is too long'), 1],
+    ['max turns beside a stderr warning', 'a warning\n', resultOf("You've hit your max turns"), 1],
+    ['no committed change', '', resultOf('I could not do it', 'success', false), 0],
+  ])('%s', async (_name, err, out, code) => {
+    expect(await status(err, out, code)).toBe('failed');
+  });
+
+  it('reads the refusals and the reviewer failures as the real code throws them', async () => {
+    const h = harness();
+    const ticket = 'bench/t-0a1b2c3d-r1';
+    const bench = benchHost({ repo: REPO, base: baseNameOf(ticket), baseSha: h.root, send: h.send, log: h.note });
+    await bench.seedBase();
+    const push = (path: string) =>
+      bench.host
+        .pushFiles(REPO, {
+          branch: `aw/${ticket}`,
+          base: baseNameOf(ticket),
+          files: [{ path, content: 'x' }],
+          message: 'm',
+        })
+        .then(
+          () => 'pushed',
+          (error: Error) => error.message,
+        );
+    for (const path of ['.github/workflows/ci.yml', 'src/.env'])
+      expect(statusOf(await push(path)), path).toBe('failed');
+    for (const reply of ['no verdict here', '```json\n{"verdict":"approve"}\n```\n"verdict": "changes",']) {
+      let thrown = '';
       try {
-        await claudeCode({ shell: () => withStderr(shell(err, out, code)) }).run(job);
+        parseReview(reply);
       } catch (error) {
-        return (error as Error).message;
+        thrown = (error as Error).message;
       }
-      throw new Error('claude did not fail');
+      expect(statusOf(thrown), reply).toBe('failed');
+    }
+    const binary: CageShell = {
+      async exec(argv) {
+        if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
+        if (argv.includes('--numstat')) return { code: 0, out: '-\t-\ta.png\0', err: '', timedOut: false };
+        return { code: 0, out: resultOf('done', 'success', false), err: '', timedOut: false };
+      },
     };
+    expect(statusOf(await thrownBy(binary))).toBe('failed');
+  });
 
-    it('reads a usage limit printed only to stderr as a quota stop, not a task failure', async () => {
-      const m = await message('Claude AI usage limit reached|1764000000\nsomething else\n');
-      expect(m).not.toMatch(/no result line/);
-      expect(classify(m, new Date()).status).toBe('quota');
-    });
+  it('counts the session time limit as final, and a stop printed while it ran as not', async () => {
+    expect(statusOf(await thrownBy(claudeShell('', '', -1, true)))).toBe('failed');
+    expect(statusOf(await thrownBy(claudeShell('Not logged in\n', '', -1, true)))).toBe('auth');
+    expect(statusOf(await thrownBy(claudeShell('API Error: 529 x\n', '', -1, true)))).toBe('transient');
+  });
 
-    it('reads an overload printed only to stderr as transient', async () => {
-      const m = await message('API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}\n');
-      expect(classify(m, new Date()).status).toBe('transient');
-    });
+  it('reads the factory forms of a result, each with the wrappers it arrives in', () => {
+    const turn = 'bench/t-0a1b2c3d-r1';
+    for (const text of [
+      `no retry after the first failure: ${turn} author 1 failed: claude finished without committing a change`,
+      `no retry after the first failure: ${turn} author 0 failed: claude committed the binary file a.png; HQ pushes text files only`,
+      `no retry after the first failure: ${turn} reviewer 1 failed: claude ended with success: Prompt is too long`,
+      `job failed: ${turn} reviewer 1 failed: the reviewer gave no json block with a verdict of approve, changes or comment. Reviewer text: x`,
+      'no retry after the first failure: the fix round changed no file',
+      'the reviewer still asked for changes at the round limit',
+      'refusing to push a change under .github: .github/workflows/x.yml',
+      'refusing POST /repos/FiatFour/ai-office/git/trees on github: the file path ".env" is empty, hidden or holds a backslash',
+      'the host refused what the crew pushed, so nothing is graded: refusing to push a change under .github: CODEOWNERS',
+    ])
+      expect(statusOf(text), text).toBe('failed');
+  });
 
-    it('reads a revoked login on stderr as auth', async () => {
-      expect(classify(await message('Failed to authenticate. API Error: 401\n'), new Date()).status).toBe('auth');
-    });
+  it("records the arm's time limit as final, and any other abort or error as not", () => {
+    const timed = new AbortController();
+    timed.abort(new ArmTimeout());
+    const now = new Date();
+    for (const error of [timed.signal.reason, new DOMException('x', 'AbortError'), new Error('the run was aborted')])
+      expect(verdictOf(error, timed.signal, now).status).toBe('failed');
+    expect(verdictOf(new Error('POST /x -> 500'), timed.signal, now).status).toBe('aborted');
+    const killed = new AbortController();
+    killed.abort(new Error('the driver was stopped by a signal'));
+    expect(verdictOf(new Error('the run was aborted'), killed.signal, now).status).toBe('aborted');
+    expect(verdictOf(new Error('the run was aborted'), new AbortController().signal, now).status).toBe('aborted');
+  });
+});
 
-    it('leaves an ordinary stderr as a failure of the task', async () => {
-      expect(classify(await message('Segmentation fault\n'), new Date()).status).toBe('failed');
-    });
+describe('claude stderr and reset times', () => {
+  it('puts an auth line first, wherever it was printed', async () => {
+    const QUOTA = 'Claude AI usage limit reached|1764000000\n';
+    const AUTH = 'Failed to authenticate. API Error: 401\n';
+    expect(stopLine(`${QUOTA}${AUTH}`)).toMatch(/^Failed to authenticate/);
+    expect(await status(`API Error: 529 overloaded\n${AUTH}`)).toBe('auth');
+    expect(await status(`${QUOTA}${AUTH}`)).toBe('auth');
+    expect(await status(AUTH, resultOf("You've hit your limit · resets 3pm"))).toBe('auth');
+    expect(await status(AUTH, resultOf('tests broke', 'success', false), 1)).toBe('auth');
+    expect(await status(QUOTA, resultOf('OAuth token revoked'))).toBe('auth');
+  });
 
-    const resultOf = (result: string, subtype = 'error_during_execution', is_error = true): string =>
-      `${JSON.stringify({ type: 'result', subtype, is_error, result })}\n`;
-    const status = async (err: string, out = '', code = 1) =>
-      classify(await message(err, out, code), new Date()).status;
-    const QUOTA_LINE = 'Claude AI usage limit reached|1764000000\n';
-    const AUTH_LINE = 'Failed to authenticate. API Error: 401\n';
+  it('does not override a successful result with what stderr says', async () => {
+    const ran = await withStderr(claudeShell('Not logged in\n', resultOf('done', 'success', false), 0)).exec([
+      'claude',
+      '--output-format',
+      'stream-json',
+    ]);
+    expect(ran.out).toBe(resultOf('done', 'success', false));
+  });
 
-    it('reads auth when a usage limit and an auth line are both printed, wherever each is', async () => {
-      expect(await status(`${QUOTA_LINE}${AUTH_LINE}`)).toBe('auth');
-      expect(await status(AUTH_LINE, resultOf("You've hit your limit · resets 3pm"))).toBe('auth');
-      expect(await status(AUTH_LINE, resultOf('tests broke', 'success'))).toBe('auth');
-      expect(await status(QUOTA_LINE, AUTH_LINE)).toBe('auth');
-      expect(await status(QUOTA_LINE, resultOf('OAuth token revoked'))).toBe('auth');
-    });
-
-    it('reads an empty reply with exit 0 as transient, and an empty reply with exit 1 as a failure', async () => {
-      expect(await status('', '', 0)).toBe('transient');
-      expect(await status('some warning\n', '', 0)).toBe('transient');
-      expect(await status(QUOTA_LINE, '', 0)).toBe('quota');
-      expect(await status('', '', 1)).toBe('failed');
-    });
-
-    it('reads a quota on stderr when stdout says only Execution error', async () => {
-      expect(await status(QUOTA_LINE, 'Execution error\n')).toBe('quota');
-      expect(await status(QUOTA_LINE, resultOf('Execution error'))).toBe('quota');
-      expect(await status(QUOTA_LINE, resultOf(''))).toBe('quota');
-    });
-
-    it('does not override a successful result with what stderr says', async () => {
-      const ran = await withStderr(shell(AUTH_LINE, resultOf('done', 'success', false), 0)).exec([
-        'claude',
-        '--output-format',
-        'stream-json',
-      ]);
-      expect(ran.out).toBe(resultOf('done', 'success', false));
-    });
-
-    it('leaves a stream that has its own result line alone', async () => {
-      const out = `${JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'tests broke' })}\n`;
-      const m = await message("You've hit your limit", out);
-      expect(m).toContain('tests broke');
-      expect(classify(m, new Date()).status).toBe('failed');
-    });
+  it('reads no reset time, and does not throw, when the parentheses name no time zone', () => {
+    expect(resetAt('resets 3pm (see /usage)', new Date())).toBeNull();
   });
 
   it('turns the stated reset time into the next such time, in the stated zone', () => {
@@ -498,7 +638,7 @@ describe('the run log', () => {
     expect(first).toHaveLength(20);
     expect(first.slice(0, 4).map((t) => t.arm)).toEqual(['factory', 'baseline', 'baseline', 'factory']);
     const id = (tasks[0] as SetBTask).id;
-    const left = todo(tasks, [rec(id, 'factory', 'done', 5), rec(id, 'baseline', 'quota')]);
+    const left = todo(tasks, [rec(id, 'factory', 'done', 5), rec(id, 'baseline', 'aborted')]);
     expect(left).toHaveLength(19);
     expect(left[0]).toMatchObject({ arm: 'baseline' });
     expect(todo(tasks, [rec(id, 'factory', 'failed')]).some((t) => t.task.id === id && t.arm === 'factory')).toBe(
@@ -514,7 +654,7 @@ describe('the run log', () => {
     for (const r of [
       rec(id, 'factory', 'done', 7),
       rec(id, 'baseline', 'failed', 8),
-      rec((tasks[1] as SetBTask).id, 'factory', 'quota', 9),
+      rec((tasks[1] as SetBTask).id, 'factory', 'aborted', 9),
     ])
       appendRun(file, r);
     expect(readRuns(file)).toHaveLength(3);
@@ -765,12 +905,21 @@ describe('how a finished arm is recorded', () => {
 
   it('records a host refusal after round 0 as a final failure, never as done on the rejected head', () => {
     const out = finish(
-      { ...(ran as object), refused: true } as never,
+      {
+        ...(ran as object),
+        refused: true,
+        note: 'the host refused what the crew pushed, so nothing is graded: refusing to push a change under .github: x',
+      } as never,
       { number: 7, headSha: 'f'.repeat(40) },
       'aw/bench/t-0a1b2c3d-r1',
     );
     expect(out).toMatchObject({ status: 'failed', pr: 7, readyHeadSha: null });
     expect(isFinal({ status: out.status } as RunRecord)).toBe(true);
+  });
+
+  it('records any other refused write as aborted', () => {
+    const note = 'the host refused what the crew pushed, so nothing is graded: refusing POST /x on github: not allowed';
+    expect(finish({ ...(ran as object), refused: true, note } as never, null, 'b').status).toBe('aborted');
   });
 
   it('records a normal finish with a PR as done at its head, and one without a PR as a failure', () => {
@@ -779,7 +928,7 @@ describe('how a finished arm is recorded', () => {
       pr: 7,
       readyHeadSha: 'f'.repeat(40),
     });
-    expect(finish(ran, null, 'aw/b')).toMatchObject({ status: 'failed', pr: null });
+    expect(finish(ran, null, 'aw/b')).toMatchObject({ status: 'aborted', pr: null });
   });
 });
 
@@ -959,12 +1108,58 @@ describe('the drive loop stops', () => {
     expect(await drive(['transient', 'done'])).toMatchObject({ code: 0, ran: [first.id, first.id, second.id] });
   });
 
-  it('exits 75 on a usage limit without starting another arm', async () => {
-    expect(await drive(['quota'])).toMatchObject({ code: 75, ran: [first.id], stop: false, records: 1 });
+  it('exits 75 on an arm that did not finish, with no retry and no next arm', async () => {
+    expect(await drive(['aborted'])).toMatchObject({ code: 75, ran: [first.id], stop: false, records: 1, slept: [] });
   });
 
   it('writes the STOP file and exits 5 on a login failure', async () => {
     expect(await drive(['auth'])).toMatchObject({ code: 5, ran: [first.id], stop: true });
+  });
+});
+
+describe('the pinned base, the orphan check and the leftover cages', () => {
+  it('takes no base but the pinned one', () => {
+    expect(PINNED_BASE).toBe('56db6a1e227ca3b46a15d6ac1f1c2794daea042d');
+    expect(baseShaOf(undefined)).toBe(PINNED_BASE);
+    expect(baseShaOf(PINNED_BASE)).toBe(PINNED_BASE);
+    for (const other of [PINNED_BASE.slice(0, 7), 'a'.repeat(40), PINNED_BASE.toUpperCase(), ''])
+      expect(() => baseShaOf(other), other).toThrow(/not the pinned base/);
+  });
+
+  it('refuses a remote that holds bench work the journal does not know', async () => {
+    const journal = join(tempDir('setb-orphans'), 'runs.jsonl');
+    const { intent } = claimIntent(journal, tasks[0] as SetBTask, 'factory', PINNED_BASE);
+    const remote =
+      (refs: string[]) =>
+      async ({ path }: { path: string }) => ({
+        status: 200,
+        body: path.includes('matching-refs/heads/aw/bench/') ? refs.map((r) => ({ ref: `refs/heads/${r}` })) : [],
+      });
+    await expect(refuseOrphans(remote([]), 'o/r', journal)).resolves.toBeUndefined();
+    await expect(refuseOrphans(remote([intent.branch]), 'o/r', journal)).resolves.toBeUndefined();
+    await expect(refuseOrphans(remote(['aw/bench/t-deadbeef-r1']), 'o/r', journal)).rejects.toThrow(
+      /does not know: aw\/bench\/t-deadbeef-r1/,
+    );
+  });
+
+  it('removes only containers with the bench project label', async () => {
+    const calls: string[][] = [];
+    let listed = 'one\ntwo\n';
+    const engine = {
+      ok: async (args: readonly string[]) => {
+        calls.push([...args]);
+        return args[0] === 'ps' ? listed : '';
+      },
+    };
+    expect(await removeLeftovers(engine)).toEqual(['one', 'two']);
+    expect(calls).toEqual([
+      ['ps', '-aq', '--filter', 'label=agent-works.project=agent-works-bench'],
+      ['rm', '-f', 'one', 'two'],
+    ]);
+    listed = '';
+    calls.length = 0;
+    await removeLeftovers(engine);
+    expect(calls).toHaveLength(1);
   });
 });
 
@@ -1035,41 +1230,37 @@ if (${JSON.stringify(how)} !== 'exit') setInterval(() => {}, 1000);
       expect(existsSync(file)).toBe(false);
     });
 
-    const stage = () => {
+    const stage = (tools: Record<string, string> = {}) => {
       const out = tempDir('setb-cli-lock');
       const bin = join(out, 'bin');
       mkdirSync(bin);
       const touched = join(out, 'touched');
-      for (const tool of ['gh', 'git']) {
-        writeFileSync(join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> '${touched}'\nexit 1\n`);
+      for (const tool of ['gh', 'git', 'docker', 'podman']) {
+        writeFileSync(join(bin, tool), `#!/bin/sh\necho "${tool} $*" >> '${touched}'\n${tools[tool] ?? 'exit 1'}\n`);
         chmodSync(join(bin, tool), 0o755);
       }
-      const cli = (command: string) =>
-        spawnSync(
-          process.execPath,
-          [
-            join(import.meta.dirname, '..', 'run.ts'),
-            command,
-            '--base-sha',
-            'a'.repeat(40),
-            '--home',
-            out,
-            '--out',
-            out,
-            '--cache',
-            join(out, 'cache'),
-          ],
-          {
-            encoding: 'utf8',
-            env: {
-              ...process.env,
-              AW_BENCH_LOGIN_CONFIRMED: '1',
-              GH_HOST: '',
-              PATH: `${bin}:${process.env.PATH ?? ''}`,
-            },
-          },
-        );
-      return { out, touched, cli, lock: join(out, 'runs.jsonl.lock') };
+      const cache = join(out, 'cache');
+      const argv = (command: string, dir = out, more: string[] = []) => [
+        join(import.meta.dirname, '..', 'run.ts'),
+        command,
+        '--home',
+        out,
+        '--out',
+        dir,
+        '--cache',
+        cache,
+        ...more,
+      ];
+      const env = {
+        ...process.env,
+        AW_BENCH_LOGIN_CONFIRMED: '1',
+        GH_HOST: '',
+        PATH: `${bin}:${process.env.PATH ?? ''}`,
+      };
+      const cli = (command: string, dir = out, more: string[] = []) =>
+        spawnSync(process.execPath, argv(command, dir, more), { encoding: 'utf8', env, timeout: 60_000 });
+      const start = (command: string) => spawn(process.execPath, argv(command), { env, stdio: 'ignore' });
+      return { out, cache, touched, cli, start, lock: join(out, 'runs.jsonl.lock') };
     };
 
     it.each(['drive', 'close', 'reconcile'])(
@@ -1085,13 +1276,95 @@ if (${JSON.stringify(how)} !== 'exit') setInterval(() => {}, 1000);
       },
     );
 
+    it.each(['drive', 'close', 'reconcile'])(
+      '%s stops while a command from another checkout holds the shared lock',
+      (command) => {
+        const { out, cache, touched, cli } = stage();
+        mkdirSync(cache);
+        writeFileSync(join(cache, 'setb.lock'), holder(process.pid));
+        const ran = cli(command, join(out, 'other-checkout'));
+        expect(ran.stderr).toMatch(/setb\.lock is held by pid/);
+        expect(ran.status).toBe(3);
+        expect(existsSync(touched)).toBe(false);
+      },
+    );
+
+    it.each(['prepare', 'drive', 'close', 'reconcile'])(
+      '%s refuses another base before touching anything',
+      (command) => {
+        const { out, touched, cli } = stage();
+        const ran = cli(command, out, ['--base-sha', 'a'.repeat(40)]);
+        expect(ran.stderr).toMatch(/not the pinned base/);
+        expect(ran.status).toBe(3);
+        expect(existsSync(touched)).toBe(false);
+      },
+    );
+
+    /** Fake `gh` and engine over a prepared cache, so `drive` reaches its first arm with no network and no model. */
+    const driving = (post: string, refs = '[]') => {
+      const reply = (status: number, body: string) => `printf 'HTTP/2.0 ${status} x\\n\\n%s\\n' '${body}'`;
+      const made = stage({
+        gh: `case "$4 $5" in
+GET*matching-refs/heads/aw/bench/*) ${reply(200, refs)};;
+GET*) ${reply(200, '[]')};;
+*) ${post};;
+esac`,
+        docker: `case "$1 $3" in
+info*) echo '{}';;
+"ps --filter") echo leftover;;
+esac
+exit 0`,
+      });
+      const base = join(made.cache, 'setb-base', PINNED_BASE);
+      mkdirSync(join(base, 'installed', 'node_modules'), { recursive: true });
+      mkdirSync(join(base, 'source', '.git'), { recursive: true });
+      const called = () => (existsSync(made.touched) ? readFileSync(made.touched, 'utf8') : '');
+      return { ...made, called };
+    };
+
+    it('records a 502 from the first remote write as aborted and stops with 75 before the next arm', () => {
+      const { out, cli, called } = driving(`printf 'HTTP/2.0 502 x\\n\\n{"message":"Server Error"}\\n'`);
+      const ran = cli('drive');
+      expect(ran.status, ran.stderr).toBe(75);
+      const runs = readRuns(join(out, 'runs.jsonl'));
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ status: 'aborted', arm: 'factory', baseSha: PINNED_BASE });
+      expect(runs[0]?.note).toContain('502');
+      expect(existsSync(join(out, 'STOP'))).toBe(false);
+      const beforeFirstWrite = called().split('-X POST')[0];
+      expect(beforeFirstWrite).toContain('docker ps -aq --filter label=agent-works.project=agent-works-bench\n');
+      expect(beforeFirstWrite).toContain('docker rm -f leftover');
+    });
+
+    it('does not start while the remote holds bench work the journal does not know', () => {
+      const { cli, called } = driving('exit 1', '[{"ref":"refs/heads/aw/bench/t-deadbeef-r1"}]');
+      const ran = cli('drive');
+      expect(ran.stderr).toMatch(/does not know: aw\/bench\/t-deadbeef-r1/);
+      expect(ran.status).toBe(3);
+      expect(called()).not.toMatch(/^docker/m);
+    });
+
+    it('removes the running cage on a signal before it exits and releases the locks', async () => {
+      const { cache, start, lock, called } = driving('exec sleep 5');
+      const child = start('drive');
+      const done = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+      await vi.waitFor(() => expect(called()).toMatch(/gh api --include -X POST/), { timeout: 20_000, interval: 50 });
+      const before = called();
+      child.kill('SIGTERM');
+      expect(await done).toBe(143);
+      const after = called().slice(before.length);
+      expect(after).toMatch(
+        /docker ps -aq --filter label=agent-works\.project=agent-works-bench --filter label=agent-works\.hq=/,
+      );
+      expect(after).toContain('docker rm -f leftover');
+      expect(existsSync(lock)).toBe(false);
+      expect(existsSync(join(cache, 'setb.lock'))).toBe(false);
+    }, 40_000);
+
     it.each(['drive', 'close', 'reconcile'])('%s reports a torn journal line and goes on to the host', (command) => {
       const { out, touched, cli, lock } = stage();
       const runs = join(out, 'runs.jsonl');
-      writeFileSync(
-        runs,
-        `${JSON.stringify({ kind: 'header', baseSha: 'a'.repeat(40), createdAt: 'x' })}\n{"kind":"inte`,
-      );
+      writeFileSync(runs, `${JSON.stringify({ kind: 'header', baseSha: PINNED_BASE, createdAt: 'x' })}\n{"kind":"inte`);
       const ran = cli(command);
       expect(ran.stderr).toMatch(/ends in a torn line, which is skipped: "\{\\"kind\\":\\"inte"/);
       expect(readFileSync(touched, 'utf8')).toMatch(/^(gh|git) /);

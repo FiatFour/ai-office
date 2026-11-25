@@ -228,44 +228,48 @@ export const publicEnv = (o: PublicOptions): FactoryEnv => {
 
 export const saltOf = (ticketId: string): string => createHash('sha256').update(ticketId).digest('hex').slice(0, 8);
 
+/** The subtype of a result line the bench wrote itself: nothing it reports is ever a task outcome. */
+const ABNORMAL = 'bench_abnormal';
+const FACTORY_WRAPPERS = String.raw`^(?:the host refused what the crew pushed, so nothing is graded: )?(?:job failed: |no retry after the first failure: )?(?:bench/t-[0-9a-f]{8}-r\d+ (?:author|reviewer) \d+ failed: )?`;
 /**
- * A provider message starts a line, or follows the `claude ended with <subtype>: ` wrapper of `parseStream`. Matching anywhere
- * would read a model's own words ("You've hit your max turns") or a task that talks about rate limits as a stop.
+ * The only messages that are a result of the task. Every other failure says nothing about the arm, so a message nobody has
+ * seen yet stops the run instead of being recorded as a final failure.
  */
-const providerSays = (...forms: string[]): RegExp =>
-  new RegExp(String.raw`(?:^|claude ended with [\w ]+?: )[ \t]*(?:(?:API )?Error: )?(?:${forms.join('|')})`, 'im');
-/** What follows the word "limit" or "usage" in a provider message: a separator, the reset time, or nothing. */
-const END = String.raw`(?=[ \t]*(?:[·∙•|.]|resets\b|$))`;
-const EMPTY_REPLY = 'claude gave an empty reply with exit 0';
+const TASK_OUTCOMES: readonly RegExp[] = [
+  'claude finished without committing a change$',
+  String.raw`claude committed the binary file [^\n]*; HQ pushes text files only$`,
+  'claude ran past its time limit$',
+  'claude ended with error_max_turns(?:$|: )',
+  "claude ended with (?:success|error_during_execution): (?:You['’]ve hit your max turns|Prompt is too long)",
+  'the fix round changed no file$',
+  'the reviewer still asked for changes at the round limit$',
+  'the reviewer gave no json block with a verdict ',
+  'the reviewer text holds a changes verdict that could not be read ',
+  String.raw`refusing to push a change under \.github: `,
+  String.raw`refusing POST \S+ on github: the file path "[^\n]*" is empty, hidden or holds a backslash$`,
+].map((form) => new RegExp(`${FACTORY_WRAPPERS}${form}`));
 
-/** A usage limit has a reset time and ends the run; an overload or provider rate limit is transient. */
-const QUOTA = providerSays(
-  `You['’]ve hit your (?:(?:org's|monthly|daily|weekly|usage|session|5-hour|Opus|Sonnet|Fable) ){0,3}limit${END}`,
-  `(?:Claude AI )?usage limit reached${END}`,
-  `(?:5-hour|weekly) limit reached${END}`,
-  `(?:You['’]re )?out of (?:extra )?usage${END}`,
-);
-const TRANSIENT = providerSays(
-  String.raw`API Error: (?:429|529)\b`,
-  String.raw`(?:overloaded|rate_limit)_error\b`,
-  String.raw`\{"type":"error","error":\{"type":"(?:overloaded|rate_limit)_error"`,
-  EMPTY_REPLY,
-);
-const AUTH = providerSays('OAuth token revoked', 'Failed to authenticate');
+export const isTaskOutcome = (message: string): boolean => TASK_OUTCOMES.some((form) => form.test(message));
 
-export type Stop = 'quota' | 'transient' | 'auth' | null;
+/** A provider message starts a line, or follows the `claude ended with <subtype>: ` wrapper of `parseStream`. */
+const TRANSIENT =
+  /(?:^|claude ended with [\w ]+?: )[ \t]*(?:(?:API )?Error: )?(?:API Error: (?:429|529)\b|(?:overloaded|rate_limit)_error\b|\{"type":"error","error":\{"type":"(?:overloaded|rate_limit)_error")/im;
+const AUTH =
+  /Failed to authenticate|Not logged in|Login expired|Login reached its time limit|Authentication required|Invalid API key|API Error: 401|OAuth token/i;
+
+export type Stop = 'auth' | 'transient' | null;
 
 export const stopOf = (message: string): Stop =>
-  AUTH.test(message) ? 'auth' : QUOTA.test(message) ? 'quota' : TRANSIENT.test(message) ? 'transient' : null;
+  AUTH.test(message) ? 'auth' : TRANSIENT.test(message) ? 'transient' : null;
 
-/** The line that states the stop, auth before quota before transient wherever each stands, else the first 200 characters. */
+/** The line to report: auth, then transient, then one that states a reset time, else the first 200 characters. */
 export const stopLine = (text: string): string => {
   const lines = text.split('\n').map((l) => l.trim());
-  for (const stop of ['auth', 'quota', 'transient'] as const) {
-    const line = lines.find((l) => stopOf(l) === stop);
-    if (line !== undefined) return line.slice(0, 200);
-  }
-  return text.trim().slice(0, 200);
+  const line =
+    lines.find((l) => stopOf(l) === 'auth') ??
+    lines.find((l) => stopOf(l) === 'transient') ??
+    lines.find((l) => resetAt(l, new Date()) !== null);
+  return (line ?? text.trim()).slice(0, 200);
 };
 
 interface ResultLine {
@@ -288,40 +292,77 @@ const resultLine = (out: string): ResultLine | undefined =>
     })
     .at(-1);
 
+type Ran = Awaited<ReturnType<CageShell['exec']>>;
+
 /** The failure text to put in a synthetic result line, or null to leave the stream as claude printed it. */
-const unsaid = (ran: { readonly code: number; readonly out: string; readonly err: string }): string | null => {
+const unsaid = (ran: Ran): string | null => {
   const result = resultLine(ran.out);
   if (result === undefined) {
     const printed = ran.out.split('\n').filter((l) => !l.startsWith('{'));
-    const line = stopLine([ran.err, ...printed].join('\n'));
-    if (stopOf(line) !== null) return line;
-    if (ran.code === 0 && ran.out.trim() === '') return EMPTY_REPLY;
-    return ran.err.trim() === '' ? null : stopLine(ran.err);
+    const text = [ran.err, ...printed].join('\n').trim();
+    return text === ''
+      ? `claude gave an empty reply with exit ${ran.code}`
+      : `${stopLine(text)} [exit ${ran.code}, no result line]`;
   }
-  if (result.is_error !== true && result.subtype === 'success') return null;
-  const line = stopLine(ran.err);
-  const stop = stopOf(line);
   const said = (result.result ?? '').trim();
-  const generic = /^(?:Execution error\.?)?$/i.test(said);
-  return (stop === 'auth' && stopOf(said) !== 'auth') || (generic && stop !== null) ? line : null;
+  const line = ran.err.trim() === '' ? null : stopLine(ran.err);
+  if (result.is_error !== true && result.subtype === 'success') {
+    if (ran.code === 0 && said !== '') return null;
+    const why = said === '' ? 'claude gave an empty reply' : 'claude reported success';
+    return line ?? `${why} with exit ${ran.code}`;
+  }
+  if (line === null) return null;
+  if (stopOf(line) === 'auth' && stopOf(said) !== 'auth') return line;
+  const generic = result.subtype !== 'error_max_turns' && /^(?:Execution error\.?)?$/i.test(said);
+  return generic ? line : null;
+};
+
+const withResult = (ran: Ran, result: string): Ran => {
+  const line = JSON.stringify({ type: 'result', subtype: ABNORMAL, is_error: true, result });
+  return { ...ran, out: `${ran.out}${ran.out.endsWith('\n') || ran.out === '' ? '' : '\n'}${line}\n` };
 };
 
 /**
- * `claudeCode` reads only stdout, so a usage limit or an overload printed to stderr would read as a task failure. When stdout
- * does not say why claude stopped, a synthetic error result line that does is appended.
+ * `claudeCode` reads only stdout and ignores the exit code, so this appends a synthetic error result line whenever claude
+ * ended abnormally without saying so there. It also throws on a failed git command in the cage, which `claudeCode` would
+ * read as a session that changed no file.
  */
 export const withStderr = (shell: CageShell): CageShell => ({
   async exec(argv, options) {
     const ran = await shell.exec(argv, options);
-    if (!argv.includes('--output-format')) return ran;
+    if (!argv.includes('--output-format')) {
+      if (argv[0] === 'git' && ran.code !== 0)
+        throw new Error(`git in the cage exited ${ran.code}: ${ran.err.trim().slice(-300)}`);
+      return ran;
+    }
+    if (ran.timedOut) {
+      const line = stopLine(ran.err);
+      return stopOf(line) === null ? ran : withResult({ ...ran, timedOut: false }, line);
+    }
     const result = unsaid(ran);
-    if (result === null) return ran;
-    const line = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result });
-    return { ...ran, out: `${ran.out}${ran.out.endsWith('\n') || ran.out === '' ? '' : '\n'}${line}\n` };
+    return result === null ? ran : withResult(ran, result);
   },
 });
 
 const TIME = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)?(?:\s*\(([^)]+)\))?/i;
+
+/** The calendar parts of `now` in the zone, or null when the text in parentheses names no time zone. */
+const partsIn = (zone: string | undefined, now: Date): Intl.DateTimeFormatPart[] | null => {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      ...(zone === undefined ? {} : { timeZone: zone }),
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(now);
+  } catch {
+    return null;
+  }
+};
 
 /** The reset time a usage-limit message states, as ms since the epoch, or null when it states none. */
 export const resetAt = (message: string, now: Date): number | null => {
@@ -334,17 +375,8 @@ export const resetAt = (message: string, now: Date): number | null => {
   const meridiem = m[3]?.toLowerCase();
   if (meridiem === 'pm' && hour < 12) hour += 12;
   if (meridiem === 'am' && hour === 12) hour = 0;
-  const zone = m[4];
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    ...(zone === undefined ? {} : { timeZone: zone }),
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(now);
+  const parts = partsIn(m[4], now);
+  if (parts === null) return null;
   const at = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
   const local = Date.UTC(at('year'), at('month') - 1, at('day'), at('hour'), at('minute'), at('second'));
   const offset = local - now.getTime();

@@ -7,8 +7,9 @@ import { parseArgs } from 'node:util';
 import { cageShells } from '../../server/agents/cage-shell.ts';
 import { claudeCode } from '../../server/agents/claude-code.ts';
 import { imageFor } from '../../server/config.ts';
-import { cliTransport, fileLog, type GitHost } from '../../server/githost/host.ts';
-import { pickEngine, runBinary } from '../../server/sandbox/engine.ts';
+import { cliTransport, fileLog, type GitHost, type Transport } from '../../server/githost/host.ts';
+import { type Engine, pickEngine, runBinary } from '../../server/sandbox/engine.ts';
+import { lines, PROJECT_LABEL } from '../../server/sandbox/firewall.ts';
 import type { ArmRun } from '../arms.ts';
 import { baselineArm, factoryArm, ticketOf } from '../arms-live.ts';
 import { BenchCage } from '../cage.ts';
@@ -24,6 +25,7 @@ import {
   CI_PARALLEL,
   type Head,
   hiddenTask,
+  isTaskOutcome,
   listRemote,
   orphansOf,
   publicEnv,
@@ -55,7 +57,7 @@ import {
 } from './journal.ts';
 import type { Judged } from './judge.ts';
 import { type Entry, type Sealed, sealedEntry } from './labels.ts';
-import { holdLock } from './lock.ts';
+import { holdLock, onStop } from './lock.ts';
 import { ghReadCi, gradeSetB, readWindow } from './outcome.ts';
 import type { Unreadable } from './packet.ts';
 import { loadFrozen, type SetBTask } from './task.ts';
@@ -96,6 +98,38 @@ export const tokensSum = (runs: readonly RunRecord[]): number =>
   );
 
 const REPO = 'FiatFour/ai-office';
+/** The base every Set B PR is opened against (docs/bench-set-b.md, Pinned base). */
+export const PINNED_BASE = '56db6a1e227ca3b46a15d6ac1f1c2794daea042d';
+const BENCH_PROJECT = 'agent-works-bench';
+
+export const baseShaOf = (flag: string | undefined): string => {
+  if (flag !== undefined && flag !== PINNED_BASE)
+    throw new TaskRefused(`--base-sha ${flag} is not the pinned base ${PINNED_BASE}; pass that or omit the flag`);
+  return PINNED_BASE;
+};
+
+/** A drive starts only when everything the bench ever put on the remote is in this journal. */
+export const refuseOrphans = async (send: Transport, repo: string, journalFile: string): Promise<void> => {
+  const { refs, pulls } = orphansOf(await listRemote(send, repo), readJournal(journalFile).intents);
+  if (refs.length === 0 && pulls.length === 0) return;
+  const named = [...refs, ...pulls.map((n) => `#${n}`)].join(', ');
+  throw new TaskRefused(
+    `${repo} holds bench work that ${journalFile} does not know: ${named}. Another checkout or machine may be driving; run reconcile`,
+  );
+};
+
+/** Removes the containers a killed drive left behind: those carrying the bench project label, and no other. */
+export const removeLeftovers = async (engine: Pick<Engine, 'ok'>): Promise<string[]> => {
+  const ids = lines(await engine.ok(['ps', '-aq', '--filter', `label=${PROJECT_LABEL}=${BENCH_PROJECT}`]));
+  if (ids.length > 0) await engine.ok(['rm', '-f', ...ids]);
+  return ids;
+};
+
+const engineOrRefuse = async (): Promise<Engine> => {
+  const engine = await pickEngine(undefined, process.env);
+  if (engine === null) throw new TaskRefused('no container engine is available for the cage');
+  return engine;
+};
 
 interface Live {
   readonly repo: string;
@@ -184,16 +218,31 @@ export const prepareWorkspace = async (
 const failureText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 export const classify = (message: string, now: Date): { status: Status; resetAt: number | null } => {
+  if (isTaskOutcome(message)) return { status: 'failed', resetAt: null };
   const stop = stopOf(message);
-  if (stop === 'auth') return { status: 'auth', resetAt: null };
-  if (stop === 'quota') return { status: 'quota', resetAt: resetAt(message, now) };
-  if (stop === 'transient') return { status: 'transient', resetAt: null };
-  return { status: 'failed', resetAt: null };
+  if (stop !== null) return { status: stop, resetAt: null };
+  return { status: 'aborted', resetAt: resetAt(message, now) };
+};
+
+/** The reason the arm's time limit aborts with, which no other abort carries. */
+export class ArmTimeout extends Error {}
+
+/** How a thrown arm is recorded. The arm's own time limit is a result of the task; every other abort is not. */
+export const verdictOf = (error: unknown, signal: AbortSignal, now: Date) => {
+  const message = failureText(error);
+  const timedOut =
+    signal.reason instanceof ArmTimeout &&
+    (error === signal.reason ||
+      (error as Error | null)?.name === 'AbortError' ||
+      /(?:^|: )the run was aborted$/.test(message));
+  return timedOut
+    ? { status: 'failed' as const, resetAt: null, note: `the arm ran past its time limit: ${message}` }
+    : { ...classify(message, now), note: message };
 };
 
 /**
- * What a finished arm run is recorded as. A host refusal after round 0 is a failure of the arm, final, exactly as the
- * baseline's refused push is: the open PR still carries the head the reviewer rejected, and it is never graded as done.
+ * What a finished arm run is recorded as. A refused .github or hidden-path push after round 0 is a failure of the arm,
+ * final, exactly as the baseline's refused push is: the open PR still carries the head the reviewer rejected, and it is never graded as done.
  */
 export const finish = (
   ran: ArmRun,
@@ -201,10 +250,12 @@ export const finish = (
   branch: string,
 ): Pick<RunRecord, 'status' | 'pr' | 'readyHeadSha' | 'tokens' | 'reviewRounds' | 'note'> => {
   const common = { tokens: ran.tokens, reviewRounds: ran.reviewRounds };
-  if (ran.refused === true)
-    return { ...common, status: 'failed', pr: change?.number ?? null, readyHeadSha: null, note: ran.note };
+  if (ran.refused === true) {
+    const status = isTaskOutcome(ran.note) ? 'failed' : 'aborted';
+    return { ...common, status, pr: change?.number ?? null, readyHeadSha: null, note: ran.note };
+  }
   if (change === null)
-    return { ...common, status: 'failed', pr: null, readyHeadSha: null, note: `no PR on ${branch}: ${ran.note}` };
+    return { ...common, status: 'aborted', pr: null, readyHeadSha: null, note: `no PR on ${branch}: ${ran.note}` };
   return { ...common, status: 'done', pr: change.number, readyHeadSha: change.headSha, note: ran.note };
 };
 
@@ -216,35 +267,22 @@ const runArm = async (
 ): Promise<RunRecord> => {
   const startedAt = new Date().toISOString();
   const wallStart = Date.now();
-  // The intent is journaled (fsync) before the first remote write, and a resume reuses it: the same salt, the same names.
-  const { intent, resumed } = claimIntent(live.journal, task, arm, live.baseSha);
-  const hidden = hiddenTask(task, intent.salt) as never;
-  const ticket = ticketOf(hidden, 1);
-  const branch = intent.branch;
-  const send = logged(cliTransport('gh', 'github.com'), fileLog(join(live.out, `${arm}.api.jsonl`)));
-  const log = fileLog(join(live.out, `${arm}.api.jsonl`));
-  const engine = await pickEngine(undefined, process.env);
-  if (engine === null) throw new TaskRefused('no container engine is available for the cage');
-  const driver = new BenchCage({
-    engine,
-    home: resolve(live.home),
-    hq: randomBytes(3).toString('hex'),
-    image: imageFor(process.env),
-    project: 'agent-works-bench',
-    installed: work.installed,
-    homeWorker: () => 'baseline',
-  });
-  const options = {
-    ...(live.bin === undefined ? {} : { bin: live.bin }),
-    ...(live.model === undefined ? {} : { model: live.model }),
-  };
+  let branch: string | null = null;
+  let bench: BenchHost | null = null;
+  let driver: BenchCage | null = null;
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), arm === 'factory' ? live.factoryTimeoutMs : live.armTimeoutMs);
-  const prepared = work as never;
+  const timer = setTimeout(
+    () => abort.abort(new ArmTimeout()),
+    arm === 'factory' ? live.factoryTimeoutMs : live.armTimeoutMs,
+  );
+  const offStop = onStop(async () => {
+    abort.abort(new Error('the driver was stopped by a signal'));
+    await driver?.removeAll();
+  });
   const base = (over: Partial<RunRecord>): RunRecord => ({
     task: task.id,
     arm,
-    status: 'failed',
+    status: 'aborted',
     stage: live.stage,
     branch,
     pr: null,
@@ -258,13 +296,35 @@ const runArm = async (
     baseSha: live.baseSha,
     ...over,
   });
-  let bench: BenchHost | null = null;
   try {
+    // The intent is journaled (fsync) before the first remote write, and a resume reuses it: the same salt, the same names.
+    const { intent, resumed } = claimIntent(live.journal, task, arm, live.baseSha);
+    const hidden = hiddenTask(task, intent.salt) as never;
+    const ticket = ticketOf(hidden, 1);
+    const head = intent.branch;
+    branch = head;
+    const send = logged(cliTransport('gh', 'github.com'), fileLog(join(live.out, `${arm}.api.jsonl`)));
+    const log = fileLog(join(live.out, `${arm}.api.jsonl`));
+    const cage = new BenchCage({
+      engine: await engineOrRefuse(),
+      home: resolve(live.home),
+      hq: randomBytes(3).toString('hex'),
+      image: imageFor(process.env),
+      project: BENCH_PROJECT,
+      installed: work.installed,
+      homeWorker: () => 'baseline',
+    });
+    driver = cage;
+    const options = {
+      ...(live.bin === undefined ? {} : { bin: live.bin }),
+      ...(live.model === undefined ? {} : { model: live.model }),
+    };
+    const prepared = work as never;
     const mine = benchHost({ repo: live.repo, base: intent.base, baseSha: live.baseSha, send, log });
     bench = mine;
     if (resumed) {
       // A resumed arm either takes over the PR the interrupted run left, or starts from nothing on the same names.
-      const adopted = await resumeBranch(mine, live.repo, branch, (change) =>
+      const adopted = await resumeBranch(mine, live.repo, head, (change) =>
         arm === 'baseline'
           ? Promise.resolve(true)
           : mine.host.snapshot(live.repo, change.number).then((snap) => adoptable(snap, REVIEWER)),
@@ -276,9 +336,9 @@ const runArm = async (
           readyHeadSha: adopted.headSha,
           note: `adopted PR #${adopted.number} that an interrupted run left open (its tokens were not recorded)`,
         });
-      rmSync(join(live.cache, 'hq', branch.split('/').at(-1) ?? 'x'), { recursive: true, force: true });
+      rmSync(join(live.cache, 'hq', head.split('/').at(-1) ?? 'x'), { recursive: true, force: true });
     }
-    const rawShells = cageShells(async () => driver, work.source);
+    const rawShells = cageShells(async () => cage, work.source);
     const shells = (worker: string, id: string) => withStderr(rawShells(worker, id));
     const done =
       arm === 'baseline'
@@ -289,11 +349,10 @@ const runArm = async (
               abort.signal,
               1,
             );
-            bench = mine;
             const published = await publishBaseline({
               bench: mine,
               repo: live.repo,
-              branch,
+              branch: head,
               base: intent.base,
               ticket,
               files: ran.files,
@@ -317,23 +376,25 @@ const runArm = async (
             return { ran, sha: null };
           })();
     const host: GitHost | null = (bench as BenchHost | null)?.host ?? null;
-    const change = host === null ? null : await host.findChange(live.repo, branch);
-    return base(finish(done.ran, change, branch));
+    const change = host === null ? null : await host.findChange(live.repo, head);
+    return base(finish(done.ran, change, head));
   } catch (error) {
-    const message = failureText(error);
-    const verdict = classify(message, new Date());
+    const verdict = verdictOf(error, abort.signal, new Date());
     const open =
-      bench === null ? null : await (bench as BenchHost).host.findChange(live.repo, branch).catch(() => null);
+      bench === null || branch === null
+        ? null
+        : await (bench as BenchHost).host.findChange(live.repo, branch).catch(() => null);
     return base({
-      status: abort.signal.aborted ? 'failed' : verdict.status,
+      status: verdict.status,
       pr: open?.number ?? null,
       readyHeadSha: open?.headSha ?? null,
-      note: message.replace(/\s+/g, ' ').slice(-300),
+      note: verdict.note.replace(/\s+/g, ' ').slice(-1000),
       resetAt: verdict.resetAt === null ? null : new Date(verdict.resetAt).toISOString(),
     });
   } finally {
     clearTimeout(timer);
-    await driver.removeAll().catch(() => {});
+    await driver?.removeAll().catch(() => {});
+    offStop();
   }
 };
 
@@ -351,7 +412,10 @@ export interface DriveDeps {
   readonly sleep: (ms: number) => Promise<unknown>;
 }
 
-/** Runs the arms in order and returns the exit code: 5 on a login failure (STOP file written), 75 on a stop to wait out. */
+/**
+ * Runs the arms in order and returns the exit code. It goes on to the next arm only after a final record. A transient provider
+ * error retries the same arm up to the cap; a login failure writes the STOP file and returns 5; anything else returns 75.
+ */
 export const driveArms = async (items: ReturnType<typeof todo>, deps: DriveDeps): Promise<number> => {
   for (const { task, arm } of items) {
     await deps.waitSlot();
@@ -369,8 +433,12 @@ export const driveArms = async (items: ReturnType<typeof todo>, deps: DriveDeps)
         writeFileSync(deps.stopFile, `login revoked or failed: ${record.note}\n`);
         return 5;
       }
-      if (record.status === 'quota') return 75;
-      if (record.status !== 'transient') break;
+      if (isFinal(record)) break;
+      if (record.status !== 'transient') {
+        const reset = record.resetAt === null ? '' : `, the message states a reset at ${record.resetAt}`;
+        console.error(`${task.id} ${arm}: the arm did not finish, stopping for root${reset}: ${record.note}`);
+        return 75;
+      }
       // A provider overload or rate limit: counted against neither arm, run again after a wait, up to a cap.
       if (tried + 1 >= TRANSIENT_CAP) {
         console.error(`${task.id} ${arm}: ${tried + 1} transient provider errors, stopping for root`);
@@ -412,29 +480,35 @@ const main = async (argv: string[]): Promise<number> => {
   const { torn } = readJournal(runsFile);
   if (torn !== null)
     console.error(`${runsFile} ends in a torn line, which is skipped: ${JSON.stringify(torn.slice(0, 300))}`);
+  const sharedLock = join(values.cache, 'setb.lock');
   if (command === 'prepare') {
-    const work = await prepareWorkspace(values.cache, need('base-sha', values['base-sha']));
+    const work = await prepareWorkspace(values.cache, baseShaOf(values['base-sha']));
     console.log(JSON.stringify(work));
     return 0;
   }
   if (command === 'drive') {
     if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1')
       throw new TaskRefused('not run, needs operator login confirmation');
+    const baseSha = baseShaOf(values['base-sha']);
+    holdLock(sharedLock, command);
     holdLock(lockFile, command);
     if (setAsideTorn(runsFile) !== null) console.error(`moved the torn line to ${runsFile}.torn`);
     if (existsSync(stopFile)) throw new TaskRefused(`${stopFile} exists: ${readFileSync(stopFile, 'utf8').trim()}`);
-    const baseSha = need('base-sha', values['base-sha']);
-    // The journal names its base on the first line; a different --base-sha is refused, so the base never moves after the first PR.
+    // The journal names its base on the first line; a different one is refused, so the base never moves after the first PR.
     pinBase(runsFile, baseSha);
     const stage = Number(values.stage);
     const only = values.only === undefined ? null : new Set(values.only.split(','));
     const arms = values.arms === undefined ? ARMS : (values.arms.split(',') as Arm[]);
+    const home = need('home', values.home);
+    await refuseOrphans(cliTransport('gh', 'github.com'), REPO, runsFile);
+    const removed = await removeLeftovers(await engineOrRefuse());
+    if (removed.length > 0) console.error(`removed ${removed.length} leftover bench containers`);
     const work = await prepareWorkspace(values.cache, baseSha);
     mkdirSync(values.out, { recursive: true });
     const live: Live = {
       repo: REPO,
       baseSha,
-      home: need('home', values.home),
+      home,
       cache: values.cache,
       out: values.out,
       journal: runsFile,
@@ -533,7 +607,8 @@ const main = async (argv: string[]): Promise<number> => {
     return 0;
   }
   if (command === 'close' || command === 'reconcile') {
-    const baseSha = need('base-sha', values['base-sha']);
+    const baseSha = baseShaOf(values['base-sha']);
+    holdLock(sharedLock, command);
     holdLock(lockFile, command);
     checkBase(runsFile, baseSha);
     const send = cliTransport('gh', 'github.com');

@@ -632,18 +632,6 @@ const MUTANTS = [
     tests: [ARMT],
   },
   {
-    name: 'arms-auth-read-as-quota',
-    claim: 'a revoked login is never read as a usage limit to wait out',
-    edits: [
-      [
-        AR,
-        "AUTH.test(message) ? 'auth' : QUOTA.test(message) ? 'quota' :",
-        "QUOTA.test(message) ? 'quota' : AUTH.test(message) ? 'auth' :",
-      ],
-    ],
-    tests: [ARMT],
-  },
-  {
     name: 'arms-final-rerun',
     claim: 'a finished arm is never run again, a quota stop is',
     edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status === 'done'"]],
@@ -651,21 +639,13 @@ const MUTANTS = [
   },
   {
     name: 'arms-quota-final',
-    claim: 'a usage-limit stop says nothing about the arm and runs again',
-    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'aborted'"]],
-    tests: [ARMT],
-  },
-  {
-    name: 'arms-quota-loose-rate-limit',
-    claim: 'a task text that says rate-limit or usage limit is not a quota stop: only provider messages are matched',
-    edits: [
-      [AR, 'const QUOTA = providerSays(', 'const QUOTA = /usage limit|rate.?limit/i;\nconst unused = providerSays('],
-    ],
+    claim: 'an arm that did not finish says nothing about itself and runs again',
+    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'transient'"]],
     tests: [ARMT],
   },
   {
     name: 'arms-overload-is-failure',
-    claim: 'a provider overload or 429 is transient, not a task failure',
+    claim: 'a provider overload or 429 is transient, so the capped retries apply',
     edits: [[AR, "TRANSIENT.test(message) ? 'transient' : null", 'null']],
     tests: [ARMT],
   },
@@ -684,13 +664,13 @@ const MUTANTS = [
   {
     name: 'run-transient-final',
     claim: 'a transient provider error says nothing about the arm and is not final',
-    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'quota'"]],
+    edits: [['bench/setb/journal.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'aborted'"]],
     tests: [ARMT],
   },
   {
     name: 'run-transient-unclassified',
-    claim: 'classify turns a transient stop into the transient status',
-    edits: [['bench/setb/run.ts', "if (stop === 'transient') return { status: 'transient', resetAt: null };", '']],
+    claim: 'classify turns a transient or auth stop into that status',
+    edits: [[RN, 'if (stop !== null) return { status: stop, resetAt: null };', '']],
     tests: [ARMT],
   },
   {
@@ -1073,7 +1053,7 @@ const MUTANTS = [
   {
     name: 'lock-kept-on-signal',
     claim: 'the lock is released on signals',
-    edits: [[LK, 'process.on(signal, () => process.exit(code));', 'void signal, void code;']],
+    edits: [[LK, 'const exit = () => process.exit(code);', 'const exit = () => void code;']],
     tests: [ARMT],
   },
   {
@@ -1116,57 +1096,44 @@ const MUTANTS = [
   },
   {
     name: 'stop-unanchored',
-    claim: 'a stop is a provider message, not a word anywhere',
-    edits: [[AR, 'String.raw`(?:^|claude ended with [\\w ]+?: )', 'String.raw`']],
-    tests: [ARMT],
-  },
-  {
-    name: 'stop-max-turns-is-quota',
-    claim: 'a model result about max turns is not a usage limit',
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
-    edits: [[AR, 'limit${END}`,\n  `(?:Claude AI ', '`,\n  `(?:Claude AI ']],
+    claim: 'a transient stop is a provider message, not a word anywhere',
+    edits: [[AR, '/(?:^|claude ended with [\\w ]+?: )', '/(?:)']],
     tests: [ARMT],
   },
   {
     name: 'stop-line-first-wins',
-    claim: 'an auth line anywhere wins over a usage-limit line',
-    edits: [
-      [
-        AR,
-        "for (const stop of ['auth', 'quota', 'transient'] as const) {\n    const line = lines.find((l) => stopOf(l) === stop);",
-        'for (const _ of [0]) {\n    const line = lines.find((l) => stopOf(l) !== null);',
-      ],
-    ],
+    claim: 'an auth line anywhere is the one reported',
+    edits: [[AR, "lines.find((l) => stopOf(l) === 'auth') ??", 'lines.find((l) => stopOf(l) !== null) ??']],
     tests: [ARMT],
   },
   {
     name: 'stop-auth-under-result',
     claim: 'auth on stderr beats a non-successful result',
-    edits: [[AR, "(stop === 'auth' && stopOf(said) !== 'auth') || ", '']],
+    edits: [[AR, "if (stopOf(line) === 'auth' && stopOf(said) !== 'auth') return line;", '']],
     tests: [ARMT],
   },
   {
     name: 'stop-overrides-success',
     claim: 'a successful result is left alone',
-    edits: [[AR, "if (result.is_error !== true && result.subtype === 'success') return null;\n", '']],
+    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", '']],
     tests: [ARMT],
   },
   {
     name: 'stop-stdout-auth-ignored',
-    claim: 'an auth line on stdout counts too',
-    edits: [[AR, 'stopLine([ran.err, ...printed].join', 'stopLine([ran.err].join']],
+    claim: 'a line claude printed on stdout counts too',
+    edits: [[AR, '[ran.err, ...printed].join', '[ran.err].join']],
     tests: [ARMT],
   },
   {
     name: 'stop-empty-reply-failed',
-    claim: 'an empty reply with exit 0 is transient',
-    edits: [[AR, 'return EMPTY_REPLY;', 'return null;']],
+    claim: 'an empty reply is recorded with its exit code',
+    edits: [[AR, "    return text === ''", "    if (text === '') return null;\n    return text === ''"]],
     tests: [ARMT],
   },
   {
     name: 'stop-execution-error-opaque',
-    claim: 'Execution error plus a quota on stderr is quota',
-    edits: [[AR, '(generic && stop !== null)', 'false']],
+    claim: 'Execution error is explained by what stderr says',
+    edits: [[AR, 'return generic ? line : null;', 'return null;']],
     tests: [ARMT],
   },
   {
@@ -1212,12 +1179,6 @@ const MUTANTS = [
     tests: [ARMT],
   },
   {
-    name: 'drive-quota-continues',
-    claim: 'a usage limit stops the loop with 75',
-    edits: [[RN, "if (record.status === 'quota') return 75;\n", '']],
-    tests: [ARMT],
-  },
-  {
     name: 'drive-no-stop-file',
     claim: 'a login failure writes STOP',
     edits: [[RN, 'writeFileSync(deps.stopFile,', 'void (deps.stopFile,']],
@@ -1227,6 +1188,226 @@ const MUTANTS = [
     name: 'drive-auth-code',
     claim: 'a login failure exits 5',
     edits: [[RN, '        return 5;', '        return 75;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'default-final',
+    claim: 'an unknown failure is never final: flipping the default back is caught',
+    edits: [
+      [
+        RN,
+        "return { status: 'aborted', resetAt: resetAt(message, now) };",
+        "return { status: 'failed', resetAt: null };",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'unknown-is-outcome',
+    claim: 'a message nobody has seen is not a task outcome',
+    edits: [[AR, "'the fix round changed no file$',", "'the fix round changed no file$',\n  '',"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-unanchored',
+    claim: 'a task outcome is a message from its start, not a phrase inside another',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[AR, 'new RegExp(`${FACTORY_WRAPPERS}${form}`)', 'new RegExp(form)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-no-diff-dropped',
+    claim: 'a session that committed nothing is final',
+    edits: [[AR, "'claude finished without committing a change$',", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-max-turns-dropped',
+    claim: 'max turns is final',
+    edits: [[AR, "You['’]ve hit your max turns|", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-long-prompt-dropped',
+    claim: 'a prompt that is too long is final',
+    edits: [[AR, '|Prompt is too long)', '|x^)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-time-limit-dropped',
+    claim: 'the session time limit is final',
+    edits: [[AR, "'claude ran past its time limit$',", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-review-reader-dropped',
+    claim: 'an unreadable review is a review loop that ended without approval',
+    edits: [[AR, "'the reviewer gave no json block with a verdict ',", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-github-guard-dropped',
+    claim: 'a refused .github push is final',
+    edits: [[AR, 'String.raw`refusing to push a change under \\.github: `,', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'outcome-bench-line-counts',
+    claim: 'what the bench wrote from stderr is never a task outcome',
+    edits: [[AR, "const ABNORMAL = 'bench_abnormal';", "const ABNORMAL = 'error_during_execution';"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'auth-login-expired-missed',
+    claim: 'an expired login writes the STOP file',
+    edits: [[AR, 'Login expired|', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'success-nonzero-exit-accepted',
+    claim: 'a nonzero exit is never a finished session',
+    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", "if (said !== '') return null;"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'success-empty-reply-accepted',
+    claim: 'an empty reply is never a finished session',
+    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", 'if (ran.code === 0) return null;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'cage-git-failure-ignored',
+    claim: 'a failed git in the cage is not a session with no change',
+    edits: [[AR, "if (argv[0] === 'git' && ran.code !== 0)", 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'timeout-stderr-stop-ignored',
+    claim: 'a stop printed while claude ran out of time is not final',
+    edits: [[AR, 'return stopOf(line) === null ? ran : withResult({ ...ran, timedOut: false }, line);', 'return ran;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'reset-zone-throws',
+    claim: 'text in parentheses that is no time zone does not crash the driver',
+    edits: [[AR, '} catch {\n    return null;\n  }\n};', '} catch (error) {\n    throw error;\n  }\n};']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arm-timeout-not-final',
+    claim: "the arm's time limit is final",
+    edits: [[RN, 'signal.reason instanceof ArmTimeout &&', 'false &&']],
+    tests: [ARMT],
+  },
+  {
+    name: 'any-abort-final',
+    claim: 'only the arm time limit makes an abort final',
+    edits: [[RN, 'signal.reason instanceof ArmTimeout &&', 'signal.aborted &&']],
+    tests: [ARMT],
+  },
+  {
+    name: 'timeout-hides-other-errors',
+    claim: 'an error that is not the abort stays aborted even after the time limit',
+    edits: [[RN, '(error === signal.reason ||', '(true ||']],
+    tests: [ARMT],
+  },
+  {
+    name: 'no-pr-final',
+    claim: 'a finished arm with no PR found is not final',
+    edits: [
+      [RN, "return { ...common, status: 'aborted', pr: null,", "return { ...common, status: 'failed', pr: null,"],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'any-refusal-final',
+    claim: 'only a refused .github or hidden path push is final',
+    edits: [[RN, "const status = isTaskOutcome(ran.note) ? 'failed' : 'aborted';", "const status = 'failed';"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'drive-goes-on-after-abort',
+    claim: 'an arm that did not finish stops the driver',
+    edits: [
+      [
+        RN,
+        "if (isFinal(record)) break;\n      if (record.status !== 'transient') {",
+        "if (record.status !== 'transient') break;\n      if (false) {",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'base-any',
+    claim: 'only the pinned base is accepted',
+    edits: [[RN, 'if (flag !== undefined && flag !== PINNED_BASE)', 'if (false)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'orphans-ignored',
+    claim: 'drive refuses a remote with bench work it does not know',
+    edits: [[RN, "await refuseOrphans(cliTransport('gh', 'github.com'), REPO, runsFile);", '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'orphan-pulls-and-refs-passed',
+    claim: 'an unknown ref is an orphan',
+    edits: [[RN, 'if (refs.length === 0 && pulls.length === 0) return;', 'return;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'leftovers-kept-at-start',
+    claim: 'drive removes the containers a killed drive left',
+    edits: [[RN, 'const removed = await removeLeftovers(await engineOrRefuse());', 'const removed: string[] = [];']],
+    tests: [ARMT],
+  },
+  {
+    name: 'leftovers-any-container',
+    claim: 'only containers with the bench label are removed',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[RN, "'ps', '-aq', '--filter', `label=${PROJECT_LABEL}=${BENCH_PROJECT}`", "'ps', '-aq'"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'signal-leaves-cage',
+    claim: 'a signal removes the running cage',
+    edits: [[RN, 'await driver?.removeAll();\n  });', '});']],
+    tests: [ARMT],
+  },
+  {
+    name: 'signal-skips-cleanups',
+    claim: 'a signal runs the registered cleanups before it exits',
+    edits: [[LK, '[...cleanups].map(async (cleanup) => cleanup())', '[]']],
+    tests: [ARMT],
+  },
+  {
+    name: 'shared-lock-drive-absent',
+    claim: 'drive takes the lock every checkout shares',
+    edits: [
+      [
+        RN,
+        "const baseSha = baseShaOf(values['base-sha']);\n    holdLock(sharedLock, command);",
+        "const baseSha = baseShaOf(values['base-sha']);",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'judge-pending-ci',
+    claim: 'judge does not start while a real PR has pending CI',
+    edits: [[C, 'if (pending.length > 0)', 'if (false)']],
+    tests: [SETB],
+  },
+  {
+    name: 'shared-lock-close-absent',
+    claim: 'close and reconcile take the lock every checkout shares',
+    edits: [
+      [
+        RN,
+        'holdLock(sharedLock, command);\n    holdLock(lockFile, command);\n    checkBase',
+        'holdLock(lockFile, command);\n    checkBase',
+      ],
+    ],
     tests: [ARMT],
   },
 ];

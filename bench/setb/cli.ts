@@ -98,6 +98,9 @@ export const realPackets = async (
       });
     }
   }
+  const pending = packets.filter((p) => p.ci.state === 'pending').map((p) => p.label);
+  if (pending.length > 0)
+    throw new TaskRefused(`CI is still pending on ${pending.join(', ')}; run judge after every check has finished`);
   return { packets, unreadable };
 };
 

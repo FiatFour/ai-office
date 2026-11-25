@@ -16,7 +16,7 @@ jobs:
           wsl -d Debian -u root -- sh -c 'printf "[automount]\noptions=metadata\n" >> /etc/wsl.conf'
           wsl --terminate Debian
           wsl -d Debian -u root -- sh -c 'systemctl stop docker.service docker.socket 2>/dev/null || service docker stop; rm -f /var/run/docker.pid'
-          Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'sh', '-c', '"dockerd -H unix:///var/run/docker.sock -H tcp://127.0.0.1:2375 --tls=false > /var/log/dockerd.log 2>&1"'
+          Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'sh', '-c', '"dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2375 --tls=false > /var/log/dockerd.log 2>&1"'
           $env:DOCKER_HOST = 'tcp://127.0.0.1:2375'
           $deadline = (Get-Date).AddMinutes(2)
           while ($true) {
@@ -34,13 +34,19 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          docker.exe version
-          wsl -d Debian -u root -- sh -c 'cat /etc/wsl.conf; mount | grep drvfs; docker --version; which docker dockerd'
-          docker build -t aw-test-cage:1 -f server/test/sandbox/Containerfile.test server/test/sandbox 2>&1 | Select-Object -Last 2
           $img = 'aw-test-cage:1'
+          docker build -t $img -f server/test/sandbox/Containerfile.test server/test/sandbox 2>&1 | Select-Object -Last 1
           function T($label, $a) { Write-Host "=== $label"; $o = & docker.exe @a 2>&1; Write-Host "exit=$LASTEXITCODE out=[$($o -join '|')]" }
-          T 'plain' @('run','--rm',$img,'echo','hi')
-          $d = Join-Path $env:RUNNER_TEMP 'bindtest'; New-Item -ItemType Directory -Force $d | Out-Null
-          $m = "type=bind,src=/mnt/d/a/_temp/bindtest,dst=/work"
-          T 'git init to file' @('run','--rm','--mount',$m,'-e','HOME=/tmp','--entrypoint','sh',$img,'-c','cd /work && git init -q -b main > /work/o3 2>&1; echo rc=$? >> /work/o3')
-          Get-Content "$d/o3"
+          T 'localhost plain' @('run','--rm',$img,'echo','hi')
+          T 'localhost stderr' @('run','--rm',$img,'sh','-c','echo err >&2; echo out')
+          T 'localhost seq' @('run','--rm',$img,'seq','1','5000')
+          $ip = (wsl -d Debian -u root -- hostname -I).Trim().Split(' ')[0]
+          Write-Host "WSL ip=$ip"
+          $env:DOCKER_HOST = "tcp://${ip}:2375"
+          T 'wslip plain' @('run','--rm',$img,'echo','hi')
+          T 'wslip seq' @('run','--rm',$img,'seq','1','5000')
+          $env:DOCKER_HOST = 'tcp://127.0.0.1:2375'
+          Write-Host '--- exec'
+          docker.exe run -d --name sl $img sleep 60
+          T 'exec' @('exec','sl','echo','hi')
+          T 'exec -i' @('exec','-i','sl','echo','hi')

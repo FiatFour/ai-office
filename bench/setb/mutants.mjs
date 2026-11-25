@@ -15,6 +15,8 @@ const R = 'bench/setb/rubric.ts';
 const P = 'bench/setb/packet.ts';
 const J = 'bench/setb/judge.ts';
 const O = 'bench/setb/outcome.ts';
+const AR = 'bench/setb/arms.ts';
+const ARMT = 'bench/setb/test/arms.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -549,6 +551,111 @@ const MUTANTS = [
       ],
     ],
     tests: [SETB],
+  },
+  {
+    name: 'arms-pr-not-draft',
+    claim: 'a bench PR opens as a draft',
+    edits: [[AR, "(b.draft === true ? null : 'a bench PR opens as a draft')", 'null']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-pr-opens-ready',
+    claim: 'the host wrapper opens the PR as a draft',
+    edits: [[AR, 'base: spec.base, draft: true', 'base: spec.base, draft: false']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-label-dropped',
+    claim: 'every bench PR carries the aw-bench label',
+    edits: [
+      [AR, 'body: { labels: [BENCH_LABEL] } });\n      const made', 'body: { labels: [] } });\n      const made'],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-any-label',
+    claim: 'the only label the bench may write is aw-bench',
+    edits: [[AR, 'b.labels.length === 1 && b.labels[0] === BENCH_LABEL', 'true']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-workflow-push-allowed',
+    claim: 'a push that changes .github or CODEOWNERS is refused before any write',
+    edits: [[AR, 'if (flows.length > 0) throw', 'if (false) throw']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-merge-allowed',
+    claim: 'no merge write is on the bench allowlist',
+    edits: [
+      [
+        AR,
+        "method: 'PATCH',\n    path: route('pulls/\\\\d+'),",
+        "method: 'PUT',\n    path: route('pulls/\\\\d+/merge'),",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-base-any-sha',
+    claim: 'the base ref is created at the pinned sha only',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: source text to match
+    edits: [[AR, 'b.ref === `refs/heads/${scope.base}` && b.sha === baseSha', 'b.ref === `refs/heads/${scope.base}`']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-base-any-name',
+    claim: 'the base ref lives under aw-bench-base/ only',
+    edits: [[AR, 'BASE_REF.test(scope.base) && ', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-close-any-branch',
+    claim: 'only a bench work branch is closed',
+    edits: [[AR, 'if (!WORK_REF.test(branch)) throw', 'if (false) throw']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-delete-any-ref',
+    claim: 'only the run own refs are deleted',
+    edits: [
+      [
+        AR,
+        'heads\\/(?:aw\\/bench\\/t-[0-9a-f]{8}-r[1-9]\\d{0,2}|aw-bench-base\\/t-[0-9a-f]{8}-r[1-9]\\d{0,2})$/',
+        'heads\\/.+$/',
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-ci-cap-off-by-one',
+    claim: 'at most two PRs run CI at once',
+    edits: [[AR, 'if (running < limit) return;', 'if (running <= limit) return;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-auth-read-as-quota',
+    claim: 'a revoked login is never read as a usage limit to wait out',
+    edits: [
+      [
+        AR,
+        "AUTH.test(message) ? 'auth' : QUOTA.test(message) ? 'quota' : null",
+        "QUOTA.test(message) ? 'quota' : AUTH.test(message) ? 'auth' : null",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-final-rerun',
+    claim: 'a finished arm is never run again, a quota stop is',
+    edits: [['bench/setb/run.ts', "r.status === 'done' || r.status === 'failed'", "r.status === 'done'"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'arms-quota-final',
+    claim: 'a usage-limit stop says nothing about the arm and runs again',
+    edits: [['bench/setb/run.ts', "r.status === 'done' || r.status === 'failed'", "r.status !== 'aborted'"]],
+    tests: [ARMT],
   },
   {
     name: 'judge-voids-log-ignored-outs',

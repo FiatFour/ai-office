@@ -6,7 +6,7 @@ This page says how Agent Works fits together today. It describes code that exist
 
 One HQ process owns everything that decides. It is `startHq` in `server/hq.ts`, started by `bin/agent-works.ts` and `server/cli.ts`.
 
-- HQ listens on `127.0.0.1` only. It serves the floor assets, a JSON API and one WebSocket at `/api/ws`. Every request, and the WebSocket upgrade, is refused with 403 unless its Host is a loopback name with HQ's port and any Origin matches it.
+- HQ listens on `127.0.0.1` only. It serves the floor assets, a JSON API and one WebSocket at `/api/ws`. Every HTTP request is refused with 403 unless its Host is a loopback name with HQ's port and any Origin matches it. A WebSocket upgrade that fails the same check, or asks for another path, gets no reply. HQ calls `socket.destroy()`.
 - HQ keeps all state in one SQLite file, `state/hq.db` in the HQ home (ADR 0002). A second HQ on the same directory is refused with `StoreLockedError`. There is no second store.
 - Workers do not run in HQ. Each worker runs in its own container (a cage) on docker or podman, started through `SandboxDriver` in `server/sandbox/container.ts`.
 - One proxy container per HQ carries all cage traffic out. See the firewall section.
@@ -15,7 +15,7 @@ One HQ process owns everything that decides. It is `startHq` in `server/hq.ts`, 
 - The floor is a browser page built from `src/floor/`. It holds no state of its own. It draws the last snapshot it received.
 
 ```
-browser floor  <--- WebSocket /api/ws, GET /api/snapshot --- HQ (node) --- SQLite state/hq.db
+browser floor  <--- WebSocket /api/ws (GET /api/demo in demo mode) --- HQ (node) --- SQLite state/hq.db
                                                               |  \
                                        docker or podman <-----+   `--- gh api / glab api --> git host
                                               |
@@ -24,7 +24,13 @@ browser floor  <--- WebSocket /api/ws, GET /api/snapshot --- HQ (node) --- SQLit
 
 ## Agent state machine
 
-HQ stores no state for a worker. A worker is a host login in `state.staff`. What the floor shows for a worker is derived from the reducer state. The state that moves is the box, one per task.
+The reducer keeps no per-worker record. A worker is a host login in `state.staff`. The state that moves is the box, one per task. What the floor shows for a worker is derived from the boxes. HQ does hold a little worker-keyed state outside the reducer, and none of it is in `state/hq.db`:
+
+- `BlockedLog` keeps a `held` set and the recent attempt times per worker (`server/blocked.ts`). The held set is `snapshot.paused`.
+- Each worker has a home directory on disk, `homes/<homeName>` in the HQ home. `SandboxDriver.startCage` creates it and it stays after the cage is released (`server/sandbox/container.ts`).
+- The cage shell of an agent job caches one cage per worker and task, in memory (`server/agents/cage-shell.ts`).
+
+A restart loses the held set, the times and the cage cache. The home directories stay.
 
 ### Box stations
 
@@ -39,15 +45,15 @@ The reducer in `packages/core/src/lifecycle.ts` gives each box one station. The 
 | `merge` | `pr` |
 | `shipping` | `pr` |
 | `shipped` | `pr` |
-| `cancelled` | `reason`, `human` or `closed` |
+| `cancelled` | `reason` (`human` or `closed`) |
 
-Every box also has `id`, `shipment`, `seq`, `worker`, `builders` and `cancelled`. The reducer derives the station from the facts it holds after each event. It never moves a box because of the event that arrived. A box that is `shipping` or `shipped` is latched. HQ has no command that merges. The rules are in `docs/lifecycle.md`.
+Every box also has the fields of `BoxBase` and `state`, listed in the `Box` table below. The reducer derives the station from the facts it holds after each event. It never moves a box because of the event that arrived. A box that is `shipping` or `shipped` is latched. HQ has no command that merges. The rules are in `docs/lifecycle.md`.
 
 ### Worker mood
 
 `moodOf` in `src/floor/model.ts` picks one of `MOODS` for each worker, in this order:
 
-1. `needs`: an Action item names the worker.
+1. `needs`: an Action item has this worker as its worker. The floor gives an item to the first owner of the item's task (`actionsOf`). A `website` item has no task, so it never makes a worker `needs`. The floor also adds a `closed_unmerged` item for a box cancelled with reason `closed`. The server has no such kind.
 2. `qc`: the worker is the `reviewer` of a box at `qc`.
 3. `working`: the worker owns a box at `building`, `test` or `qc`.
 4. `break`: none of the above.
@@ -65,11 +71,11 @@ A cage is a container the driver starts for one task and worker.
 
 ### Pause
 
-`BlockedLog` in `server/blocked.ts` can hold a worker. The third identical attempt inside 10 minutes pauses it (`REPEAT_LIMIT`, `REPEAT_WINDOW_MS`). The worker name is in `snapshot.paused` until `POST /api/workers/resume` clears it and wakes the mode. A denial of a well-formed host that is only missing from the allowlist does not count toward a pause. It becomes a `website` Action item instead.
+`BlockedLog` in `server/blocked.ts` can hold a worker. The third identical attempt inside 10 minutes pauses it (`REPEAT_LIMIT`, `REPEAT_WINDOW_MS`). The worker name is in `snapshot.paused` until `POST /api/workers/resume` clears it and wakes the mode. A denial of a well-formed host that is only missing from the allowlist does not count toward a pause. Every denial becomes a `website` Action item in the cages mode, and `allow` is `true` only for that well-formed case (`server/modes/cages.ts`).
 
 ## Snapshot schema
 
-HQ builds one `Snapshot` (`server/snapshot.ts`) and sends it as JSON on every change, over `/api/ws` and at `GET /api/snapshot`. The floor and the dashboard read nothing else. A test, `server/test/architecture-doc.test.ts`, reads the TypeScript source and fails when a field below does not exist, or when a field in the source is missing here. Each table lists the fields of one type. A dotted name is a field of an inline object.
+HQ builds one `Snapshot` (`server/snapshot.ts`) and sends it as JSON on every change, over `/api/ws` and at `GET /api/snapshot`. The floor and the dashboard read the snapshot from `/api/ws` only. The floor also asks `GET /api/demo` to learn whether HQ runs in demo mode (`src/floor/useHq.ts`). A test, `server/test/architecture-doc.test.ts`, reads the TypeScript source and fails when a field below does not exist, or when a field in the source is missing here. Each table lists the fields of one type. A type that the snapshot reaches and that has fields needs a table here, or a row in `docs/lifecycle.md`. A dotted name is a field of an inline object.
 
 ### Snapshot
 
@@ -77,7 +83,7 @@ Source: `server/snapshot.ts`.
 
 | Field | Meaning |
 | --- | --- |
-| `rev` | The ledger revision. Rises with every accepted event or command result. |
+| `rev` | The ledger revision. Rises with every accepted event or command result, with each registry change and when a cage starts or is released. |
 | `pushedAt` | Milliseconds since the epoch when HQ built this snapshot. |
 | `hq` | Facts about the HQ process. |
 | `hq.pid` | Process id. |
@@ -102,7 +108,7 @@ Source: `packages/core/src/lifecycle.ts`. Plain JSON. Shapes are in `docs/lifecy
 
 | Field | Meaning |
 | --- | --- |
-| `config` | `budget` and `approvals`. |
+| `config` | The `Config`. |
 | `seq` | Number of events the reducer has applied. |
 | `staff` | Logins that may be hired or draw reviews. |
 | `boxes` | One box per task. |
@@ -110,6 +116,42 @@ Source: `packages/core/src/lifecycle.ts`. Plain JSON. Shapes are in `docs/lifecy
 | `checks` | Check results by head sha. |
 | `reviews` | Review verdicts by change. |
 | `shipments` | Groups of boxes that ship together. |
+
+### Config
+
+Source: `packages/core/src/lifecycle.ts`.
+
+| Field | Meaning |
+| --- | --- |
+| `budget` | The most boxes that may be running at once. |
+| `approvals` | Approving reviews a change needs before its box reaches `merge`. |
+
+### Box
+
+Source: `packages/core/src/lifecycle.ts`. The union of the fields of every station, with the fields of `BoxBase`. The stations table is under the state machine section.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Task id. |
+| `shipment` | Shipment id. |
+| `seq` | Order number. |
+| `worker` | Login of the current session, or `null`. |
+| `builders` | Every login ever hired for the box. |
+| `cancelled` | True once a human cancelled the box. |
+| `state` | The station. |
+| `pr` | The change key, from `test` on. |
+| `reviewer` | Assigned reviewer, at `qc`. |
+| `changesRequested` | Whether a review asked for changes, at `qc`. |
+| `reason` | Why a box is `cancelled`. |
+
+### Stamped
+
+Source: `packages/core/src/lifecycle.ts`. The shape of each value in `state.checks` and `state.reviews`.
+
+| Field | Meaning |
+| --- | --- |
+| `v` | The value. |
+| `at` | Host time of the event that set it. |
 
 ### RegistryView
 
@@ -164,9 +206,10 @@ Source: `server/snapshot.ts`. Distinct from the raw proxy denial in `server/sand
 | `host` | Host the cage tried to reach. |
 | `port` | Port. |
 | `agent` | Worker the proxy saw. |
+| `at` | Time of the denial, as the proxy wrote it. The raw denial's own field, copied through. |
 | `reason` | Why the proxy refused. |
 | `count` | How many times this key was denied. |
-| `lastAt` | Time of the last denial, as the proxy wrote it. |
+| `lastAt` | Time of the last denial. The same value as `at`. |
 
 ### BlockedEntry
 
@@ -249,14 +292,14 @@ An event is one fact or one human order. The path is the same for every source.
 3. `Ledger.ingest` in `server/ledger.ts` runs `reduce(state, event)` from `@agent-works/core`. It gets the next state and a list of commands.
 4. `Store` in `server/store/store.ts` writes the event row and the state row in one `BEGIN IMMEDIATE` transaction. The commands go into the outbox inside the state row. HQ acknowledges only after the commit. A failed reduce rolls both back.
 5. The events live in the SQLite `events` table, one row per event with a sequence number and a checksum. They are served by `GET /api/events?after=<seq>` as `{ events: [{ seq, event }] }`. They are not stored as a file.
-6. `drain` in `server/hq.ts` runs each runnable outbox entry through the executor the mode registered for that command kind. It marks the entry `done`, `failed` or `skipped`. An entry is tried at most three times (`MAX_ATTEMPTS`). Delivery is at least once, so executors must be safe to repeat (ADR 0004).
+6. `drain` in `server/hq.ts` runs each runnable outbox entry through the executor the mode registered for that command kind. It marks the entry `done`, `failed` or `skipped`. An entry is tried at most three times (`MAX_ATTEMPTS` in `server/ledger.ts`). Delivery is at least once, so executors must be safe to repeat (ADR 0004).
 7. HQ pushes a fresh snapshot to every open WebSocket.
 
 A command is a trigger. The mode computes the job from the current state, and each job checks the host before it writes (ADR 0004). A restart does not replay events, because the state row and the log cannot disagree after a commit.
 
 ### The export file
 
-`events.jsonl` is not HQ's record. It is an export. `node server/modes/events-export.ts <hq-url> <file>` calls `GET /api/events?after=` and writes one `{"seq", "event"}` JSON line per event. `fixtures/demo/events.jsonl` was made this way from the P1-2 run. `--demo` reads that file with `loadDemo` and replays it through the same parser, reducer and ledger as a live event (ADR 0005).
+`events.jsonl` is not HQ's record. It is an export. `node server/modes/events-export.ts <hq-url> <file>` calls `GET /api/events?after=` and writes one `{"seq", "event"}` JSON line per event. Lines 1 to 14 of `fixtures/demo/events.jsonl` are such an export of the P1-2 run. Lines 15 and 16 were written by hand (`fixtures/demo/README.md` says why). `--demo` reads that file with `loadDemo` and replays it through the same parser, reducer and ledger as a live event (ADR 0005).
 
 ## SandboxDriver contract
 
@@ -264,7 +307,7 @@ A command is a trigger. The mode computes the job from the current state, and ea
 
 | Method | Contract |
 | --- | --- |
-| `startCage({ task, worker, source })` | Refuses a source inside a cage or a worker home. Needs the cage image and names the build command if it is missing. Exports the repo without running its filters on the host, scans it in a throwaway container and refuses on any issue. Raises the firewall, then starts a hardened container on the internal network only. Returns a `CageView`. A failure leaves no files behind. |
+| `startCage({ task, worker, source })` | Refuses a source inside a cage or a worker home. Needs the cage image and names the build command if it is missing. Exports the repo without running its filters on the host, scans it in a throwaway container and refuses on any issue. Raises the firewall, then starts a hardened container on the internal network only. Returns a `CageView`. A failure removes the cage files and leaves `homes/<slug>`, the worker's home, in place. |
 | `exec(id, argv, options)` | Runs `argv` in the cage at `/work`. Throws `CageError` if no such cage runs. |
 | `allow(rule)` | Adds one host rule to the allowlist file. Refuses anything that is not a single host rule. |
 | `releaseCage(id)` | Removes the container. Returns false for an unknown id, so it is idempotent. |
@@ -284,7 +327,7 @@ Spec section 4 names the rules F1 to F5. The codes are in `docs/threat-model.md`
 - **Networks.** `raiseFirewall` in `server/sandbox/firewall.ts` creates an `--internal` network and an egress network per HQ. On docker the internal network also sets `inhibit_ipv4`, so there is no host gateway. Cages join only the internal network (F1, F3).
 - **Proxy.** One container runs the Node CONNECT proxy from `server/sandbox/proxy/`. It joins both networks. Cages get `HTTPS_PROXY` and `HTTP_PROXY` that point at it, with the worker name as the proxy user so a denial names the worker.
 - **Rules.** The proxy allows `CONNECT host:port` only for hosts in the allowlist file and answers 403 otherwise (F2). It resolves once, refuses non-public addresses and dials the address it checked (F2a). It reads the ClientHello and closes the tunnel unless the SNI equals the CONNECT host (F2s). It reads the allowlist file on every request. `DEFAULT_ALLOWLIST` is `api.anthropic.com`, `github.com`, `api.github.com` and `registry.npmjs.org`.
-- **Denials.** The proxy logs one JSON line per denial, capped at 20 a second (F4r). HQ follows the proxy log, `parseDenialLine` turns a line into a raw denial, and `noteDenial` in `server/hq.ts` does three things. It tells the mode, which may raise a `website` Action item. It records a blocked attempt with layer `F2`. It updates the `denials` map, which keeps at most 50 keys.
+- **Denials.** The proxy logs one JSON line per denial, `{deny: event}`, with no cap. The cap of 20 a second (F4r) applies only to the POST to a `denyUrl`, and `raiseFirewall` never sets one. HQ follows the log: `engine.follow` feeds each line to `parseDenialLine`, which gives a raw denial. So the path HQ uses is uncapped, and F4r speaks of a path HQ does not use. That gap is issue #44. HQ's own bounds are a 250 ms throttle on snapshot pushes, 50 keys in the `denials` map and 500 entries in `BlockedLog`. `noteDenial` in `server/hq.ts` does three things for each line. It tells the mode, which may raise a `website` Action item. It records a blocked attempt with layer `F2`. It updates the `denials` map. That map holds at most 50 keys, and the oldest key goes first.
 - **Pause.** `BlockedLog` pauses a worker on the third identical attempt in 10 minutes and keeps at most 500 entries. See the state machine section.
 - **Allow.** A person approves a `website` item with `POST /api/actions/allow`. That calls `SandboxDriver.allow`. The worker's own retry then passes. Only a single host rule is accepted.
 - **Cage flags.** `hardenedArgs` drops all capabilities, sets `no-new-privileges`, makes the root read-only and gives a 256 MB `/tmp`. A cage has a 1024 process limit and 4 GB of memory. No cage is privileged, mounts the docker socket or mounts a named volume (CG).

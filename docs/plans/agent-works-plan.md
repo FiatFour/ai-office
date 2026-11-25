@@ -566,7 +566,7 @@ Claude Code has no cloud VMs. Each live lane runs in its own git worktree on thi
 
 - [ ] Create `src/floor/` with the 480 by 270 pixel scene.
 - [ ] Create `src/locales/en.json` and `src/locales/th.json`.
-- [ ] Create `fixtures/demo/events.jsonl`, exported from the P1-2 run with `server/modes/events-export.ts` (`GET /api/events?after=`).
+- [ ] Create `fixtures/demo/events.jsonl`. Lines 1 to 14 are exported from the P1-2 run with `server/modes/events-export.ts` (`GET /api/events?after=`). Lines 15 and 16 are written by hand, as `fixtures/demo/README.md` says.
 
 **Build.**
 

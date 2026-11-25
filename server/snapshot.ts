@@ -10,6 +10,7 @@ export interface Denial {
   readonly port: number;
   readonly agent: string;
   readonly reason: string;
+  readonly at: string;
   readonly count: number;
   readonly lastAt: string;
 }

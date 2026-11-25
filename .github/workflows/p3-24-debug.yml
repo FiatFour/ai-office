@@ -1,0 +1,49 @@
+name: p3-24-debug
+on:
+  push:
+    branches: [aw/p3-24]
+jobs:
+  dbg:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run a Linux docker daemon in WSL 2 for docker.exe
+        if: ${{ matrix.cell == 'windows' }}
+        run: |
+          docker info --format 'runner daemon OSType: {{.OSType}}'
+          wsl --install -d Debian --no-launch --web-download
+          wsl -d Debian -u root -- sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null'
+          wsl -d Debian -u root -- sh -c 'systemctl stop docker.service docker.socket 2>/dev/null || service docker stop; rm -f /var/run/docker.pid'
+          Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'sh', '-c', '"dockerd -H unix:///var/run/docker.sock -H tcp://127.0.0.1:2375 --tls=false > /var/log/dockerd.log 2>&1"'
+          $env:DOCKER_HOST = 'tcp://127.0.0.1:2375'
+          $deadline = (Get-Date).AddMinutes(2)
+          while ($true) {
+            docker.exe info *> $null
+            if ($LASTEXITCODE -eq 0) { break }
+            if ((Get-Date) -gt $deadline) {
+              wsl -d Debian -u root -- sh -c 'tail -40 /var/log/dockerd.log; ss -ltn'
+              throw 'the WSL docker daemon did not answer docker.exe within 2 minutes'
+            }
+            Start-Sleep -Seconds 2
+          }
+          docker.exe info --format 'WSL daemon OSType: {{.OSType}}, kernel {{.KernelVersion}}'
+          "DOCKER_HOST=$env:DOCKER_HOST" >> $env:GITHUB_ENV
+      - name: experiments
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          docker build -t aw-test-cage:1 -f server/test/sandbox/Containerfile.test server/test/sandbox 2>&1 | Select-Object -Last 3
+          function T($label, $a) { Write-Host "=== $label"; $o = & docker.exe @a 2>&1; Write-Host "exit=$LASTEXITCODE out=[$($o -join '|')]" }
+          $img = 'aw-test-cage:1'
+          T 'bare' @('run','--rm','--entrypoint','sh',$img,'-c','echo hi; ls /sys/class/net')
+          T 'net none' @('run','--rm','--network','none','--entrypoint','sh',$img,'-c','ls /sys/class/net')
+          T 'hardened' @('run','--rm','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges','--read-only','--tmpfs','/tmp:rw,size=256m','--entrypoint','sh',$img,'-c','ls /sys/class/net')
+          T 'pids mem' @('run','--rm','--network','none','--pids-limit','256','--memory','2g','--entrypoint','sh',$img,'-c','ls /sys/class/net')
+          T 'env' @('run','--rm','-e','HOME=/tmp','--entrypoint','sh',$img,'-c','echo $HOME')
+          T 'multiline' @('run','--rm','--entrypoint','sh',$img,'-c',": probe:x `nls /sys/class/net")
+          $d = Join-Path $env:RUNNER_TEMP 'bindtest'; New-Item -ItemType Directory -Force $d | Out-Null
+          $t = $env:TEMP; Write-Host "TEMP=$t"
+          T 'bind D' @('run','--rm','--mount',"type=bind,src=/mnt/d/a/_temp/bindtest,dst=/work",'--entrypoint','sh',$img,'-c','ls -la /work; touch /work/x; echo rc=$?')
+          T 'git init' @('run','--rm','--mount',"type=bind,src=/mnt/d/a/_temp/bindtest,dst=/work",'-e','HOME=/tmp','--entrypoint','sh',$img,'-c','cd /work && git init -q -b main; echo rc=$?; git --version')
+          T 'git init hardened' @('run','--rm','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges','--read-only','--tmpfs','/tmp:rw,size=256m','--pids-limit','256','--memory','2g','--mount',"type=bind,src=/mnt/d/a/_temp/bindtest,dst=/work",'-e','HOME=/tmp','--entrypoint','sh',$img,'-c','cd /work && git init -q -b main; echo rc=$?')

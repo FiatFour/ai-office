@@ -87,7 +87,7 @@ jobs:
           docker info --format 'runner daemon OSType: {{.OSType}}'
           wsl --install -d Debian --no-launch --web-download
           wsl -d Debian -u root -- sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null'
-          wsl -d Debian -u root -- sh -c 'printf "[automount]\noptions=metadata\n" >> /etc/wsl.conf'
+          wsl -d Debian -u root -- sh -c 'printf "[automount]\noptions=metadata,uid=1000,gid=1000\n" >> /etc/wsl.conf'
           wsl --terminate Debian
           wsl -d Debian -u root -- sh -c 'systemctl stop docker.service docker.socket 2>/dev/null || service docker stop; rm -f /var/run/docker.pid'
           Start-Process wsl -WindowStyle Hidden -ArgumentList '-d', 'Debian', '-u', 'root', '--', 'sh', '-c', '"dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2375 --tls=false > /var/log/dockerd.log 2>&1"'

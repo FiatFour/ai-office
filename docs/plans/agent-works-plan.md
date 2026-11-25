@@ -515,7 +515,7 @@ Claude Code has no cloud VMs. Each live lane runs in its own git worktree on thi
 **Build.**
 
 - [ ] A worker in one cage takes a ticket from a fixture factory with one line. It works on its own worktree, pushes `aw/<factory>/<task>` and opens the PR. A worker on the other runtime reviews it with line comments. The author fixes the comments. Captain writes the merge brief and files the ready-to-merge Action item. The watcher closes the task after the human merges. The agent message protocol is the one chosen at G1.
-- [ ] HQ records every event of the run to `events.jsonl`. P1-3 replays it.
+- [ ] HQ records every event of the run in its SQLite `events` table, served by `GET /api/events?after=`. `server/modes/events-export.ts` exports it as `events.jsonl`. P1-3 replays that export.
 
 **You see.**
 
@@ -566,7 +566,7 @@ Claude Code has no cloud VMs. Each live lane runs in its own git worktree on thi
 
 - [ ] Create `src/floor/` with the 480 by 270 pixel scene.
 - [ ] Create `src/locales/en.json` and `src/locales/th.json`.
-- [ ] Create `fixtures/demo/events.jsonl`, copied from the P1-2 run.
+- [ ] Create `fixtures/demo/events.jsonl`. Lines 1 to 14 are exported from the P1-2 run with `server/modes/events-export.ts` (`GET /api/events?after=`). Lines 15 and 16 are written by hand, as `fixtures/demo/README.md` says.
 
 **Build.**
 

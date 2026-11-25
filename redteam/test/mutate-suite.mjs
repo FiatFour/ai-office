@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseThreatModel } from '../../spikes/P0-6/threat-table.mjs';
+import { commitMarker } from '../tree.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const TABLE = join(ROOT, 'docs/threat-model.md');
@@ -15,8 +16,7 @@ const WEAK = {
     'fw-ssrf-metadata flips by a connect timeout, not by a proven connection to the address (the row says FLIP when a connection opened)',
 };
 
-const sha = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-console.log(`git commit: ${sha}`);
+console.log(`git commit: ${commitMarker(ROOT)}`);
 
 const requested = process.argv.slice(2);
 const ids = requested.length === 0 ? MUTATIONS : requested;

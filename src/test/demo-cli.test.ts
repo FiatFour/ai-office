@@ -76,6 +76,21 @@ describe.skipIf(!canSpawnTs)('agent-works --demo', () => {
     for (let i = 0; i < 300 && !out.includes('Demo data from'); i += 1)
       await new Promise((resolve) => setTimeout(resolve, 50));
     expect(out).toContain('Demo data from');
+    // The banner is written one statement before the signal handlers are installed, so a signal sent the moment the
+    // banner is read can beat them and kill the process with its throw-away home still on disk. A served request
+    // proves the child's event loop turned, so its handlers are in.
+    const url = /http:\/\/127\.0\.0\.1:\d+/.exec(out)?.[0];
+    for (let i = 0; i < 100; i += 1) {
+      if (
+        await fetch(`${url}/api/health`).then(
+          (res) => res.ok,
+          () => false,
+        )
+      )
+        return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('the demo never answered /api/health');
   };
 
   it('refuses every write with 403 while it replays', async () => {

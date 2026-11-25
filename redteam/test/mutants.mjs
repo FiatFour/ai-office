@@ -198,7 +198,7 @@ const MUTANTS = [
   },
   {
     name: 'percent-encoding-dropped',
-    claim: 'the lane 8 shape scan and the canary finder see a percent-encoded copy',
+    claim: 'the lane 8 shape scan sees a percent-encoded copy of the canary prefixes',
     edits: [['redteam/scan.ts', '    ...percentEncoded(prefix),\n', '']],
     tests: [SCAN],
   },

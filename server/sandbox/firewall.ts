@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Engine } from './engine.ts';
+import { mount } from './export.ts';
 
 export const PROXY_PORT = 3128;
 export const PROJECT_LABEL = 'agent-works.project';
@@ -125,10 +126,8 @@ export const raiseFirewall = async (spec: FirewallSpec): Promise<Firewall> => {
     '128',
     '--memory',
     '256m',
-    '-v',
-    `${PROXY_DIR}:/proxy:ro`,
-    '-v',
-    `${dir}:/etc/agent-works:ro`,
+    ...mount(PROXY_DIR, '/proxy', true),
+    ...mount(dir, '/etc/agent-works', true),
     '-e',
     `PORT=${PROXY_PORT}`,
     image,

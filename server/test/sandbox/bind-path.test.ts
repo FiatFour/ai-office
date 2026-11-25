@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import type { Engine } from '../../sandbox/engine.ts';
 import { bindSource, mount } from '../../sandbox/export.ts';
+import { raiseFirewall } from '../../sandbox/firewall.ts';
+import { tempDir } from '../helpers.ts';
 
 const win = (path: string): string => bindSource(path, 'win32');
 
@@ -69,5 +72,29 @@ describe('mount', () => {
       '--mount',
       'type=bind,"src=/mnt/c/a,b/""c""",dst=/work',
     ]);
+  });
+});
+
+describe('firewall proxy binds', () => {
+  it('binds the proxy code and the allowlist through the mount builder', async () => {
+    const calls: string[][] = [];
+    const engine = {
+      name: 'docker',
+      ok: async (args: string[]) => {
+        calls.push(args);
+        return '[]';
+      },
+      follow: () => ({ stop: () => {} }),
+    } as unknown as Engine;
+    const dir = tempDir('firewall-binds');
+    await raiseFirewall({ engine, project: 'p', hq: 'h', image: 'i', dir, allowlist: [], onDenial: () => {} }).catch(
+      () => {},
+    );
+    const run = calls.find((args) => args[0] === 'run') ?? [];
+    expect(run).not.toContain('-v');
+    const binds = run.filter((arg) => arg.startsWith('type=bind'));
+    expect(binds).toHaveLength(2);
+    expect(binds[0]).toMatch(/dst=\/proxy,readonly$/);
+    expect(binds[1]).toBe(`type=bind,src=${dir},dst=/etc/agent-works,readonly`);
   });
 });

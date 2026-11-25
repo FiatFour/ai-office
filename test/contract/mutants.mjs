@@ -231,6 +231,19 @@ const MUTANTS = [
     caught: ['turns a drive path into the /mnt path a WSL daemon reads', 'builds its bind from the translated path'],
   },
   {
+    name: 'proxy-binds-bypass-mount',
+    claim: 'the firewall proxy binds its host paths through the one mount builder, so a win32 host translates them too',
+    edits: [
+      [
+        'server/sandbox/firewall.ts',
+        "    ...mount(PROXY_DIR, '/proxy', true),",
+        "    '-v',\n    `${PROXY_DIR}:/proxy:ro`,",
+      ],
+    ],
+    test: BIND,
+    caught: ['binds the proxy code and the allowlist through the mount builder'],
+  },
+  {
     name: 'docker-windows-may-not-run',
     claim: 'the docker cell on windows must pass every case, a not run there fails the table',
     edits: [['scripts/contract-table.mjs', "  (driver === 'docker' && os === 'windows');", '  false;']],

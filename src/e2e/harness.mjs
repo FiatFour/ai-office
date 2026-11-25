@@ -64,6 +64,24 @@ export const interruptible = ({ cleanup, exit, limitMs = 15_000 }) => {
   };
 };
 
+/**
+ * What an interrupted gates run does, in order: stop the HQs, close the browser (bounded), then `restore` the tree, also when a step failed.
+ * @param {{ browser: { close: () => Promise<unknown> }, restore: () => void, stopHqs?: () => Promise<unknown> }} options
+ */
+export const interruptedCleanup =
+  ({ browser, restore, stopHqs = stopAllHq }) =>
+  async () => {
+    try {
+      await stopHqs();
+      await within(
+        browser.close().catch(() => {}),
+        10_000,
+      );
+    } finally {
+      restore();
+    }
+  };
+
 /** @template T @param {Promise<T>} work @param {number} ms @returns {Promise<T | undefined>} undefined when it took longer */
 export const within = (work, ms) =>
   Promise.race([work, new Promise((resolve) => setTimeout(resolve, ms, undefined).unref())]);

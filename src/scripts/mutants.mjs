@@ -22,7 +22,7 @@ const PARITY = 'src/test/i18n-parity.test.ts';
 const APP = 'src/floor/App.tsx';
 const DRAWER = 'src/floor/Drawer.tsx';
 
-/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt' | 'interrupt-only', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
+/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
 const MUTANTS = [
   {
     name: 'belt-is-code',
@@ -1265,20 +1265,14 @@ const MUTANTS = [
   },
   {
     name: 'gates-interrupt-hq-left',
-    claim:
-      'an interrupted gates run leaves no HQ alive: the cleanup stops it and, behind that, the exit handler kills it',
-    // Either layer alone covers the other, so both are removed, and the unit tests are skipped so the interrupted run itself has to see it.
-    tier: 'interrupt-only',
-    edits: [
-      [GATES, '        await stopAllHq();\n', ''],
-      [HARNESS, "for (const child of children) child.kill('SIGKILL');", 'for (const child of children) child;'],
-    ],
+    claim: 'the cleanup of an interrupted gates run stops the HQs, before the browser and the tree',
+    edits: [[HARNESS, '      await stopHqs();\n', '']],
   },
   {
     name: 'gates-interrupt-no-restore',
     claim: 'an interrupted gates run removes the synthetic screens and rebuilds src/dist',
     tier: 'interrupt',
-    edits: [[GATES, '        restoreScreens();\n      }\n    },', '        0;\n      }\n    },']],
+    edits: [[GATES, 'restore: restoreScreens }', 'restore: () => {} }']],
   },
   {
     name: 'gates-compare-skip-silent',
@@ -1435,7 +1429,6 @@ for (const mutant of MUTANTS) {
     }
     let how = null;
     if (mutant.tier === 'lane9') how = await lane9();
-    else if (mutant.tier === 'interrupt-only') how = await interrupt();
     else if (mutant.tier === 'interrupt') how = (await vitest()).status !== 0 ? 'unit tests' : await interrupt();
     else if (mutant.tier === 'gates') {
       if (mutant.edits.some(([file]) => file.endsWith('.css'))) await build();

@@ -6,13 +6,13 @@ import {
   FIXTURE_FLAG,
   FIXTURE_PREFIX,
   human,
+  interruptedCleanup,
   interruptible,
   launch,
   NEEDS_CHIP,
   ROOT,
   runAxe,
   startHqFree,
-  stopAllHq,
   within,
 } from './harness.mjs';
 import { restoreScreens, runFixtureLane } from './screen-fixture.mjs';
@@ -857,17 +857,7 @@ if (import.meta.main) {
   const browser = await launch({ handleSIGINT: false, handleSIGTERM: false });
   /** An interrupted run stops the HQ it started, removes the synthetic screens and rebuilds `src/dist` without them. A second signal exits at once. */
   const interrupt = interruptible({
-    cleanup: async () => {
-      try {
-        await stopAllHq();
-        await within(
-          browser.close().catch(() => {}),
-          10_000,
-        );
-      } finally {
-        restoreScreens();
-      }
-    },
+    cleanup: interruptedCleanup({ browser, restore: restoreScreens }),
     exit: (code) => process.exit(code),
   });
   process.on('SIGINT', interrupt.on(130));

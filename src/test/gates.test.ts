@@ -17,7 +17,15 @@ import {
   registeredScreens,
   rowRatio,
 } from '../e2e/gates.mjs';
-import { freePort, interruptible, startHq, syntheticFiles, withFreePort, within } from '../e2e/harness.mjs';
+import {
+  freePort,
+  interruptedCleanup,
+  interruptible,
+  startHq,
+  syntheticFiles,
+  withFreePort,
+  within,
+} from '../e2e/harness.mjs';
 
 const opaque = (r: number, g: number, b: number) => [r, g, b, 255];
 const row = (fg: number[], layers: number[][], html = '<p>') => ({ text: 'x', html, fg, layers, unknown: false });
@@ -343,6 +351,21 @@ describe('an interrupted run', () => {
     expect([cleaned, exits, run.stopping]).toEqual([1, [], true]);
     run.on(130)();
     expect([cleaned, exits]).toEqual([1, [130]]);
+  });
+
+  it('stops the HQs, then closes the browser, then restores the tree, also when stopping fails', async () => {
+    const done: string[] = [];
+    const steps = (stop: () => Promise<unknown>) =>
+      interruptedCleanup({
+        stopHqs: stop,
+        browser: { close: async () => done.push('browser') },
+        restore: () => done.push('restore'),
+      });
+    await steps(async () => done.push('hqs'))();
+    expect(done).toEqual(['hqs', 'browser', 'restore']);
+    done.length = 0;
+    await expect(steps(() => Promise.reject(new Error('no')))()).rejects.toThrow('no');
+    expect(done).toEqual(['restore']);
   });
 
   it('gives up on a cleanup that takes longer than its limit', async () => {

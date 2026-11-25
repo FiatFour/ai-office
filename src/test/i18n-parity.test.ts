@@ -183,7 +183,12 @@ export const askProblems = (name: string, source: string, locales: Locales): str
 
 const screenIds = (): string[] => {
   const dir = join(SRC, 'screens');
-  return existsSync(dir) ? readdirSync(dir).filter((name) => existsSync(join(dir, name, 'screen.tsx'))) : [];
+  const synthetic = process.env.AW_GATE_FIXTURES === '1';
+  return existsSync(dir)
+    ? readdirSync(dir).filter(
+        (name) => (synthetic || !name.startsWith('zz-gate-')) && existsSync(join(dir, name, 'screen.tsx')),
+      )
+    : [];
 };
 
 const sourceFiles = (): string[] => {

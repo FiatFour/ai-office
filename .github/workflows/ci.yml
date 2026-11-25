@@ -274,6 +274,7 @@ jobs:
   floor-e2e:
     name: floor e2e (Playwright lanes, axe, reduced motion, frame time)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

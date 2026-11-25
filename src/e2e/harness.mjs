@@ -12,6 +12,14 @@ mkdirSync(OUT, { recursive: true });
 
 const BIN = join(ROOT, 'bin', 'agent-works.ts');
 
+/** Synthetic screens (lane 11b) live in `src/screens/zz-gate-*`. Nothing but that lane may see them: the registry listing and the parity test skip them unless this flag is set. */
+export const FIXTURE_PREFIX = 'zz-gate-';
+export const FIXTURE_FLAG = 'AW_GATE_FIXTURES';
+
+/** Every HQ this process started and has not stopped, so an interrupted run can stop them. */
+const live = new Set(/** @type {Array<() => Promise<void>>} */ ([]));
+export const stopAllHq = () => Promise.all([...live].map((stop) => stop())).then(() => undefined);
+
 /**
  * @param {{ demo?: boolean, port: number, intervalMs?: number, args?: string[] }} options `args` go to `serve` after the port and home, for example a mode and its config
  */
@@ -41,6 +49,7 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
     await sleep(100);
   }
   const stop = async () => {
+    live.delete(stop);
     child.kill('SIGTERM');
     await new Promise((resolve) => {
       child.once('exit', resolve);
@@ -48,6 +57,7 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
     });
     rmSync(home, { recursive: true, force: true });
   };
+  live.add(stop);
   return {
     url,
     stop,
@@ -95,7 +105,8 @@ export const withFreePort = async (start, tries = 5, pick = /** @type {() => Pro
 /** @param {Omit<Parameters<typeof startHq>[0], 'port'>} [options] */
 export const startHqFree = (options = {}) => withFreePort((port) => startHq({ ...options, port }));
 
-export const launch = () => chromium.launch();
+/** @param {import('playwright').LaunchOptions} [options] */
+export const launch = (options = {}) => chromium.launch(options);
 
 export const REPO = 'acme/app';
 export const human = (/** @type {string} */ kind, /** @type {object} */ rest) => ({ source: 'human', kind, ...rest });

@@ -1,8 +1,19 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { contrastRatio, human, launch, NEEDS_CHIP, ROOT, runAxe, startHqFree } from './harness.mjs';
-import { runFixtureLane } from './screen-fixture.mjs';
+import {
+  contrastRatio,
+  FIXTURE_FLAG,
+  FIXTURE_PREFIX,
+  human,
+  launch,
+  NEEDS_CHIP,
+  ROOT,
+  runAxe,
+  startHqFree,
+  stopAllHq,
+} from './harness.mjs';
+import { restoreScreens, runFixtureLane } from './screen-fixture.mjs';
 
 /**
  * The screen gate kit. Every screen ticket calls `screenGates` against its own route on a real HQ.
@@ -34,6 +45,18 @@ const COLLECT_TEXT = (/** @type {{ selector: string, reason: string }[]} */ extr
     (entry) => typeof entry.reason === 'string' && entry.reason.trim() !== '',
   );
   for (const el of document.querySelectorAll('[data-gate-i]')) el.removeAttribute('data-gate-i');
+  const entries = allow.map((entry) => {
+    try {
+      return {
+        selector: entry.selector,
+        reason: entry.reason,
+        count: document.querySelectorAll(entry.selector).length,
+        valid: true,
+      };
+    } catch {
+      return { selector: entry.selector, reason: entry.reason, count: 0, valid: false };
+    }
+  });
   const rows = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
@@ -68,10 +91,11 @@ const COLLECT_TEXT = (/** @type {{ selector: string, reason: string }[]} */ extr
       layers,
       unknown: unknown || clipped,
       clipped,
-      allowed: allow.find((entry) => el.closest(entry.selector) !== null)?.reason ?? '',
+      allowed: entries.find((entry) => entry.valid && el.closest(entry.selector) !== null)?.reason ?? '',
+      allowedBy: entries.find((entry) => entry.valid && el.closest(entry.selector) !== null)?.selector ?? '',
     });
   }
-  return rows;
+  return { rows, entries };
 };
 
 /** Text goes transparent so a screenshot shows only what is behind it. */
@@ -128,11 +152,44 @@ const flatten = (stack) =>
     return [0, 1, 2].map((k) => (over[k] ?? 0) * alpha + (under[k] ?? 0) * (1 - alpha)).concat([255]);
   });
 
+/** The ratio as measured, unrounded: 4.495 is under the bar. */
 /** @param {{ fg: number[], layers: number[][] }} row */
-export const rowRatio = ({ fg, layers }) => {
+const exactRatio = ({ fg, layers }) => {
   const bg = flatten(layers);
-  const ink = flatten([fg, bg]);
-  return Number(contrastRatio(ink, bg).toFixed(2));
+  return contrastRatio(flatten([fg, bg]), bg);
+};
+
+/** The ratio rounded to two places, for display. The gate compares `exactRatio`. */
+/** @param {{ fg: number[], layers: number[][] }} row */
+export const rowRatio = (row) => Number(exactRatio(row).toFixed(2));
+
+/** `*`, the page roots and a bare tag that matches more than this many elements are too broad to be an allowlist entry. */
+export const BROAD_TAG_LIMIT = 3;
+const ROOT_SELECTORS = ['*', 'body', 'html', 'main', '#root', ':root'];
+
+/**
+ * @param {Array<{ selector: string, count: number, valid: boolean }>} entries each allowlist entry with how many elements it matched on the page
+ * @param {string} label @returns {{ problems: string[], refused: string[] }}
+ */
+export const allowlistProblems = (entries, label) => {
+  const problems = [];
+  const refused = [];
+  for (const { selector, count, valid } of entries) {
+    const css = selector.trim();
+    const why = !valid
+      ? 'is not a valid selector'
+      : ROOT_SELECTORS.includes(css)
+        ? 'matches the whole page'
+        : /^[a-z][a-z0-9-]*$/i.test(css) && count > BROAD_TAG_LIMIT
+          ? `is a bare tag that matches ${count} elements, more than ${BROAD_TAG_LIMIT}`
+          : '';
+    if (why === '') continue;
+    refused.push(selector);
+    problems.push(
+      `${label} contrastAllow selector "${selector}" is too broad: it ${why}, so it excuses nothing; name the element`,
+    );
+  }
+  return { problems, refused };
 };
 
 /** @param {{ html: string, fg: number[], layers: number[][] }} row @param {number} ratio */
@@ -151,13 +208,14 @@ const isNeedsChipRow = (row, ratio) => {
 /** @param {{ fg: number[] }} row @param {number[][]} pixels */
 export const behindRatio = (row, pixels) =>
   Math.min(
-    ...pixels.map((pixel) => rowRatio({ fg: row.fg, layers: [[pixel[0] ?? 0, pixel[1] ?? 0, pixel[2] ?? 0, 255]] })),
+    ...pixels.map((pixel) => exactRatio({ fg: row.fg, layers: [[pixel[0] ?? 0, pixel[1] ?? 0, pixel[2] ?? 0, 255]] })),
   );
 
 /**
  * `behind` is the pixels sampled behind a row over a gradient or image, null when they could not be sampled.
- * A row nobody could measure fails as `not measurable`, unless its screen allowlists it with a reason.
- * @param {Array<{ text: string, html: string, fg: number[], layers: number[][], unknown: boolean, allowed?: string, behind?: number[][] | null }>} rows
+ * A row nobody could measure (clipped to its own text, or its pixels could not be sampled) fails as `not measurable`, unless its screen allowlists it with a reason.
+ * An allowlist entry never excuses text the sampler did measure: that text is judged by its pixels.
+ * @param {Array<{ text: string, html: string, fg: number[], layers: number[][], unknown: boolean, clipped?: boolean, allowed?: string, behind?: number[][] | null }>} rows
  * @param {string} label
  * @returns {{ problems: string[], exceptions: string[], allowed: string[] }}
  */
@@ -166,19 +224,21 @@ export const contrastProblems = (rows, label) => {
   const exceptions = [];
   const allowed = [];
   for (const row of rows) {
-    if (row.unknown && row.allowed) {
+    const unmeasured =
+      row.clipped === true || row.behind === undefined || row.behind === null || row.behind.length === 0;
+    if (row.unknown && unmeasured && row.allowed) {
       allowed.push(`${label} "${row.text}" over a gradient or image is allowlisted: ${row.allowed}`);
       continue;
     }
-    if (row.unknown && (row.behind === undefined || row.behind === null || row.behind.length === 0)) {
+    if (row.unknown && unmeasured) {
       problems.push(
         `${label} "${row.text}" over a gradient or image is not measurable, and its screen does not allowlist it`,
       );
       continue;
     }
-    const ratio = row.unknown ? Number(behindRatio(row, row.behind ?? []).toFixed(2)) : rowRatio(row);
+    const ratio = row.unknown ? behindRatio(row, row.behind ?? []) : exactRatio(row);
     if (ratio >= MIN_CONTRAST) continue;
-    const found = `${label} "${row.text}" ${ratio}:1, needs ${MIN_CONTRAST}:1`;
+    const found = `${label} "${row.text}" ${Number(ratio.toFixed(3))}:1, needs ${MIN_CONTRAST}:1`;
     (isNeedsChipRow(row, ratio) ? exceptions : problems).push(found);
   }
   return { problems, exceptions, allowed };
@@ -231,11 +291,13 @@ export const checkAxe = async (page, label) => {
 
 /** @param {import('playwright').Page} page @param {string} label @param {{ selector: string, reason: string }[]} [allow] extra per-screen allowlist, on top of the screen's own `contrastAllow` */
 export const checkContrast = async (page, label, allow = []) => {
-  const rows = await page.evaluate(COLLECT_TEXT, allow);
+  const { rows, entries } = await page.evaluate(COLLECT_TEXT, allow);
+  const broad = allowlistProblems(entries, label);
+  for (const row of rows) if (broad.refused.includes(row.allowedBy)) row.allowed = '';
   await measureBehind(page, rows);
   const out = contrastProblems(rows, label);
   return {
-    problems: out.problems,
+    problems: [...broad.problems, ...out.problems],
     notes: [
       ...out.exceptions.map((found) => `named exception (Needs-you chip): ${found}`),
       ...out.allowed.map((found) => `allowlisted: ${found}`),
@@ -261,7 +323,22 @@ export const checkKeys = async (page, label) => {
   return { problems: rawKeyProblems(texts, label), notes: [] };
 };
 
-const MOVING = ['transform', 'translate', 'rotate', 'scale', 'opacity', 'left', 'top', 'filter'];
+const MOVING = [
+  'transform',
+  'translate',
+  'rotate',
+  'scale',
+  'opacity',
+  'left',
+  'top',
+  'right',
+  'bottom',
+  'margin-left',
+  'margin-top',
+  'margin-right',
+  'margin-bottom',
+  'filter',
+];
 
 /** A page opened with `reducedMotion: 'reduce'`. Samples every 100 ms for 1.2 s after the settle. */
 /** @param {import('playwright').Page} page @param {string} label */
@@ -272,11 +349,17 @@ export const checkMotion = async (page, label) => {
     const ids = w.__gateIds;
     const styles = {};
     for (const el of document.body.querySelectorAll('*')) {
-      if (el.closest('svg') !== null) continue;
       if (!ids.has(el)) ids.set(el, ids.size);
-      const cs = getComputedStyle(el);
-      const name = `${el.tagName.toLowerCase()}${typeof el.className === 'string' && el.className !== '' ? `.${el.className.split(' ')[0]}` : ''}`;
-      styles[ids.get(el)] = [name, props.map((prop) => cs.getPropertyValue(prop)).join('|')];
+      const inSvg = el.closest('svg') !== null;
+      const cls = typeof el.className === 'string' ? el.className : (el.getAttribute('class') ?? '');
+      const name = `${el.tagName.toLowerCase()}${cls !== '' ? `.${cls.split(' ')[0]}` : ''}`;
+      // Inside an SVG a script moves things with the transform attribute, so that is what is watched there.
+      styles[ids.get(el)] = [
+        name,
+        inSvg
+          ? `${el.getAttribute('transform') ?? ''}|${getComputedStyle(el).getPropertyValue('transform')}`
+          : props.map((prop) => getComputedStyle(el).getPropertyValue(prop)).join('|'),
+      ];
     }
     return {
       running: document
@@ -472,6 +555,48 @@ const BREAKERS = [
     clean: probe('gate-solid', 0, 'background:#fff;color:#767676'),
     inject: probe('gate-faded', 30, 'background:#fff;color:#767676;opacity:.4'),
   },
+  {
+    gate: 'contrast',
+    what: 'readable text whose faded 40% opacity is on an ancestor, not on the text element',
+    check: checkContrast,
+    clean: styled(
+      `.gate-wrap-ok{${BOX}top:90px;background:#fff}.gate-wrap-ok p{margin:0;color:#767676}`,
+      '<div class="gate-wrap-ok"><p>wrapped</p></div>',
+    ),
+    inject: styled(
+      `.gate-wrap{${BOX}top:120px;background:#fff;opacity:.4}.gate-wrap p{margin:0;color:#767676}`,
+      '<div class="gate-wrap"><p>wrapped</p></div>',
+    ),
+  },
+  {
+    gate: 'contrast',
+    what: 'text #767676 over a gradient from #fff to #777, where only the dark end is under 4.5 to 1',
+    check: checkContrast,
+    clean: probe('gate-two-ok', 150, 'width:max-content;background-image:linear-gradient(90deg,#fff,#eee);color:#555'),
+    inject: probe(
+      'gate-two',
+      180,
+      'width:max-content;background-image:linear-gradient(90deg,#fff,#777);color:#767676',
+      'a long line of text that crosses the whole gradient',
+    ),
+  },
+  {
+    gate: 'contrast',
+    what: 'an allowlist of `*` on clipped text it cannot measure',
+    check: async (page, label) =>
+      checkContrast(page, label, (await page.$('.gate-star')) === null ? [] : [{ selector: '*', reason: 'because' }]),
+    inject: probe(
+      'gate-star',
+      210,
+      'background-image:linear-gradient(#000,#000);-webkit-background-clip:text;background-clip:text;color:transparent',
+    ),
+  },
+  {
+    gate: 'contrast',
+    what: 'an allowlist entry on light grey text over a gradient that the sampler can measure',
+    check: (page, label) => checkContrast(page, label, [{ selector: '.gate-excused', reason: 'it is fine' }]),
+    inject: probe('gate-excused', 240, 'background-image:linear-gradient(#fff,#fff);color:#bbb'),
+  },
   { gate: 'parity', what: 'a raw locale key as text', check: checkKeys, inject: html(`<p>${KEY}</p>`) },
   {
     gate: 'parity',
@@ -500,6 +625,22 @@ const BREAKERS = [
     inject: html(
       '<svg width="4" height="4"><rect width="2" height="2"><animate attributeName="x" from="0" to="2" dur="1s" repeatCount="indefinite"/></rect></svg>',
     ),
+    calm: true,
+  },
+  {
+    gate: 'motion',
+    what: 'a requestAnimationFrame loop moving an element by margin-left',
+    check: checkMotion,
+    inject:
+      "{ const el = document.createElement('div'); el.style.cssText = 'position:fixed;top:0;left:0;width:4px;height:4px'; document.body.append(el); let n = 0; const step = () => { el.style.marginLeft = (n++ % 40) + 'px'; requestAnimationFrame(step); }; step(); }",
+    calm: true,
+  },
+  {
+    gate: 'motion',
+    what: 'a requestAnimationFrame loop moving an SVG element by its transform attribute',
+    check: checkMotion,
+    inject:
+      "{ const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('width', '8'); svg.setAttribute('height', '8'); const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect'); rect.setAttribute('width', '2'); rect.setAttribute('height', '2'); svg.append(rect); document.body.append(svg); let n = 0; const step = () => { rect.setAttribute('transform', 'translate(' + (n++ % 4) + ' 0)'); requestAnimationFrame(step); }; step(); }",
     calm: true,
   },
   {
@@ -541,10 +682,14 @@ export const selfTest = async (browser, url, ready = '[data-testid=rev]') => {
   return problems;
 };
 
-/** Screens other than the floor: every `src/screens/<id>/screen.tsx`. */
-export const registeredScreens = () => {
-  const dir = join(ROOT, 'src', 'screens');
-  return existsSync(dir) ? readdirSync(dir).filter((id) => existsSync(join(dir, id, 'screen.tsx'))) : [];
+/** Screens other than the floor: every `src/screens/<id>/screen.tsx`. The synthetic `zz-gate-*` ones count only while lane 11b sets the flag, so a leftover from a killed run is never gated as a real screen. */
+export const registeredScreens = (dir = join(ROOT, 'src', 'screens'), env = process.env) => {
+  const synthetic = env[FIXTURE_FLAG] === '1';
+  return existsSync(dir)
+    ? readdirSync(dir).filter(
+        (id) => (synthetic || !id.startsWith(FIXTURE_PREFIX)) && existsSync(join(dir, id, 'screen.tsx')),
+      )
+    : [];
 };
 
 /** @param {{ screen: string, notReady: string | null }[]} found */
@@ -553,6 +698,7 @@ export const notReadyLines = (found) =>
 
 /** @param {import('playwright').Browser} browser */
 export const runGateLane = async (browser) => {
+  restoreScreens();
   const hq = await startHqFree();
   try {
     await hq.post(human('add_worker', { worker: 'nova' }));
@@ -579,7 +725,28 @@ export const runGateLane = async (browser) => {
 };
 
 if (import.meta.main) {
-  const browser = await launch();
+  // Playwright would answer SIGINT and SIGTERM itself, close the browser and exit at once. This run has files and an HQ to clean up first.
+  const browser = await launch({ handleSIGINT: false, handleSIGTERM: false });
+  let stopping = false;
+  /** An interrupted run stops the HQ it started, removes the synthetic screens and rebuilds `src/dist` without them. */
+  const interrupted = (/** @type {number} */ code) => () => {
+    if (stopping) return;
+    stopping = true;
+    (async () => {
+      try {
+        await stopAllHq();
+        await browser.close().catch(() => {});
+      } finally {
+        try {
+          restoreScreens();
+        } finally {
+          process.exit(code);
+        }
+      }
+    })();
+  };
+  process.on('SIGINT', interrupted(130));
+  process.on('SIGTERM', interrupted(143));
   try {
     const verdict = await runGateLane(browser);
     for (const line of verdict.lines) console.log(line);
@@ -587,7 +754,11 @@ if (import.meta.main) {
     const fixtures = await runFixtureLane(browser);
     console.log(`${fixtures.ok ? 'PASS' : 'FAIL'} lane 11b screen registry fixtures: ${fixtures.note}`);
     process.exitCode = verdict.ok && fixtures.ok ? 0 : 1;
+  } catch (error) {
+    // Stopping the HQ under a running lane makes it throw. The signal handler is cleaning up and exits, so that error is not the verdict.
+    if (!stopping) throw error;
+    await new Promise(() => {});
   } finally {
-    await browser.close();
+    if (!stopping) await browser.close();
   }
 }

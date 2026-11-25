@@ -11,8 +11,10 @@ const at = (dir: string, load: Loader = ok(dir)) => [`../screens/${dir}/screen.t
 
 describe('screen registry', () => {
   it('lists every src/screens/<id>/screen.tsx by glob and every one of them loads, so a bad screen fails here', async () => {
-    expect(ROUTES.map((route) => route.id)).toEqual([...ROUTES.map((route) => route.id)].sort());
-    for (const route of ROUTES) expect(await route.load()).toMatchObject({ ok: true });
+    // `zz-gate-*` are lane 11b's synthetic screens, some broken on purpose. A leftover from a killed run is not a screen of the product.
+    const real = ROUTES.filter((route) => process.env.AW_GATE_FIXTURES === '1' || !route.id.startsWith('zz-gate-'));
+    expect(real.map((route) => route.id)).toEqual([...real.map((route) => route.id)].sort());
+    for (const route of real) expect(await route.load()).toMatchObject({ ok: true });
   });
 
   it('sorts routes by id and routes #/<id> to them', () => {

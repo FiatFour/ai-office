@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { notReadyLines, screenGates } from './gates.mjs';
-import { ROOT, startHqFree } from './harness.mjs';
+import { FIXTURE_FLAG, FIXTURE_PREFIX, ROOT, startHqFree } from './harness.mjs';
 
 /**
  * Lane 11b: registers synthetic screens end to end, the way a screen ticket does, and proves the registry and the gates cope with them.
@@ -12,7 +12,7 @@ import { ROOT, startHqFree } from './harness.mjs';
 
 const SCREENS = join(ROOT, 'src', 'screens');
 const LOCALES = join(ROOT, 'src', 'locales');
-const PREFIX = 'zz-gate-';
+const PREFIX = FIXTURE_PREFIX;
 
 const screen = (/** @type {string} */ id, /** @type {string} */ body, /** @type {string} */ extra = '', head = '') =>
   `${head}\nexport const screen = { id: '${id}', ${extra} Component: () => (${body}) };\n`;
@@ -61,6 +61,30 @@ const FIXTURES = {
     `<main style={{ padding: 24, background: '#fff' }}><p className="fx-clip" style={{ backgroundImage: 'linear-gradient(#000, #000)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>clipped text</p></main>`,
     "contrastAllow: [{ selector: '.fx-clip', reason: ' ' }],",
   ),
+  motion: `import { useEffect, useRef } from 'react';
+
+const Mover = () => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let n = 0;
+    let id = 0;
+    const step = () => {
+      if (ref.current !== null) ref.current.style.transform = 'translateX(' + (n++ % 40) + 'px)';
+      id = requestAnimationFrame(step);
+    };
+    step();
+    return () => cancelAnimationFrame(id);
+  }, []);
+  return (
+    <main style={{ padding: 24, background: '#fff', color: '#15181c' }}>
+      <h1>mover</h1>
+      <div ref={ref} style={{ width: 4, height: 4, background: '#000' }} />
+    </main>
+  );
+};
+
+export const screen = { id: 'zz-gate-motion', Component: Mover };
+`,
   clipped: screen(
     'zz-gate-clipped',
     `<main style={{ padding: 24, background: '#fff' }}><p style={{ backgroundImage: 'linear-gradient(#000, #000)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>clipped text</p></main>`,
@@ -77,10 +101,19 @@ const existsDir = (/** @type {string} */ dir) => {
   }
 };
 
+/** Removes every synthetic file. Returns how many it found, so a caller knows whether a build may have seen them. */
 const remove = () => {
-  for (const name of fixtureFolders()) rmSync(join(SCREENS, name), { recursive: true, force: true });
-  for (const lang of ['en', 'th']) rmSync(join(LOCALES, lang, `${PREFIX}good.json`), { force: true });
+  const folders = fixtureFolders();
+  const locales = ['en', 'th']
+    .map((lang) => join(LOCALES, lang, `${PREFIX}good.json`))
+    .filter((file) => existsSync(file));
+  for (const name of folders) rmSync(join(SCREENS, name), { recursive: true, force: true });
+  for (const file of locales) rmSync(file, { force: true });
+  return folders.length + locales.length;
 };
+
+/** True from the moment a build may contain synthetic screens until a clean build replaces it. */
+let distDirty = false;
 
 const build = () => {
   const out = spawnSync('pnpm', ['--filter', '@agent-works/floor', 'build'], {
@@ -91,6 +124,18 @@ const build = () => {
   if (out.status !== 0) throw new Error(`floor build failed: ${out.stdout}${out.stderr}`.slice(0, 600));
 };
 
+/**
+ * Leaves the tree as a clean checkout has it: no synthetic file, and a `src/dist` built without them.
+ * Run before the gates (a run that was killed may have left them) and from the signal handler.
+ */
+export const restoreScreens = () => {
+  const found = remove();
+  if (found > 0 || distDirty) {
+    build();
+    distDirty = false;
+  }
+};
+
 /** @param {import('playwright').Browser} browser */
 export const runFixtureLane = async (browser) => {
   /** @type {string[]} */
@@ -99,6 +144,7 @@ export const runFixtureLane = async (browser) => {
     if (!holds) problems.push(what);
   };
   remove();
+  process.env[FIXTURE_FLAG] = '1';
   try {
     for (const [name, source] of Object.entries(FIXTURES)) {
       mkdirSync(join(SCREENS, `${PREFIX}${name}`), { recursive: true });
@@ -106,6 +152,7 @@ export const runFixtureLane = async (browser) => {
     }
     writeFileSync(join(LOCALES, 'en', `${PREFIX}good.json`), '{ "title": "Fixture screen" }\n');
     writeFileSync(join(LOCALES, 'th', `${PREFIX}good.json`), '{ "title": "หน้าทดสอบ" }\n');
+    distDirty = true;
     build();
     const hq = await startHqFree();
     try {
@@ -158,6 +205,12 @@ export const runFixtureLane = async (browser) => {
         `an allowlist entry with no reason excused text: ${noReason.problems.join('; ')}`,
       );
 
+      const motion = await run('motion');
+      expect(
+        motion.problems.some((problem) => problem.includes('by script under prefers-reduced-motion')),
+        `a registered screen that moves a transform by script under reduced motion did not fail: ${motion.problems.join('; ')}`,
+      );
+
       const clipped = await run('clipped');
       expect(
         clipped.problems.some((problem) => problem.includes('not measurable')),
@@ -167,14 +220,16 @@ export const runFixtureLane = async (browser) => {
       await hq.stop();
     }
   } finally {
+    delete process.env[FIXTURE_FLAG];
     remove();
     build();
+    distDirty = false;
   }
   return {
     ok: problems.length === 0,
     note:
       problems.length === 0
-        ? `${Object.keys(FIXTURES).length} synthetic screens registered end to end: own and default ready, never ready named, wrong id, throwing module and throwing render each named in the page and the console while the floor kept drawing, unmeasurable text failed unless allowlisted`
+        ? `${Object.keys(FIXTURES).length} synthetic screens registered end to end: own and default ready, a script moving a transform failing the motion gate, never ready named, wrong id, throwing module and throwing render each named in the page and the console while the floor kept drawing, unmeasurable text failed unless allowlisted`
         : problems.join('; '),
   };
 };

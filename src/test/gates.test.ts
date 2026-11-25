@@ -1,13 +1,18 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { negativeNote } from '../e2e/canvas-compare.mjs';
 import {
+  allowlistProblems,
   behindRatio,
   contrastProblems,
   motionProblems,
   notReadyLines,
   rawKeyProblems,
+  registeredScreens,
   rowRatio,
 } from '../e2e/gates.mjs';
 import { freePort, startHq, withFreePort } from '../e2e/harness.mjs';
@@ -73,6 +78,47 @@ describe('contrast gate arithmetic', () => {
     });
   });
 
+  it('compares the ratio unrounded, so 4.4967 (which displays as 4.50) fails', () => {
+    const teal = row(opaque(23, 132, 132), [opaque(255, 255, 255)]);
+    expect(rowRatio(teal)).toBe(4.5);
+    expect(contrastProblems([teal], 't').problems).toEqual(['t "x" 4.497:1, needs 4.5:1']);
+    const pixels = [[255, 255, 255]];
+    expect(contrastProblems([{ ...teal, unknown: true, behind: pixels }], 't').problems).toHaveLength(1);
+  });
+
+  it('lets an allowlist excuse only text the sampler could not measure', () => {
+    const base = { ...row(opaque(0xbb, 0xbb, 0xbb), [opaque(255, 255, 255)]), unknown: true, allowed: 'it is fine' };
+    // measured pixels: judged by them, the allowlist does not matter
+    expect(contrastProblems([{ ...base, behind: [[255, 255, 255]] }], 't').problems).toHaveLength(1);
+    // could not sample, or clipped to its own text: the allowlist excuses it
+    for (const found of [{}, { behind: null }, { behind: [] }, { clipped: true, behind: [[255, 255, 255]] }])
+      expect(contrastProblems([{ ...base, ...found }], 't')).toMatchObject({
+        problems: [],
+        allowed: [expect.any(String)],
+      });
+  });
+
+  it('refuses broad allowlist selectors by name: *, body, html, main, #root and a bare tag matching more than 3 elements', () => {
+    const entry = (selector: string, count: number, valid = true) => ({ selector, count, valid });
+    for (const selector of ['*', 'body', 'html', 'main', '#root', ':root', ' * '])
+      expect(allowlistProblems([entry(selector, 1)], 't')).toMatchObject({
+        refused: [selector],
+        problems: [
+          expect.stringContaining(`contrastAllow selector "${selector}" is too broad: it matches the whole page`),
+        ],
+      });
+    expect(allowlistProblems([entry('p', 4)], 't').problems).toEqual([
+      't contrastAllow selector "p" is too broad: it is a bare tag that matches 4 elements, more than 3, so it excuses nothing; name the element',
+    ]);
+    expect(
+      allowlistProblems([entry('p', 3), entry('.clip', 90), entry('section p', 90), entry('#hero', 1)], 't'),
+    ).toEqual({
+      problems: [],
+      refused: [],
+    });
+    expect(allowlistProblems([entry('p[', 0, false)], 't').problems[0]).toContain('is not a valid selector');
+  });
+
   it('excuses only the Needs-you chip, matched on colours, ratio, class and mood', () => {
     const chip = '<span class="chip" data-mood="needs">';
     const cream = opaque(0xf5, 0xf3, 0xec);
@@ -104,6 +150,29 @@ describe('key and motion gate arithmetic', () => {
     expect(motionProblems({ running: [], smil: 0, scripted: ['div.spark'] }, 't')).toEqual([
       't moves div.spark by script under prefers-reduced-motion',
     ]);
+  });
+});
+
+describe('registered screens', () => {
+  it('lists the synthetic zz-gate-* screens only while lane 11b sets its flag', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aw-screens-'));
+    try {
+      for (const id of ['hq', 'zz-gate-good', 'zz-gate-render', 'terminal']) {
+        mkdirSync(join(dir, id));
+        writeFileSync(join(dir, id, 'screen.tsx'), '');
+      }
+      mkdirSync(join(dir, 'empty'));
+      expect(registeredScreens(dir, {})).toEqual(['hq', 'terminal']);
+      expect(registeredScreens(dir, { AW_GATE_FIXTURES: '0' })).toEqual(['hq', 'terminal']);
+      expect(registeredScreens(dir, { AW_GATE_FIXTURES: '1' }).sort()).toEqual([
+        'hq',
+        'terminal',
+        'zz-gate-good',
+        'zz-gate-render',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

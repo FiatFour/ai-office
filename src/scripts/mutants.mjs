@@ -22,7 +22,7 @@ const PARITY = 'src/test/i18n-parity.test.ts';
 const APP = 'src/floor/App.tsx';
 const DRAWER = 'src/floor/Drawer.tsx';
 
-/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
+/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
 const MUTANTS = [
   {
     name: 'belt-is-code',
@@ -1060,6 +1060,109 @@ const MUTANTS = [
     ],
   },
   {
+    name: 'gates-contrast-opacity-self-only',
+    claim: 'opacity on an ancestor of the text counts, not only on the text element',
+    tier: 'gates',
+    edits: [[GATES, 'opacity *= Number(cs.opacity);', 'if (up === el) opacity *= Number(cs.opacity);']],
+  },
+  {
+    name: 'gates-contrast-sample-one-pixel',
+    claim: 'the pixel sampler reads the whole rectangle behind the text, not one pixel of it',
+    tier: 'gates',
+    edits: [
+      [GATES, 'const step = Math.max(1, Math.floor(Math.sqrt((w * h) / 3000)));', 'const step = Math.max(w, h);'],
+    ],
+  },
+  {
+    name: 'gates-motion-main-only',
+    claim: 'the reduced-motion gate runs on every registered screen, not only the floor',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        'problems.push(...(await checkMotion(page, `${screen}/reduced-motion`)).problems);',
+        "if (screen === 'main') problems.push(...(await checkMotion(page, `${screen}/reduced-motion`)).problems);",
+      ],
+    ],
+  },
+  {
+    name: 'gates-contrast-allowlist-excuses-measured',
+    claim: 'an allowlist entry excuses only text the sampler could not measure',
+    tier: 'gates',
+    edits: [[GATES, 'if (row.unknown && unmeasured && row.allowed) {', 'if (row.unknown && row.allowed) {']],
+  },
+  {
+    name: 'gates-contrast-broad-allow-honoured',
+    claim: 'a broad allowlist selector excuses nothing',
+    tier: 'gates',
+    edits: [[GATES, "for (const row of rows) if (broad.refused.includes(row.allowedBy)) row.allowed = '';", '']],
+  },
+  {
+    name: 'gates-contrast-broad-allow-not-named',
+    claim: 'a broad allowlist selector is refused with a named failure',
+    tier: 'gates',
+    edits: [[GATES, "const ROOT_SELECTORS = ['*', 'body',", "const ROOT_SELECTORS = ['*none', 'body',"]],
+  },
+  {
+    name: 'gates-contrast-broad-tag-limit',
+    claim: 'a bare tag selector that matches more than 3 elements is refused',
+    tier: 'gates',
+    edits: [[GATES, 'export const BROAD_TAG_LIMIT = 3;', 'export const BROAD_TAG_LIMIT = 1e9;']],
+  },
+  {
+    name: 'gates-contrast-rounded',
+    claim: 'the contrast bar is applied to the unrounded ratio',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        ': exactRatio(row);\n    if (ratio >= MIN_CONTRAST) continue;',
+        ': rowRatio(row);\n    if (ratio >= MIN_CONTRAST) continue;',
+      ],
+    ],
+  },
+  {
+    name: 'gates-motion-margin-unwatched',
+    claim: 'the reduced-motion gate watches margin-left',
+    tier: 'gates',
+    edits: [[GATES, "  'margin-left',\n", '']],
+  },
+  {
+    name: 'gates-motion-svg-attr-unwatched',
+    claim: 'the reduced-motion gate watches the transform attribute of SVG elements',
+    tier: 'gates',
+    edits: [
+      [
+        GATES,
+        "const inSvg = el.closest('svg') !== null;",
+        "if (el.closest('svg') !== null) continue;\n      const inSvg = false;",
+      ],
+    ],
+  },
+  {
+    name: 'gates-fixtures-listed-as-screens',
+    claim: 'the synthetic zz-gate-* screens are not registered screens unless lane 11b sets its flag',
+    edits: [[GATES, '(synthetic || !id.startsWith(FIXTURE_PREFIX))', 'true']],
+  },
+  {
+    name: 'gates-interrupt-no-handler',
+    claim: 'an interrupted gates run cleans up (SIGINT handler)',
+    tier: 'interrupt',
+    edits: [[GATES, "process.on('SIGINT', interrupted(130));", '']],
+  },
+  {
+    name: 'gates-interrupt-hq-left',
+    claim: 'an interrupted gates run stops the HQ it started',
+    tier: 'interrupt',
+    edits: [[GATES, '        await stopAllHq();\n', '']],
+  },
+  {
+    name: 'gates-interrupt-no-restore',
+    claim: 'an interrupted gates run removes the synthetic screens and rebuilds src/dist',
+    tier: 'interrupt',
+    edits: [[GATES, '          restoreScreens();\n        } finally {', '          0;\n        } finally {']],
+  },
+  {
     name: 'gates-compare-skip-silent',
     claim: 'the compare verdict says when the entry negative tests were skipped',
     edits: [['src/e2e/canvas-compare.mjs', 'entryRuns === 0', 'entryRuns === -1']],
@@ -1136,6 +1239,12 @@ const gates = async () => {
   });
   return result.status === 0 ? null : (result.stdout.match(/FAIL lane 11[^\n]{0,160}/) ?? ['gates crashed'])[0];
 };
+const interrupt = async () => {
+  const result = await run('node', ['src/e2e/interrupt.mjs'], 900_000, process.env);
+  return result.status === 0
+    ? null
+    : (result.stdout.match(/FAIL interrupt[^\n]{0,160}/) ?? ['interrupt check crashed'])[0];
+};
 const vitest = () => run('pnpm', ['vitest', 'run', ...SUITE], 300_000);
 
 const demoChildren = () => {
@@ -1186,6 +1295,7 @@ for (const mutant of MUTANTS) {
     }
     let how = null;
     if (mutant.tier === 'lane9') how = await lane9();
+    else if (mutant.tier === 'interrupt') how = (await vitest()).status !== 0 ? 'unit tests' : await interrupt();
     else if (mutant.tier === 'gates') {
       if (mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
       how = (await vitest()).status !== 0 ? 'unit tests' : await gates();

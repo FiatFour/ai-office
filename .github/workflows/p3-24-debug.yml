@@ -9,7 +9,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Run a Linux docker daemon in WSL 2 for docker.exe
-        if: ${{ matrix.cell == 'windows' }}
         run: |
           docker info --format 'runner daemon OSType: {{.OSType}}'
           wsl --install -d Debian --no-launch --web-download

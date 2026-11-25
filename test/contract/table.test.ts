@@ -35,7 +35,8 @@ const everything = (): Row[] =>
   OSES.flatMap((os) =>
     DRIVERS.flatMap((driver) => {
       if (LIVE.includes(driver)) return [whole(driver, os, 'no account')];
-      if ((driver === 'docker' || driver === 'podman') && os !== 'linux') return [whole(driver, os, 'no linux engine')];
+      if ((driver === 'docker' || driver === 'podman') && os !== 'linux' && !(driver === 'docker' && os === 'windows'))
+        return [whole(driver, os, 'no linux engine')];
       return cell(driver, os);
     }),
   );
@@ -48,7 +49,7 @@ describe('the CI table', () => {
     const { markdown, problems } = tabulate(everything());
     expect(problems).toEqual([]);
     expect(markdown).toContain('| github-live | not run: no account | not run: no account | not run: no account |');
-    expect(markdown).toContain('| docker | pass 2 | not run: no linux engine | not run: no linux engine |');
+    expect(markdown).toContain('| docker | pass 2 | not run: no linux engine | pass 2 |');
   });
 
   it('calls a cell nobody reported MISSING and a problem', () => {
@@ -156,6 +157,13 @@ describe('the CI table', () => {
     expect(tabulate(rows).problems).toContain(
       'docker on linux case b has status "passed", which is not pass, fail, not-run or expected',
     );
+  });
+
+  it('fails docker on windows when it did not run, since its Linux daemon is reachable through translated paths', () => {
+    const rows = [...without('docker', 'windows'), whole('docker', 'windows', 'a Linux daemon that cannot see C:/')];
+    expect(tabulate(rows).problems).toEqual([
+      'docker on windows must pass every case and was not run: a Linux daemon that cannot see C:/',
+    ]);
   });
 
   it('fails docker and podman on linux when the engine is unusable, the way a broken socket looks', async () => {

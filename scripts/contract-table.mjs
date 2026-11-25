@@ -16,7 +16,8 @@ const NOT_APPLICABLE = { 'gitlab-recorded': ['a-github-signature-is-checked'] };
 const mustPass = (driver, os) =>
   driver === 'github-recorded' ||
   driver === 'gitlab-recorded' ||
-  ((driver === 'docker' || driver === 'podman') && os === 'linux');
+  ((driver === 'docker' || driver === 'podman') && os === 'linux') ||
+  (driver === 'docker' && os === 'windows');
 
 /** @param {Row[]} rows @param {{ drivers?: string[], oses?: string[] }} [want] */
 export const tabulate = (rows, { drivers = DRIVERS, oses = OSES } = {}) => {

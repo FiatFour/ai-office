@@ -13,7 +13,7 @@ const EXPECTED = 'test/contract/expected.test.ts';
 const SHARD = 'test/contract/shard.test.ts';
 const TABLE = 'test/contract/table.test.ts';
 const SELF = 'test/contract/self.test.ts';
-const ENGINES = 'test/contract/engines.test.ts';
+const BIND = 'server/test/sandbox/bind-path.test.ts';
 const SANDBOX = 'test/contract/sandbox.real.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string, 'all'?]>, test: string, caught: string[], table?: RegExp }>} */
@@ -189,6 +189,39 @@ const MUTANTS = [
     caught: ['fails a row that names a driver the table does not know'],
   },
   {
+    name: 'windows-uid-skip-not-excused',
+    claim: 'docker on windows may skip the one case that compares a POSIX uid',
+    edits: [
+      [
+        'scripts/contract-table.mjs',
+        "'docker|windows': ['cage-files-belong-to-the-host-user'],",
+        "'docker|windows': [],",
+      ],
+    ],
+    test: TABLE,
+    caught: ['lets docker on windows skip the one case that compares a POSIX uid'],
+  },
+  {
+    name: 'windows-skip-excuse-widened-to-any-case',
+    claim: 'the windows excuse names one case and no other case may skip on docker on windows',
+    edits: [['scripts/contract-table.mjs', "!excused.includes(r.case ?? '')", 'false']],
+    test: TABLE,
+    caught: ['fails any other case skipped on docker on windows'],
+  },
+  {
+    name: 'windows-skip-excuse-leaks-to-linux',
+    claim: 'the windows excuse does not apply to docker on linux',
+    edits: [
+      [
+        'scripts/contract-table.mjs',
+        '...(NOT_APPLICABLE[`${driver}|${os}`] ?? [])',
+        '...(NOT_APPLICABLE[`${driver}|windows`] ?? [])',
+      ],
+    ],
+    test: TABLE,
+    caught: ['does not let the windows excuse reach docker on linux'],
+  },
+  {
     name: 'table-ignores-unknown-os',
     claim: 'a row for an OS the table does not know fails the table',
     edits: [['scripts/contract-table.mjs', 'else if (!OSES.includes(row.os))', 'else if (false)']],
@@ -217,20 +250,6 @@ const MUTANTS = [
     caught: ['refuses an unknown name and an empty selection'],
   },
   {
-    name: 'windows-probe-bypasses-driver-mount',
-    claim:
-      'the Windows probe builds its bind with the driver mount builder, so a driver that translates paths stops the probe matching',
-    edits: [
-      [
-        'test/contract/engines.ts',
-        "['create', ...mount(dir, '/m'), 'aw-no-such-image:0', 'true']",
-        "['create', '--mount', `type=bind,src=${dir},dst=/m`, 'aw-no-such-image:0', 'true']",
-      ],
-    ],
-    test: ENGINES,
-    caught: ['uses whatever path the driver mount builder produces, not the raw host path'],
-  },
-  {
     name: 'fake-host-loses-exact-login',
     claim: 'the in-memory host declares exactLogin, so the contract compares logins byte for byte against it',
     edits: [['test/contract/fakes/githost.ts', '    exactLogin: true,\n', '']],
@@ -238,12 +257,52 @@ const MUTANTS = [
     caught: ['declares that its logins keep their case'],
   },
   {
-    name: 'windows-mount-refusal-ignored',
-    claim:
-      'a daemon that rejects the Windows bind path makes the docker cell not run, with the daemon words as the reason',
-    edits: [['test/contract/engines.ts', '/invalid mount|mount path|invalid bind/i.test(text)', 'false && text']],
-    test: ENGINES,
-    caught: ['reads a daemon that cannot see the Windows path as a refusal'],
+    name: 'bind-path-not-translated',
+    claim: 'a win32 host hands a Linux daemon /mnt/<drive>/ paths, never C:/ ones, so the docker windows cell can bind',
+    edits: [['server/sandbox/export.ts', "if (platform !== 'win32') return path;", 'return path;']],
+    test: BIND,
+    caught: ['turns a drive path into the /mnt path a WSL daemon reads', 'builds its bind from the translated path'],
+  },
+  {
+    name: 'proxy-binds-bypass-mount',
+    claim: 'the firewall proxy binds its host paths through the one mount builder, so a win32 host translates them too',
+    edits: [
+      [
+        'server/sandbox/firewall.ts',
+        "    ...mount(PROXY_DIR, '/proxy', true),",
+        "    '-v',\n    `${PROXY_DIR}:/proxy:ro`,",
+      ],
+    ],
+    test: BIND,
+    caught: ['binds the proxy code and the allowlist through the mount builder'],
+  },
+  {
+    name: 'docker-windows-may-not-run',
+    claim: 'the docker cell on windows must pass every case, a not run there fails the table',
+    edits: [['scripts/contract-table.mjs', "  (driver === 'docker' && os === 'windows');", '  false;']],
+    test: TABLE,
+    caught: ['fails docker on windows when it did not run'],
+  },
+  {
+    name: 'bind-path-translated-off-windows',
+    claim: 'Linux and macOS hosts bind the path they were given',
+    edits: [['server/sandbox/export.ts', "if (platform !== 'win32') return path;", '']],
+    test: BIND,
+    caught: ['leaves every path alone on linux and macOS'],
+  },
+  {
+    name: 'bind-path-keeps-drive-case',
+    claim: 'the drive letter becomes lower case, as /mnt/c needs',
+    edits: [['server/sandbox/export.ts', 'letter.toLowerCase()', 'letter']],
+    test: BIND,
+    caught: ['turns a drive path into the /mnt path a WSL daemon reads'],
+  },
+  {
+    name: 'bind-comma-unquoted',
+    claim: 'a comma in a host path is quoted so the daemon does not split the mount at it',
+    edits: [['server/sandbox/export.ts', '/[",\\n\\r]/.test(value)', 'false']],
+    test: BIND,
+    caught: ['quotes a path with a comma or a quote so the mount is not split'],
   },
   {
     name: 'registration-skips-a-case',

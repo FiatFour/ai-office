@@ -35,7 +35,8 @@ const everything = (): Row[] =>
   OSES.flatMap((os) =>
     DRIVERS.flatMap((driver) => {
       if (LIVE.includes(driver)) return [whole(driver, os, 'no account')];
-      if ((driver === 'docker' || driver === 'podman') && os !== 'linux') return [whole(driver, os, 'no linux engine')];
+      if ((driver === 'docker' || driver === 'podman') && os !== 'linux' && !(driver === 'docker' && os === 'windows'))
+        return [whole(driver, os, 'no linux engine')];
       return cell(driver, os);
     }),
   );
@@ -48,7 +49,7 @@ describe('the CI table', () => {
     const { markdown, problems } = tabulate(everything());
     expect(problems).toEqual([]);
     expect(markdown).toContain('| github-live | not run: no account | not run: no account | not run: no account |');
-    expect(markdown).toContain('| docker | pass 2 | not run: no linux engine | not run: no linux engine |');
+    expect(markdown).toContain('| docker | pass 2 | not run: no linux engine | pass 2 |');
   });
 
   it('calls a cell nobody reported MISSING and a problem', () => {
@@ -95,6 +96,33 @@ describe('the CI table', () => {
       { driver: 'gitlab-recorded', os: 'linux', case: 'b', status: 'pass' as const, reason: null },
     ];
     expect(tabulate(rows).problems).toEqual([]);
+  });
+
+  const UID_CASE = 'cage-files-belong-to-the-host-user';
+  const dockerCell = (os: string, skipped: string) => {
+    const ids = ['a', skipped];
+    return [
+      ...without('docker', os),
+      ...ids.map((id) => ({ driver: 'docker', os, case: id, status: 'expected' as const, reason: null })),
+      { driver: 'docker', os, case: 'a', status: 'pass' as const, reason: null },
+      { driver: 'docker', os, case: skipped, status: 'not-run' as const, reason: 'this OS has no POSIX uid' },
+    ];
+  };
+
+  it('lets docker on windows skip the one case that compares a POSIX uid', () => {
+    expect(tabulate(dockerCell('windows', UID_CASE)).problems).toEqual([]);
+  });
+
+  it('fails any other case skipped on docker on windows', () => {
+    expect(tabulate(dockerCell('windows', 'b')).problems).toEqual([
+      'docker on windows must pass every case and skipped 1',
+    ]);
+  });
+
+  it('does not let the windows excuse reach docker on linux', () => {
+    expect(tabulate(dockerCell('linux', UID_CASE)).problems).toEqual([
+      'docker on linux must pass every case and skipped 1',
+    ]);
   });
 
   it('fails results that come with no list of the cases to run', () => {
@@ -156,6 +184,13 @@ describe('the CI table', () => {
     expect(tabulate(rows).problems).toContain(
       'docker on linux case b has status "passed", which is not pass, fail, not-run or expected',
     );
+  });
+
+  it('fails docker on windows when it did not run, since its Linux daemon is reachable through translated paths', () => {
+    const rows = [...without('docker', 'windows'), whole('docker', 'windows', 'a Linux daemon that cannot see C:/')];
+    expect(tabulate(rows).problems).toEqual([
+      'docker on windows must pass every case and was not run: a Linux daemon that cannot see C:/',
+    ]);
   });
 
   it('fails docker and podman on linux when the engine is unusable, the way a broken socket looks', async () => {

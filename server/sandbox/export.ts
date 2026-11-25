@@ -19,10 +19,42 @@ export const userArgs = (engine: Engine, rootless: boolean): string[] => {
     : ['--user', `${uid}:${gid}`];
 };
 
+/**
+ * The driver only starts Linux containers. From a win32 host that daemon is a Linux one (docker.exe against a WSL 2 daemon), and it
+ * cannot read `C:\x` or `C:/x`. It sees the drive as `/mnt/c/x`, the path `wslpath -u` returns. Other hosts pass the path through.
+ */
+export const bindSource = (path: string, platform: NodeJS.Platform = process.platform): string => {
+  if (platform !== 'win32') return path;
+  const slashed = path.replace(/\\/g, '/');
+  const wsl = /^\/\/(?:\?\/UNC\/)?wsl(?:\$|\.localhost)\/[^/]+(\/.*)?$/i.exec(slashed);
+  if (wsl !== null) return trimTrailing(wsl[1] ?? '/');
+  const drive = /^(?:\/\/[?.]\/)?([A-Za-z]):(?:\/+(.*))?$/.exec(slashed);
+  if (drive !== null) {
+    const [, letter = '', rest = ''] = drive;
+    return trimTrailing(`/mnt/${letter.toLowerCase()}/${rest.replace(/\/{2,}/g, '/')}`);
+  }
+  const unc = /^\/\/(?:\?\/UNC\/)?([^/]+\/[^/]+.*)$/.exec(slashed);
+  if (unc !== null) return trimTrailing(`//${(unc[1] ?? '').replace(/\/{2,}/g, '/')}`);
+  return path;
+};
+
+const trimTrailing = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, '') || '/' : path);
+
+/** `--mount` is a comma separated list, so a value holding a comma or a quote goes in as a quoted CSV field. */
+const field = (key: string, value: string): string =>
+  /[",\n\r]/.test(value) ? `"${key}=${value.replace(/"/g, '""')}"` : `${key}=${value}`;
+
 /** The one place a host path becomes a bind mount argument. The cage and the contract engine probe both build theirs here. */
-export const mount = (src: string, dst: string, readonly = false): string[] => [
+export const mount = (
+  src: string,
+  dst: string,
+  readonly = false,
+  platform: NodeJS.Platform = process.platform,
+): string[] => [
   '--mount',
-  `type=bind,src=${src},dst=${dst}${readonly ? ',readonly' : ''}`,
+  ['type=bind', field('src', bindSource(src, platform)), field('dst', dst), ...(readonly ? ['readonly'] : [])].join(
+    ',',
+  ),
 ];
 
 export const exportRepo = async (

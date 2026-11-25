@@ -95,6 +95,6 @@ describe('firewall proxy binds', () => {
     const binds = run.filter((arg) => arg.startsWith('type=bind'));
     expect(binds).toHaveLength(2);
     expect(binds[0]).toMatch(/dst=\/proxy,readonly$/);
-    expect(binds[1]).toBe(`type=bind,src=${dir},dst=/etc/agent-works,readonly`);
+    expect(binds[1]).toBe(`type=bind,src=${bindSource(dir)},dst=/etc/agent-works,readonly`);
   });
 });

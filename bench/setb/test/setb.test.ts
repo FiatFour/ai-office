@@ -13,12 +13,14 @@ import { touchesWorkflows } from '../guard.ts';
 import {
   CALIBRATION_SIZE,
   claudeArgs,
+  type Judged,
   judgeOne,
   MAX_ATTEMPTS,
   MAX_VOIDS,
   recordVoid,
   refuseAfterVoids,
   runJudge,
+  voidsLogPath,
 } from '../judge.ts';
 import { assignLabels, type Entry } from '../labels.ts';
 import { ciFrom, ciOfBody, type Grading, gradeSetB, inferWindows, PAGE, readPaths, readWindow } from '../outcome.ts';
@@ -33,7 +35,22 @@ import {
   renderPrompt,
 } from '../packet.ts';
 import { JudgeUnparseable, parseVerdict, RUBRIC } from '../rubric.ts';
-import { loadFrozen, parseTaskList, requireFrozenBase, SET_B_SIZE, SHA_FILE, shaOf, TASKS_FILE } from '../task.ts';
+import {
+  frozenBaseRepo,
+  type Git,
+  type GitRun,
+  loadFrozen,
+  parseTaskList,
+  SET_B_SIZE,
+  SHA_FILE,
+  shaOf,
+  TASKS_FILE,
+} from '../task.ts';
+
+const realGit: Git = (cwd, args) => {
+  const ran = spawnSync('git', [...args], { cwd, encoding: 'utf8' });
+  return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
+};
 
 const SETB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT = join(SETB, '..', '..');
@@ -111,6 +128,60 @@ describe('the frozen task list', () => {
       expect(ran.stderr, args[0]).toMatch(/changed after it was frozen/);
       expect(ran.status, args[0]).toBe(3);
     }
+  });
+
+  describe.skipIf(process.platform === 'win32')('the judge command and its voids log', () => {
+    const setup = () => {
+      const dir = tempDir('setb-judge');
+      const bytes = readFileSync(join(SETB, TASKS_FILE));
+      writeFileSync(join(dir, TASKS_FILE), bytes);
+      writeFileSync(join(dir, SHA_FILE), `${shaOf(bytes)}\n`);
+      writeFileSync(join(dir, 'entries.json'), '[]');
+      const bin = join(dir, 'bin');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'claude'), "#!/bin/sh\ncat >/dev/null\necho 'VERDICT: MERGE AS IS'\n", { mode: 0o755 });
+      const env = { ...process.env, AW_BENCH_LOGIN_CONFIRMED: '1', PATH: `${bin}:${process.env.PATH ?? ''}` };
+      const run = (...args: string[]) =>
+        spawnSync(process.execPath, [join(SETB, 'cli.ts'), ...args, '--dir', dir], { encoding: 'utf8', env });
+      const labelled = run('label', '--entries', join(dir, 'entries.json'), '--key', join(dir, 'k.json'));
+      expect(labelled.status, labelled.stderr).toBe(0);
+      const judge = (out: string) => run('judge', '--key', join(dir, 'k.json'), '--out', join(dir, out));
+      return { dir, judge, log: voidsLogPath(dir, shaOf(bytes)) };
+    };
+
+    it('logs each void at one path that no --out can move, and ends Set B at the third', () => {
+      const { dir, judge, log } = setup();
+      for (const [i, out] of ['a.json', 'b.json', 'c.json'].entries()) {
+        const ran = judge(out);
+        expect(ran.status, ran.stderr).toBe(4);
+        expect(ran.stdout).toMatch(/^VOID: /);
+        expect(readFileSync(log, 'utf8').split('\n').filter(Boolean), out).toHaveLength(i + 1);
+        expect(existsSync(join(dir, `${out}.voids.log`))).toBe(false);
+      }
+      const fourth = judge('d.json');
+      expect(fourth.status).toBe(3);
+      expect(fourth.stderr).toMatch(/3 judge runs were void/);
+      expect(existsSync(join(dir, 'd.json'))).toBe(false);
+    });
+
+    it('refuses a run that finds the void limit already reached, whatever --out is named', () => {
+      const { judge, log } = setup();
+      mkdirSync(dirname(log), { recursive: true });
+      writeFileSync(log, '{"reason":"x"}\n{"reason":"y"}\n{"reason":"z"}\n');
+      const ran = judge('fresh.json');
+      expect(ran.status).toBe(3);
+      expect(ran.stderr).toMatch(/3 judge runs were void/);
+    });
+
+    it('does not overwrite an --out that already exists', () => {
+      const { dir, judge, log } = setup();
+      writeFileSync(join(dir, 'taken.json'), 'keep');
+      const ran = judge('taken.json');
+      expect(ran.status).toBe(3);
+      expect(ran.stderr).toMatch(/already exists/);
+      expect(readFileSync(join(dir, 'taken.json'), 'utf8')).toBe('keep');
+      expect(existsSync(log)).toBe(false);
+    });
   });
 
   it('keeps ownership patterns exact', () => {
@@ -254,6 +325,41 @@ describe('the rubric', () => {
     expect(() => parseVerdict(`${quote}\nVERDICT: MERGE AFTER EDITS`, original)).toThrow(/no edit diff/);
     const crlfQuote = '```diff\r\n-old\r\n+new\r\n```';
     expect(() => parseVerdict(`${crlfQuote}\nVERDICT: MERGE AFTER EDITS`, original)).toThrow(/no edit diff/);
+  });
+
+  it.each([
+    'Final verdict: REJECT',
+    '**VERDICT**: REJECT',
+    'VERDICT : REJECT',
+    'VERDICT： REJECT',
+    'VERD\u200bICT: REJECT',
+    'V\u00adERDICT: MERGE AS IS',
+    'ＶＥＲＤＩＣＴ: REJECT',
+    'คำตัดสิน: REJECT',
+    'คำตัดสิน REJECT',
+    'my verdict is to REJECT this',
+    'MERGE AS IS is my verdict',
+    '- verdict - MERGE AFTER EDITS',
+  ])('reads an earlier line %j as a stray verdict', (stray) => {
+    expect(() => parseVerdict(`${stray}\nmore reasons\nVERDICT: MERGE AS IS`)).toThrow(/before its final line/);
+  });
+
+  it('does not take ordinary prose for a stray verdict', () => {
+    expect(
+      parseVerdict('The tests verify it. I would merge it as is, but REJECT is safer.\nVERDICT: REJECT').verdict,
+    ).toBe('REJECT');
+  });
+
+  it('reads a final line inside an open diff fence as unreadable', () => {
+    for (const last of [
+      '-VERDICT: MERGE AS IS',
+      '+VERDICT: MERGE AS IS',
+      ' VERDICT: MERGE AS IS',
+      'VERDICT: MERGE AS IS',
+    ])
+      expect(() => parseVerdict(`cut off:\n\`\`\`diff\n-x\n${last}`), last).toThrow(JudgeUnparseable);
+    expect(() => parseVerdict('x\n-VERDICT: MERGE AS IS')).toThrow(/final line/);
+    expect(parseVerdict('```diff\n-x\n```\nVERDICT: MERGE AS IS').verdict).toBe('MERGE AS IS');
   });
 
   it('does not read a quoted verdict inside prose', () => {
@@ -420,6 +526,46 @@ describe('judge calibration', () => {
     expect(() => refuseAfterVoids(file)).toThrow(/not run again/);
   });
 
+  it('grades a packet that reached MERGE AS IS only after an unreadable reply as a fail, with its attempts', async () => {
+    let n = 0;
+    const retry = async (p: string) => {
+      if (!p.includes('real-one')) return 'VERDICT: REJECT';
+      n += 1;
+      return n === 1 ? 'MERGE AFTER EDITS, no diff\nVERDICT: MERGE AFTER EDITS' : 'VERDICT: MERGE AS IS';
+    };
+    const run = await runJudge(retry, real, seeded);
+    expect(run.voided).toBeNull();
+    expect(run.judged.map((j) => j.label)).toEqual(['pr-aaaa0002']);
+    expect(run.unreadable).toEqual([
+      {
+        label: 'pr-aaaa0001',
+        reason: expect.stringMatching(/only after an unreadable reply.*2 attempts/),
+        attempts: 2,
+      },
+    ]);
+  });
+
+  it('keeps a MERGE AS IS after a failed call, which had no reply to be biased by', async () => {
+    let n = 0;
+    const flaky = async (p: string) => {
+      if (!p.includes('real-one')) return 'VERDICT: REJECT';
+      n += 1;
+      if (n === 1) throw new TaskRefused('timeout');
+      return 'VERDICT: MERGE AS IS';
+    };
+    const run = await runJudge(flaky, real, seeded);
+    expect(run.judged[0]).toMatchObject({ label: 'pr-aaaa0001', verdict: 'MERGE AS IS', attempts: 2 });
+  });
+
+  it('records a non-Error throw by its text', async () => {
+    const odd = async (p: string): Promise<string> => {
+      if (p.includes('real-one')) throw 'plain string failure';
+      return 'VERDICT: REJECT';
+    };
+    const run = await runJudge(odd, real, seeded);
+    expect(run.unreadable[0]?.reason).toContain('plain string failure');
+  });
+
   it('needs exactly the seeded count and distinct labels', async () => {
     expect(CALIBRATION_SIZE).toBe(2);
     await expect(runJudge(model({}), real, seeded.slice(0, 1))).rejects.toThrow(TaskRefused);
@@ -475,7 +621,7 @@ describe('judge calibration', () => {
           })),
         ),
       );
-      expect(seed.checks, 'the check count recorded for the frozen base').toBe(18);
+      expect(seed.checks, 'the check count of a green head of main').toBe(18);
       expect(p.ci.note).toBe('18 checks passed or were skipped');
       expect(p.issue.title, String(i)).not.toMatch(/^#\d/);
       expect(armLeaks(p.diff)).toEqual([]);
@@ -485,18 +631,14 @@ describe('judge calibration', () => {
   it('ships seeded diffs that git apply --check accepts on a checkout of the frozen base', () => {
     const seeds = JSON.parse(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')) as Seed[];
     const frozen = loadFrozen(SETB).frozenAtSha;
-    const hasBase = spawnSync('git', ['cat-file', '-e', `${frozen}^{commit}`], { cwd: ROOT }).status === 0;
-    requireFrozenBase(hasBase, process.env, frozen);
+    const base = frozenBaseRepo(ROOT, frozen, realGit, () => tempDir('setb-base'));
     for (const seed of seeds) {
       const dir = tempDir('setb-seed');
       const files = [...seed.diff.matchAll(/^diff --git a\/(\S+) b\//gm)].map((m) => m[1] as string);
       expect(files.length).toBeGreaterThan(0);
       for (const f of files) {
         mkdirSync(dirname(join(dir, f)), { recursive: true });
-        writeFileSync(
-          join(dir, f),
-          hasBase ? execFileSync('git', ['show', `${frozen}:${f}`], { cwd: ROOT }) : readFileSync(join(ROOT, f)), // shallow clone only
-        );
+        writeFileSync(join(dir, f), execFileSync('git', ['show', `${frozen}:${f}`], { cwd: base }));
       }
       writeFileSync(join(dir, 'seed.patch'), seed.diff);
       const ran = spawnSync('git', ['apply', '--check', 'seed.patch'], { cwd: dir, encoding: 'utf8' });
@@ -507,11 +649,46 @@ describe('judge calibration', () => {
 });
 
 describe('the frozen base check', () => {
-  it('fails loudly when the frozen commit is absent, unless the clone says it is shallow', () => {
-    expect(() => requireFrozenBase(false, {}, 'abc')).toThrow(/not in this clone/);
-    expect(() => requireFrozenBase(false, { AW_SHALLOW_CLONE: '0' }, 'abc')).toThrow(/AW_SHALLOW_CLONE/);
-    expect(() => requireFrozenBase(false, { AW_SHALLOW_CLONE: '1' }, 'abc')).not.toThrow();
-    expect(() => requireFrozenBase(true, {}, 'abc')).not.toThrow();
+  const ok = (stdout = ''): GitRun => ({ status: 0, stdout, stderr: '' });
+  const no: GitRun = { status: 128, stdout: '', stderr: 'boom' };
+  const script =
+    (fails: string): Git =>
+    (_cwd, args) =>
+      args[0] === fails ? no : ok('file:///origin\n');
+
+  it('uses the clone itself when it has the frozen commit, and fetches nothing', () => {
+    const seen: string[] = [];
+    const git: Git = (_cwd, args) => {
+      seen.push(args[0] ?? '');
+      return ok();
+    };
+    expect(frozenBaseRepo('/r', 'abc', git, () => '/tmp/x')).toBe('/r');
+    expect(seen).toEqual(['cat-file']);
+  });
+
+  it('fetches the frozen commit at depth 1 into a scratch repo when the clone lacks it', () => {
+    const calls: string[] = [];
+    const git: Git = (cwd, args) => {
+      calls.push(`${cwd} ${args.join(' ')}`);
+      return args[0] === 'cat-file' ? no : ok('file:///origin\n');
+    };
+    expect(frozenBaseRepo('/r', 'abc', git, () => '/tmp/x')).toBe('/tmp/x');
+    expect(calls).toContain('/tmp/x fetch -q --depth=1 file:///origin abc');
+  });
+
+  it('fails loudly when the fetch fails, and never falls back to the working tree', () => {
+    const git: Git = (_cwd, args) => (args[0] === 'cat-file' || args[0] === 'fetch' ? no : ok('u'));
+    expect(() => frozenBaseRepo('/r', 'abc', git, () => '/tmp/x')).toThrow(/git fetch failed: boom/);
+    expect(() =>
+      frozenBaseRepo(
+        '/r',
+        'abc',
+        (_c, a) => (a[0] === 'init' ? no : script('cat-file')(_c, a)),
+        () => '/t',
+      ),
+    ).toThrow(/git init failed/);
+    const noOrigin: Git = (_cwd, args) => (args[0] === 'cat-file' || args[0] === 'remote' ? no : ok());
+    expect(() => frozenBaseRepo('/r', 'abc', noOrigin, () => '/tmp/x')).toThrow(/no origin/);
   });
 
   it('seeds a PR that removes the case it breaks, so it stays CI green on the base', () => {
@@ -534,6 +711,13 @@ describe('Set B outcome', () => {
     rootMinutes: 3,
     calibration: { tokensPerWindow: 1000, source: 'test' },
     ...over,
+  });
+
+  it('records the judge calls in the graded row note and in judgeAttempts', () => {
+    const row = gradeSetB(grading({ judged: { ...(grading().judged as Judged), attempts: 3 } }));
+    expect(row.note).toMatch(/\(judge calls: 3\)$/);
+    expect(row.judgeAttempts).toBe(3);
+    expect(gradeSetB(grading()).note).not.toMatch(/judge calls/);
   });
 
   it('passes on green CI and MERGE AS IS at the ready head, and records minutes and edit lines', () => {

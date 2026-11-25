@@ -108,12 +108,31 @@ export const loadFrozen = (dir: string): TaskList => {
   return parseTaskList(JSON.parse(bytes.toString('utf8')));
 };
 
-/** The seeded diffs are checked against the frozen commit. A clone without it fails loudly unless it says it is shallow. */
-export const requireFrozenBase = (
-  has: boolean,
-  env: Readonly<Record<string, string | undefined>>,
-  sha: string,
-): void => {
-  if (!has && env.AW_SHALLOW_CLONE !== '1')
-    throw new Error(`the frozen commit ${sha} is not in this clone; fetch full history, or set AW_SHALLOW_CLONE=1`);
+export interface GitRun {
+  readonly status: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+export type Git = (cwd: string, args: readonly string[]) => GitRun;
+
+/**
+ * The repository that holds the frozen commit: `root` when it has it, otherwise a fresh repo at `scratch()` that
+ * fetched that one commit from origin (`--depth=1`, which GitHub allows for a reachable sha). A failed fetch throws:
+ * there is no fall back to the working tree.
+ */
+export const frozenBaseRepo = (root: string, sha: string, git: Git, scratch: () => string): string => {
+  if (git(root, ['cat-file', '-e', `${sha}^{commit}`]).status === 0) return root;
+  const origin = git(root, ['remote', 'get-url', 'origin']);
+  if (origin.status !== 0)
+    throw new Error(`the frozen commit ${sha} is not in this clone and it has no origin to fetch it from`);
+  const dir = scratch();
+  for (const args of [
+    ['init', '-q'],
+    ['fetch', '-q', '--depth=1', origin.stdout.trim(), sha],
+  ]) {
+    const ran = git(dir, args);
+    if (ran.status !== 0)
+      throw new Error(`the frozen commit ${sha} is not in this clone and git ${args[0]} failed: ${ran.stderr.trim()}`);
+  }
+  return dir;
 };

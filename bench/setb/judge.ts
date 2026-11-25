@@ -1,8 +1,9 @@
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { runBinary } from '../../server/sandbox/engine.ts';
 import { TaskRefused } from '../model.ts';
 import { type Packet, renderPrompt, type Unreadable } from './packet.ts';
-import { type Judgement, parseVerdict } from './rubric.ts';
+import { type Judgement, JudgeUnparseable, parseVerdict } from './rubric.ts';
 
 export type Model = (prompt: string) => Promise<string>;
 
@@ -23,6 +24,9 @@ export const MAX_ATTEMPTS = 3;
 /** Voided judge runs that end Set B: the third void is final, no fourth run is made. */
 export const MAX_VOIDS = 3;
 
+/** One voids log per frozen run, named by the sha of the frozen task list, so no `--out` can start the count again. */
+export const voidsLogPath = (dir: string, frozenSha: string): string => join(dir, 'voids', `${frozenSha}.log`);
+
 export const countVoids = (file: string): number =>
   existsSync(file)
     ? readFileSync(file, 'utf8')
@@ -31,6 +35,7 @@ export const countVoids = (file: string): number =>
     : 0;
 
 export const recordVoid = (file: string, reason: string): number => {
+  mkdirSync(dirname(file), { recursive: true });
   appendFileSync(file, `${JSON.stringify({ reason })}\n`);
   return countVoids(file);
 };
@@ -77,14 +82,23 @@ export const runJudge = async (
   const lost: Unreadable[] = [];
   for (const packet of batch) {
     const failures: string[] = [];
+    let sawUnreadable = false;
     let done = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        all.push({ ...(await judgeOne(model, packet, clock)), attempts: attempt });
+        const judged = { ...(await judgeOne(model, packet, clock)), attempts: attempt };
         done = true;
+        if (sawUnreadable && judged.verdict === 'MERGE AS IS' && !bad.has(packet.label))
+          lost.push({
+            label: packet.label,
+            reason: `unreadable by judge: MERGE AS IS came only after an unreadable reply, so it counts as a fail (${attempt} attempts)`,
+            attempts: attempt,
+          });
+        else all.push(judged);
         break;
       } catch (error) {
-        failures.push((error as Error).message ?? String(error));
+        sawUnreadable ||= error instanceof JudgeUnparseable;
+        failures.push(error instanceof Error ? error.message : String(error));
       }
     }
     if (done) continue;

@@ -65,6 +65,7 @@ export interface Row {
   readonly editLines?: number | null;
   readonly judgeMinutes?: number | null;
   readonly rootMinutes?: number | null;
+  readonly judgeAttempts?: number | null;
   readonly inferredWindows?: number | null;
   readonly note: string;
 }

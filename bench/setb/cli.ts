@@ -1,11 +1,11 @@
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { ghReadPull } from '../merge-state.ts';
 import { TaskRefused } from '../model.ts';
 import { fetchPacket, ghHub, ghPullFiles, type Hub } from './fetch.ts';
-import { claudeModel, type Judged, recordVoid, refuseAfterVoids, runJudge } from './judge.ts';
+import { claudeModel, type Judged, recordVoid, refuseAfterVoids, runJudge, voidsLogPath } from './judge.ts';
 import { assignLabels, type Entry, type Sealed, sealedEntry } from './labels.ts';
 import { ciFrom, gradeSetB, readWindow } from './outcome.ts';
 import { buildPacket, isUnreadable, type Packet, type Unreadable } from './packet.ts';
@@ -131,7 +131,9 @@ const main = async (argv: string[]): Promise<number> => {
       throw new TaskRefused('not run, needs operator login confirmation');
     const list = loadFrozen(values.dir);
     const key = read<Sealed[]>(need('key'));
-    const voids = `${need('out')}.voids.log`;
+    const out = need('out');
+    if (existsSync(out)) throw new TaskRefused(`${out} already exists, judge writes a new file for each run`);
+    const voids = voidsLogPath(values.dir, shaOf(readFileSync(join(values.dir, TASKS_FILE))));
     refuseAfterVoids(voids);
     const { packets, unreadable } = await realPackets(ghHub, list, key);
     const seeded = seededPackets(read<Seed[]>(values.seeded), key, list);
@@ -142,7 +144,7 @@ const main = async (argv: string[]): Promise<number> => {
       Date,
       unreadable,
     );
-    writeFileSync(need('out'), `${JSON.stringify(run, null, 2)}\n`);
+    writeFileSync(out, `${JSON.stringify(run, null, 2)}\n`, { flag: 'wx' });
     if (run.voided !== null) recordVoid(voids, run.voided);
     console.log(
       run.voided === null ? `${run.judged.length} judged, ${run.unreadable.length} unreadable` : `VOID: ${run.voided}`,

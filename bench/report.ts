@@ -58,6 +58,7 @@ const columns: readonly Column[] = [
   { head: 'human min', pick: (r) => r.humanMinutes },
   { head: 'edit lines', pick: (r) => r.editLines ?? null, setB: true },
   { head: 'judge min', pick: (r) => r.judgeMinutes ?? null, setB: true },
+  { head: 'judge calls', pick: (r) => r.judgeAttempts ?? null, setB: true },
   { head: 'root min', pick: (r) => r.rootMinutes ?? null, setB: true },
 ];
 

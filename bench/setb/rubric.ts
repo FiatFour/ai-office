@@ -21,10 +21,18 @@ export interface Judgement {
 }
 
 const NAMES = VERDICTS.join('|');
-const OPEN = /^[\s#>*`_-]*/;
+const OPEN = /^[\s#>*`_]*/;
 const CLOSE = /[\s*`_.]*$/;
-/** A line that looks like a verdict line, wherever it sits: decoration, an optional "or", then VERDICT: and a name. */
-const LOOKS_LIKE_VERDICT = new RegExp(`^[\\s#>*\`_-]*(?:or\\s+)?VERDICT:[\\s*\`_]*(?:${NAMES})\\b`, 'i');
+const INVISIBLE = /[\u00ad\u200b-\u200f\u2028\u2029\u2060\ufeff]/g;
+/** The Thai word is normalised like the text it is matched against: NFKC splits sara am in two. */
+const WORD = `(?:verdict|${'คำตัดสิน'.normalize('NFKC')})`;
+const NAME_NEAR = new RegExp(`${WORD}[^\\n]{0,40}?\\b(?:${NAMES})\\b|\\b(?:${NAMES})\\b[^\\n]{0,40}?${WORD}`, 'i');
+const COLON_NEAR = new RegExp(`${WORD}\\W{0,3}[:：]|verdict\\s*:`, 'i');
+/** A line that states a verdict, wherever it sits: the word with a colon after it, or a verdict name near the word. */
+const looksLikeVerdict = (line: string): boolean => {
+  const text = line.normalize('NFKC').replace(INVISIBLE, '');
+  return COLON_NEAR.test(text) || NAME_NEAR.test(text);
+};
 const DIFF_BLOCK = /```diff[ \t]*\r?\n([\s\S]*?)```/g;
 const LINES = /\r?\n/;
 const isChange = (l: string): boolean => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l);
@@ -48,12 +56,16 @@ const trimmed = (piece: string): string =>
     .replace(CLOSE, '')
     .toUpperCase();
 
+/** True when the lines before the final one leave a code fence open, so the final line is quoted text, not the verdict. */
+const opensFence = (before: readonly string[]): boolean => before.filter((l) => /^\s*```/.test(l)).length % 2 === 1;
+
 /** Only the final non-empty line is the verdict. Several verdicts on that line are allowed, the strictest wins. */
 const finalVerdicts = (reply: string): Verdict[] => {
   const lines = reply.split(LINES).filter((l) => l.trim() !== '');
   const last = lines.pop();
   if (last === undefined) throw new JudgeUnparseable('the reply is empty');
-  if (lines.some((l) => LOOKS_LIKE_VERDICT.test(l)))
+  if (opensFence(lines)) throw new JudgeUnparseable('the final line of the reply sits inside an open code fence');
+  if (lines.some(looksLikeVerdict))
     throw new JudgeUnparseable('the reply has a VERDICT-looking line before its final line');
   const [lead = '', ...pieces] = last.split(/VERDICT:/i);
   const names = pieces.map(trimmed);

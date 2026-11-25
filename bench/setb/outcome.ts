@@ -133,10 +133,12 @@ export const gradeSetB = (g: Grading): Row => {
     editLines: 'reason' in g.judged || g.judged.verdict !== 'MERGE AFTER EDITS' ? 0 : g.judged.editLines,
     judgeMinutes: 'reason' in g.judged ? null : g.judged.judgeMinutes,
     rootMinutes: g.rootMinutes,
+    judgeAttempts: g.judged.attempts ?? null,
     inferredWindows: inferWindows(g.tokens, g.calibration),
-    note:
+    note: `${
       failed.length === 0
         ? `PR #${g.entry.pr}: CI green, MERGE AS IS at ${g.entry.readyHeadSha.slice(0, 7)}`
-        : `PR #${g.entry.pr}: ${failed.join('; ')}`,
+        : `PR #${g.entry.pr}: ${failed.join('; ')}`
+    }${g.judged.attempts === undefined ? '' : ` (judge calls: ${g.judged.attempts})`}`,
   };
 };

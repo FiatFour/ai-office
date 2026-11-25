@@ -111,7 +111,7 @@ const MUTANTS = [
   {
     name: 'rubric-stray-verdict-line',
     claim: 'a verdict-looking line before the final line, such as an echoed template, makes the reply unreadable',
-    edits: [[R, 'if (lines.some((l) => LOOKS_LIKE_VERDICT.test(l)))', 'if (false)']],
+    edits: [[R, 'if (lines.some(looksLikeVerdict))', 'if (false)']],
     tests: [SETB],
   },
   {
@@ -182,8 +182,94 @@ const MUTANTS = [
   },
   {
     name: 'frozen-base-absent-silent',
-    claim: 'a clone without the frozen commit fails loudly unless it says it is shallow',
-    edits: [[T, "if (!has && env.AW_SHALLOW_CLONE !== '1')", 'if (false)']],
+    claim: 'a clone without the frozen commit fetches it, and a failed fetch is an error',
+    edits: [
+      [
+        T,
+        'if (ran.status !== 0)\n      throw new Error(`the frozen commit',
+        'if (false)\n      throw new Error(`the frozen commit',
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-void-cap-unchecked',
+    claim: 'the judge command refuses to run once the voids log holds three lines',
+    edits: [['bench/setb/cli.ts', '    refuseAfterVoids(voids);\n', '']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-void-not-recorded',
+    claim: 'a voided judge run is logged',
+    edits: [['bench/setb/cli.ts', 'if (run.voided !== null) recordVoid(voids, run.voided);', '']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-voids-log-follows-out',
+    claim: 'the voids log is fixed by the frozen run, so renaming --out does not reset the count',
+    edits: [
+      [
+        'bench/setb/cli.ts',
+        'voidsLogPath(values.dir, shaOf(readFileSync(join(values.dir, TASKS_FILE))))',
+        ['`$', '{out}.voids.log`'].join(''),
+      ],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-out-overwritten',
+    claim: 'judge refuses an --out that already exists',
+    edits: [['bench/setb/cli.ts', 'if (existsSync(out)) throw', 'if (false) throw']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-retry-bias',
+    claim: 'MERGE AS IS reached only after an unreadable reply is a fail',
+    edits: [['bench/setb/judge.ts', 'if (sawUnreadable && judged.verdict', 'if (false && judged.verdict']],
+    tests: [SETB],
+  },
+  {
+    name: 'judge-attempts-not-in-note',
+    claim: 'the graded row note records the judge calls',
+    edits: [['bench/setb/outcome.ts', 'g.judged.attempts === undefined', 'true']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-stray-colon-only',
+    claim: 'an earlier line that names a verdict next to the word verdict makes the reply unreadable',
+    edits: [['bench/setb/rubric.ts', 'COLON_NEAR.test(text) || NAME_NEAR.test(text)', 'COLON_NEAR.test(text)']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-invisible-kept',
+    claim: 'zero-width characters inside the word verdict do not hide a stray verdict',
+    edits: [['bench/setb/rubric.ts', ".replace(INVISIBLE, '')", '']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-open-fence-final',
+    claim: 'a final line inside an open code fence is unreadable',
+    edits: [['bench/setb/rubric.ts', 'if (opensFence(lines)) throw', 'if (false) throw']],
+    tests: [SETB],
+  },
+  {
+    name: 'rubric-dash-opens-final',
+    claim: 'a diff-removed line is not a verdict line',
+    edits: [['bench/setb/rubric.ts', 'const OPEN = /^[\\s#>*`_]*/;', 'const OPEN = /^[\\s#>*`_-]*/;']],
+    tests: [SETB],
+  },
+  {
+    name: 'fetch-error-not-message',
+    claim: 'a non-Error throw is still recorded with its text',
+    edits: [
+      ['bench/setb/judge.ts', 'error instanceof Error ? error.message : String(error)', '(error as Error).message'],
+    ],
+    tests: [SETB],
+  },
+  {
+    name: 'frozen-base-fetch-unchecked',
+    claim: 'a clone without the frozen commit fetches it at depth 1',
+    edits: [['bench/setb/task.ts', "'--depth=1', origin", 'origin']],
     tests: [SETB],
   },
   {
@@ -460,7 +546,7 @@ const MUTANTS = [
   {
     name: 'rubric-bold-verdict',
     claim: 'a bold verdict line is read',
-    edits: [[R, 'const OPEN = /^[\\s#>*`_-]*/;', 'const OPEN = /^[\\s#>`_-]*/;']],
+    edits: [[R, 'const OPEN = /^[\\s#>*`_]*/;', 'const OPEN = /^[\\s#>`_]*/;']],
     tests: [SETB],
   },
   {

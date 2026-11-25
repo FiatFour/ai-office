@@ -70,10 +70,13 @@ describe('Set B report', () => {
   });
 
   it('adds the edit, judge, root and inferred columns to the per-task table', () => {
-    const md = renderReport([row({ editLines: 4, judgeMinutes: 2, rootMinutes: 3, inferredWindows: 0.25 })], 'd');
-    for (const head of ['edit lines', 'judge min', 'root min', 'windows (inferred)'])
+    const md = renderReport(
+      [row({ editLines: 4, judgeMinutes: 2, judgeAttempts: 2, rootMinutes: 3, inferredWindows: 0.25 })],
+      'd',
+    );
+    for (const head of ['edit lines', 'judge min', 'judge calls', 'root min', 'windows (inferred)'])
       expect(md).toContain(`factory ${head}`);
-    expect(md).toMatch(/\| b1 \| B \| pass \|.* 4 \| 2 \| 3 \|/);
+    expect(md).toMatch(/\| b1 \| B \| pass \|.* 4 \| 2 \| 2 \| 3 \|/);
   });
 });
 

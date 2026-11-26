@@ -1054,7 +1054,7 @@ describe('the drive loop stops', () => {
     { task: first, arm: 'factory' as const },
     { task: second, arm: 'factory' as const },
   ];
-  const drive = async (statuses: RunRecord['status'][], prior = 0) => {
+  const drive = async (statuses: RunRecord['status'][], prior = 0, priorStatus: RunRecord['status'] = 'transient') => {
     const dir = tempDir('setb-drive');
     const runsFile = join(dir, 'runs.jsonl');
     const stopFile = join(dir, 'STOP');
@@ -1074,7 +1074,7 @@ describe('the drive loop stops', () => {
       resetAt: null,
       baseSha: 'c'.repeat(40),
     });
-    for (let i = 0; i < prior; i += 1) appendRun(runsFile, record(first, 'transient'));
+    for (let i = 0; i < prior; i += 1) appendRun(runsFile, record(first, priorStatus));
     const ran: string[] = [];
     const slept: number[] = [];
     const code = await driveArms(items, {
@@ -1114,6 +1114,10 @@ describe('the drive loop stops', () => {
 
   it('writes the STOP file and exits 5 on a login failure', async () => {
     expect(await drive(['auth'])).toMatchObject({ code: 5, ran: [first.id], stop: true });
+  });
+
+  it('does not run an arm again after an aborted record unless that was allowed', async () => {
+    expect(await drive([], 1, 'aborted')).toMatchObject({ code: 75, ran: [], records: 1 });
   });
 });
 
@@ -1361,6 +1365,16 @@ exit 0`,
       expect(existsSync(join(cache, 'setb.lock'))).toBe(false);
     }, 40_000);
 
+    it('grade-all writes no rows while an arm has no done or failed record', () => {
+      const { out, cli } = stage();
+      writeFileSync(join(out, 'key.json'), '[]');
+      writeFileSync(join(out, 'judged.json'), JSON.stringify({ judged: [], unreadable: [], voided: null }));
+      const ran = cli('grade-all', out, ['--key', join(out, 'key.json'), '--judged', join(out, 'judged.json')]);
+      expect(ran.stderr).toMatch(/no done or failed record/);
+      expect(ran.status).toBe(3);
+      expect(existsSync(join(out, 'rows.jsonl'))).toBe(false);
+    });
+
     it.each(['drive', 'close', 'reconcile'])('%s reports a torn journal line and goes on to the host', (command) => {
       const { out, touched, cli, lock } = stage();
       const runs = join(out, 'runs.jsonl');
@@ -1371,5 +1385,32 @@ exit 0`,
       expect(existsSync(lock), 'the lock is released after a failure').toBe(false);
       expect(existsSync(`${runs}.torn`), 'only drive writes the journal').toBe(command === 'drive');
     });
+  });
+});
+
+describe('a provider stop inside a reply claude marks successful', () => {
+  const reviewerJob = {
+    ...authorJob,
+    role: 'reviewer' as const,
+    worker: 'vega',
+    change: { number: 1, headSha: 'a'.repeat(40) } as never,
+    files: [],
+  };
+  const reviewStatus = async (out: string) => {
+    try {
+      await claudeCode({ shell: () => withStderr(claudeShell('', out, 0)) }).run(reviewerJob as never);
+    } catch (error) {
+      return statusOf((error as Error).message);
+    }
+    throw new Error('the review did not fail');
+  };
+  const said = (text: string, model: string) =>
+    `${JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { model, content: [{ type: 'text', text }] } })}\n${resultOf(text, 'success', false)}`;
+
+  it.each(STOPS)('%s', async (text, expected) => {
+    for (const out of [resultOf(text, 'success', false), said(text, 'claude-sonnet'), said(text, '<synthetic>')]) {
+      expect(await status('', out, 0), `author: ${out}`).toBe(expected);
+      expect(await reviewStatus(out), `reviewer: ${out}`).toBe(expected);
+    }
   });
 });

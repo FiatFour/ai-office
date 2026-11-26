@@ -109,6 +109,12 @@ describe.skipIf(!hasSqlite)('ledger and store', () => {
       expect(countEvents(dir)).toBe(4);
     });
 
+    it('refuses a file that is not a database', () => {
+      const dir = seeded('corrupt-garbage');
+      writeFileSync(join(dir, 'hq.db'), 'this is not a sqlite database, '.repeat(200));
+      expect(() => Store.open(dir)).toThrow(StoreCorruptError);
+    });
+
     it('refuses a changed event body that kept its length', () => {
       const dir = seeded('corrupt-sql');
       rawSql(dir, "UPDATE events SET body = replace(body, 'reviewer', 'attacker') WHERE seq = 2");

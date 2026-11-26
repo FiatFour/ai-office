@@ -72,6 +72,14 @@ const outsideCode = (line: string): string => {
 
 const startsWithSlash = (line: string): boolean => LEAD.test(line.normalize('NFKC').replace(CONTROL, ''));
 
+const decodeEntities = (text: string): string =>
+  text
+    .replace(/&#(?:x([0-9a-f]{1,6})|(\d{1,7}));?/gi, (whole, hex?: string, dec?: string) => {
+      const code = hex === undefined ? Number(dec) : Number.parseInt(hex, 16);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    })
+    .replace(/&commat;?/gi, '@');
+
 export const bodyProblem = (text: string): string | null => {
   if (text.length > MAX_BODY) return `is longer than ${MAX_BODY} characters`;
   let fence: string | null = null;
@@ -91,7 +99,7 @@ export const bodyProblem = (text: string): string | null => {
     }
     if (MARKER_LINE.test(line)) continue;
     const prose = outsideCode(line);
-    if (/@[\p{L}\p{N}_]/u.test(prose))
+    if (/@[\p{L}\p{N}_]/u.test(decodeEntities(prose)))
       return `mentions someone outside a code span: ${JSON.stringify(line.slice(0, 80))}`;
     if (prose.includes('<')) return `holds raw HTML outside a code span: ${JSON.stringify(line.slice(0, 80))}`;
     if (/\]\s*[([:]/.test(prose))

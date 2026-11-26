@@ -87,6 +87,12 @@ const isBusy = (error: unknown): boolean => {
   return errcode === 5 || errcode === 6 || /database is locked|busy/i.test(message ?? '');
 };
 
+// SQLITE_NOTADB (26) and SQLITE_CORRUPT (11)
+const isNotDatabase = (error: unknown): boolean => {
+  const { errcode, message } = error as { errcode?: number; message?: string };
+  return errcode === 26 || errcode === 11 || /not a database|malformed/i.test(message ?? '');
+};
+
 const CLAIM_WINDOW_MS = 100;
 
 const sleepSync = (ms: number): void => {
@@ -135,6 +141,7 @@ export class Store {
         try {
           db.close();
         } catch {}
+        if (isNotDatabase(error)) throw new StoreCorruptError('hq.db is not a database, it was overwritten or damaged');
         if (!isBusy(error)) throw error;
         if (Date.now() >= deadline) throw new StoreLockedError(this.owner());
         sleepSync(2 + Math.random() * 10);

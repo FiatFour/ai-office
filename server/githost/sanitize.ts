@@ -9,6 +9,7 @@ export const BRANCH = new RegExp(`^aw/${SEGMENT}/${SEGMENT}$`);
 const CONTROL = /(?![\n\t])[\p{Cc}\p{Cf}]/gu;
 const SLASHES = '/\u2044\u2215\u2571\u27cb\u29f8\u3033';
 const LEAD = new RegExp(`^(?:[\\s>*+\\-|#.)]|\\d+[.)]|\\[[ xX]?\\])*[${SLASHES}]`, 'u');
+const ENCODED_AT = /&(?:#0*64(?![0-9])|#[xX]0*40(?![0-9A-Fa-f])|commat(?![A-Za-z0-9]))/;
 const MARKER_LINE = /^<!-- agent-works:[a-z-]+(?: [a-z]+=[\w./-]+)* -->$/;
 const FENCE_OPEN = /^( {0,3})(`{3,}(?=[^`]*$)|~{3,})/;
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
@@ -93,6 +94,8 @@ export const bodyProblem = (text: string): string | null => {
     const prose = outsideCode(line);
     if (/@[\p{L}\p{N}_]/u.test(prose))
       return `mentions someone outside a code span: ${JSON.stringify(line.slice(0, 80))}`;
+    if (ENCODED_AT.test(prose))
+      return `mentions someone with an entity-encoded @ outside a code span: ${JSON.stringify(line.slice(0, 80))}`;
     if (prose.includes('<')) return `holds raw HTML outside a code span: ${JSON.stringify(line.slice(0, 80))}`;
     if (/\]\s*[([:]/.test(prose))
       return `holds a markdown link outside a code span: ${JSON.stringify(line.slice(0, 80))}`;

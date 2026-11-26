@@ -51,6 +51,7 @@ interface Column {
 const columns: readonly Column[] = [
   { head: 'rounds', pick: (r) => r.reviewRounds },
   { head: 'wall s', pick: (r) => r.wallMs, scale: 1000 },
+  { head: 'CI wait s', pick: (r) => r.ciWaitMs ?? null, scale: 1000, setB: true },
   { head: 'agent s', pick: (r) => r.agentMs, scale: 1000 },
   { head: 'tokens', pick: (r) => (r.tokens === null ? null : totalTokens(r.tokens)) },
   { head: 'windows', pick: (r) => r.quotaWindows },
@@ -198,14 +199,31 @@ const totalLine = (arm: ArmName, rows: readonly Row[]): string => {
   const windows = sum(mine, (r) => r.quotaWindows);
   const minutes = sum(mine, (r) => r.humanMinutes);
   const n = (v: number | null) => (v === null ? 'n/a' : fmt(v));
-  return `| ${arm} | ${mine.length} | ${pass} | ${fmt(wall)} | ${n(tokens)} | ${n(windows)} | ${n(minutes)} |`;
+  const waited = sum(mine, (r) => r.ciWaitMs ?? null);
+  const ci = hasSetB(rows) ? [n(waited === null ? null : waited / 1000)] : [];
+  return `| ${[arm, mine.length, pass, fmt(wall), ...ci, n(tokens), n(windows), n(minutes)].join(' | ')} |`;
 };
 
-const totals = (rows: readonly Row[]): string[] => [
-  '| arm | runs | pass | wall s | tokens | windows | human min |',
-  '| --- | --- | --- | --- | --- | --- | --- |',
-  ...ARMS.map((arm) => totalLine(arm, rows)),
-];
+const totals = (rows: readonly Row[]): string[] => {
+  const head = [
+    'arm',
+    'runs',
+    'pass',
+    'wall s',
+    ...(hasSetB(rows) ? ['CI wait s'] : []),
+    'tokens',
+    'windows',
+    'human min',
+  ];
+  return [
+    `| ${head.join(' | ')} |`,
+    `| ${head.map(() => '---').join(' | ')} |`,
+    ...ARMS.map((arm) => totalLine(arm, rows)),
+  ];
+};
+
+const WALL_NOTE =
+  "`wall s` is not agent time, and the two arms cannot be compared on it: the factory waits for GitHub CI inside it, while the baseline ends when its PR is opened and waits for none. `CI wait s` is the part of `wall s` during which a check run of the arm's PR was running, from the check-run timestamps on GitHub. Where it reads `n/a`, `wall s` may still hold a CI wait of unknown length.";
 
 const perTask = (rows: readonly Row[]): string[] => {
   const ids = [...new Set(rows.map((r) => r.task))].sort();
@@ -252,6 +270,7 @@ export const renderReport = (rows: readonly Row[], date: string): string => {
     '',
     ...totals(measured),
     '',
+    ...(hasSetB(measured) ? [WALL_NOTE, ''] : []),
     '## Per task, live rows',
     '',
     ...perTask(measured),

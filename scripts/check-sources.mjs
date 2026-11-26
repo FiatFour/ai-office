@@ -125,6 +125,7 @@ function checkMarkdown(text, file) {
       }
       /** @type {Cells} */
       const cells = Object.fromEntries(kind.columns.map((column, n) => [column, values[n] ?? '']));
+      if (values.every(isLink)) errors.push(`${where}: every cell is a link`);
       if (ids.has(cells.Id)) errors.push(`${where}: duplicate id`);
       ids.add(cells.Id);
       for (const [column, check] of Object.entries(kind.cells)) {

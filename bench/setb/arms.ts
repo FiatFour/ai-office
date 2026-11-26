@@ -272,31 +272,51 @@ export const stopLine = (text: string): string => {
   return (line ?? text.trim()).slice(0, 200);
 };
 
-interface ResultLine {
+interface StreamLine {
   readonly type?: string;
   readonly subtype?: string;
   readonly is_error?: boolean;
   readonly result?: string;
+  readonly parent_tool_use_id?: string | null;
+  readonly error?: unknown;
+  readonly isApiErrorMessage?: boolean;
+  readonly message?: { readonly model?: string };
 }
 
-const resultLine = (out: string): ResultLine | undefined =>
-  out
-    .split('\n')
-    .flatMap((line) => {
-      try {
-        const parsed = JSON.parse(line) as ResultLine | null;
-        return parsed?.type === 'result' ? [parsed] : [];
-      } catch {
-        return [];
-      }
-    })
-    .at(-1);
+const streamLines = (out: string): StreamLine[] =>
+  out.split('\n').flatMap((line) => {
+    try {
+      const parsed = JSON.parse(line) as StreamLine | null;
+      return parsed === null ? [] : [parsed];
+    } catch {
+      return [];
+    }
+  });
+
+/**
+ * Whether a model wrote the last message of the main session. Claude Code writes its own notices (a provider error, a
+ * limit) as assistant messages of the model `<synthetic>`, with an `error` field, and may still mark the result successful.
+ */
+const modelReplied = (lines: readonly StreamLine[]): boolean => {
+  const last = lines.findLast((l) => l.type === 'assistant' && (l.parent_tool_use_id ?? null) === null);
+  return (
+    last !== undefined &&
+    (last.error ?? null) === null &&
+    last.isApiErrorMessage !== true &&
+    last.message?.model !== '<synthetic>'
+  );
+};
+
+/** A whole reply of one line that opens like a provider notice, for a stream that does not mark it as one. */
+const NOTICE =
+  /^(?:(?:API )?Error: |API Error\b|overloaded_error\b|rate_limit_error\b|\{"type":"error"|Failed to authenticate\b|Not logged in ·|Login (?:expired|reached its time limit) ·|Authentication required ·|Invalid API key ·|You(?:['’]ve (?:hit|reached) your\b.*\blimit\b|['’]re out of usage\b)|Your org is out of usage\b|Credit balance is too low|(?:Claude AI usage|5-hour) limit reached\b|Repeated 529\b|Opus is experiencing high load|Server is temporarily limiting|The API is temporarily unavailable)[^\n]*$/;
 
 type Ran = Awaited<ReturnType<CageShell['exec']>>;
 
 /** The failure text to put in a synthetic result line, or null to leave the stream as claude printed it. */
 const unsaid = (ran: Ran): string | null => {
-  const result = resultLine(ran.out);
+  const lines = streamLines(ran.out);
+  const result = lines.findLast((l) => l.type === 'result');
   if (result === undefined) {
     const printed = ran.out.split('\n').filter((l) => !l.startsWith('{'));
     const text = [ran.err, ...printed].join('\n').trim();
@@ -307,7 +327,9 @@ const unsaid = (ran: Ran): string | null => {
   const said = (result.result ?? '').trim();
   const line = ran.err.trim() === '' ? null : stopLine(ran.err);
   if (result.is_error !== true && result.subtype === 'success') {
-    if (ran.code === 0 && said !== '') return null;
+    const notice = said !== '' && (NOTICE.test(said) || !modelReplied(lines));
+    if (ran.code === 0 && said !== '' && !notice) return null;
+    if (notice && stopOf(line ?? '') !== 'auth') return `${stopLine(said)} [claude marked this reply successful]`;
     const why = said === '' ? 'claude gave an empty reply' : 'claude reported success';
     return line ?? `${why} with exit ${ran.code}`;
   }

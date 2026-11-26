@@ -56,6 +56,8 @@ export interface Row {
   readonly outcome: Outcome;
   readonly reviewRounds: number | null;
   readonly wallMs: number;
+  /** Set B: the part of `wallMs` during which CI of the arm's PR was running. Null or absent when unknown. */
+  readonly ciWaitMs?: number | null;
   readonly agentMs: number;
   readonly prepareMs: number;
   readonly tokens: Tokens | null;

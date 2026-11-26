@@ -48,9 +48,21 @@ export interface Intent {
   readonly at: string;
 }
 
+/** Written by `drive --rerun-aborted`: someone read the aborted records and allows the arm to run again. */
+export interface Rerun {
+  readonly kind: 'rerun';
+  readonly task: string;
+  readonly arm: Arm;
+  /** How many aborted records the arm had when this was written. One more aborted record needs a new line. */
+  readonly aborted: number;
+  readonly reason: string;
+  readonly at: string;
+}
+
 export interface Journal {
   readonly header: Header | null;
   readonly intents: readonly Intent[];
+  readonly reruns: readonly Rerun[];
   readonly runs: readonly RunRecord[];
   /** The text after the last newline when it is not a whole JSON line: an append that a crash cut short. */
   readonly torn: string | null;
@@ -112,6 +124,7 @@ export const readJournal = (file: string): Journal => {
   return {
     header: (lines.find((l) => l.kind === 'header') as Header | undefined) ?? null,
     intents: lines.filter((l) => l.kind === 'intent') as unknown as Intent[],
+    reruns: lines.filter((l) => l.kind === 'rerun') as unknown as Rerun[],
     runs: lines.filter((l) => l.kind === undefined || l.kind === 'run') as unknown as RunRecord[],
     torn,
   };
@@ -183,10 +196,41 @@ export const claimIntent = (
   return { intent, resumed: false };
 };
 
-/** `done` and `failed` are final: a failed arm is not retried. The other statuses say nothing about the arm and run again. */
+/**
+ * `done` and `failed` are final: a failed arm is not retried. The other statuses say nothing about the arm and run again,
+ * an aborted one only after `allowRerun`.
+ */
 export const isFinal = (r: RunRecord): boolean => r.status === 'done' || r.status === 'failed';
 
 export const TRANSIENT_CAP = 3;
 
 export const transientCount = (runs: readonly RunRecord[], task: string, arm: Arm): number =>
   runs.filter((r) => r.task === task && r.arm === arm && r.status === 'transient').length;
+
+const abortedCount = (runs: readonly RunRecord[], task: string, arm: string): number =>
+  runs.filter((r) => r.task === task && r.arm === arm && r.status === 'aborted').length;
+
+const allowed = (reruns: readonly Rerun[], task: string, arm: string, aborted: number): boolean =>
+  reruns.some((r) => r.task === task && r.arm === arm && r.aborted === aborted);
+
+/** The flag that would let a held arm run again, or null when the arm is not held. */
+export const heldBy = (journal: Journal, task: string, arm: Arm): string | null => {
+  const n = abortedCount(journal.runs, task, arm);
+  return n === 0 || allowed(journal.reruns, task, arm, n) ? null : `--rerun-aborted ${task}:${arm}:${n}`;
+};
+
+/**
+ * Journals one rerun from `<task>:<arm>:<aborted records>`. The count must be the one on record, so a command that is run
+ * twice never allows the abort that came after it. Repeating an allowance already on record writes nothing.
+ */
+export const allowRerun = (file: string, spec: string, reason: string, now: () => Date = () => new Date()): void => {
+  const [task = '', arm = '', count = ''] = spec.split(':');
+  const { runs, reruns } = readJournal(file);
+  const n = abortedCount(runs, task, arm);
+  if (n === 0 || count !== String(n))
+    throw new TaskRefused(`--rerun-aborted ${spec}: ${file} holds ${n} aborted record(s) for ${task} ${arm}`);
+  if (reason.trim() === '') throw new TaskRefused('--reason must say why the arm may run again');
+  if (allowed(reruns, task, arm, n)) return;
+  const line: Rerun = { kind: 'rerun', task, arm: arm as Arm, aborted: n, reason, at: now().toISOString() };
+  appendLine(file, line);
+};

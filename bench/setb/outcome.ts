@@ -32,24 +32,74 @@ export const ciFrom = (asked: string, runs: readonly CheckRun[]): Ci => {
   return { sha, state: 'green', note: `${checks} checks passed or were skipped`, checks };
 };
 
-export const ghReadCi = async (repo: string, sha: string): Promise<Ci> => {
-  const ran = await runBinary('gh', ['api', '-X', 'GET', `repos/${repo}/commits/${sha}/check-runs?per_page=100`], {
-    timeoutMs: 60_000,
-  });
-  if (ran.code !== 0) throw new TaskRefused(`gh could not read the checks of ${sha}: ${ran.err.trim().slice(-200)}`);
-  return ciOfBody(sha, JSON.parse(ran.out) as CheckRunsBody);
+export type Get = (path: string) => Promise<unknown>;
+
+export const ghGet: Get = async (path) => {
+  const ran = await runBinary('gh', ['api', '--hostname', 'github.com', '-X', 'GET', path], { timeoutMs: 60_000 });
+  if (ran.code !== 0) throw new TaskRefused(`gh could not read ${path}: ${ran.err.trim().slice(-200)}`);
+  return JSON.parse(ran.out);
 };
 
-export interface CheckRunsBody {
-  readonly total_count: number;
-  readonly check_runs: readonly CheckRun[];
+export const ghReadCi = async (repo: string, sha: string): Promise<Ci> =>
+  ciOfBody(sha, (await ghGet(`repos/${repo}/commits/${sha}/check-runs?per_page=100`)) as CheckRunsBody);
+
+export interface CheckSpan {
+  readonly started_at?: string | null;
+  readonly completed_at?: string | null;
 }
 
-export const ciOfBody = (sha: string, body: CheckRunsBody): Ci => {
+/** The time between `from` and `to` during which at least one of the check runs was running. */
+export const ciRunningMs = (runs: readonly CheckSpan[], from: number, to: number): number => {
+  const spans = runs
+    .flatMap((r) => {
+      if (!r.started_at) return [];
+      const start = Date.parse(r.started_at);
+      const end = Math.min(to, r.completed_at ? Date.parse(r.completed_at) : to);
+      return end > start ? [{ start, end }] : [];
+    })
+    .sort((a, b) => a.start - b.start);
+  let total = 0;
+  let reached = from;
+  for (const { start, end } of spans) {
+    total += Math.max(0, end - Math.max(start, reached));
+    reached = Math.max(reached, end);
+  }
+  return total;
+};
+
+/**
+ * How much of an arm's wall time CI of its PR was running, over every commit of the PR. Null when no commit has a check
+ * run, since the wait is then unknown rather than zero.
+ */
+export const readCiWait = async (
+  get: Get,
+  repo: string,
+  pr: number,
+  from: number,
+  to: number,
+): Promise<number | null> => {
+  const commits = (await get(`repos/${repo}/pulls/${pr}/commits?per_page=${PAGE}`)) as ReadonlyArray<{ sha: string }>;
+  if (commits.length >= PAGE) throw new TaskRefused(`PR #${pr} has ${PAGE} commits or more, too many to time`);
+  const runs: CheckSpan[] = [];
+  for (const { sha } of commits) {
+    const body = await get(`repos/${repo}/commits/${sha}/check-runs?filter=all&per_page=${PAGE}`);
+    runs.push(...allRead(sha, body as CheckRunsBody<CheckSpan>));
+  }
+  return runs.length === 0 ? null : ciRunningMs(runs, from, to);
+};
+
+export interface CheckRunsBody<T = CheckRun> {
+  readonly total_count: number;
+  readonly check_runs: readonly T[];
+}
+
+const allRead = <T>(sha: string, body: CheckRunsBody<T>): readonly T[] => {
   if (body.total_count > body.check_runs.length)
     throw new TaskRefused(`${sha} has ${body.total_count} check runs, only ${body.check_runs.length} were read`);
-  return ciFrom(sha, body.check_runs);
+  return body.check_runs;
 };
+
+export const ciOfBody = (sha: string, body: CheckRunsBody): Ci => ciFrom(sha, allRead(sha, body));
 
 export interface PullFile {
   readonly filename: string;
@@ -92,6 +142,7 @@ export interface Grading {
   readonly ci: Ci;
   readonly paths: readonly string[];
   readonly wallMs: number;
+  readonly ciWaitMs?: number | null;
   readonly tokens: Tokens | null;
   readonly operatorMinutes: number | null;
   readonly rootMinutes: number | null;
@@ -125,6 +176,7 @@ export const gradeSetB = (g: Grading): Row => {
     outcome: failed.length === 0 ? 'pass' : 'fail',
     reviewRounds: null,
     wallMs: g.wallMs,
+    ciWaitMs: g.ciWaitMs ?? null,
     agentMs: 0,
     prepareMs: 0,
     tokens: g.tokens,

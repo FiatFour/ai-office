@@ -80,6 +80,29 @@ describe('Set B report', () => {
   });
 });
 
+describe('wall time in a Set B report', () => {
+  const rows = [
+    row({ wallMs: 1_907_000, ciWaitMs: 1_800_000 }),
+    row({ arm: 'baseline', wallMs: 50_000, ciWaitMs: null }),
+  ];
+
+  it('shows the CI wait next to wall time and says the arms cannot be compared on it', () => {
+    const md = renderReport(rows, 'd');
+    expect(md).toContain('`wall s` is not agent time, and the two arms cannot be compared on it');
+    expect(md).toContain('| arm | runs | pass | wall s | CI wait s | tokens |');
+    expect(md).toContain('| factory | 1 | 1 | 1907 | 1800 |');
+    expect(md).toContain('| baseline | 1 | 1 | 50 | n/a |');
+    expect(md).toContain('factory wall s | factory CI wait s |');
+    expect(md).toMatch(/\| b1 \| B \| pass \| n\/a \| 1907 \| 1800 \|/);
+  });
+
+  it('says none of it about Set A rows', () => {
+    const md = renderReport([row({ set: 'A', task: 'a1' })], 'd');
+    expect(md).not.toContain('CI wait');
+    expect(md).not.toContain('not agent time');
+  });
+});
+
 describe('Set A output', () => {
   const HERE = dirname(fileURLToPath(import.meta.url));
   const ROWS = join(HERE, 'fixtures', 'both.jsonl');

@@ -37,8 +37,10 @@ import {
   withStderr,
 } from '../arms.ts';
 import {
+  allowRerun,
   appendLine,
   claimIntent,
+  heldBy,
   newSalt,
   pinBase,
   readJournal,
@@ -47,6 +49,7 @@ import {
   transientCount,
 } from '../journal.ts';
 import { acquireLock } from '../lock.ts';
+import { ciRunningMs, readCiWait, readWindow } from '../outcome.ts';
 import type { Ci } from '../packet.ts';
 import {
   ArmTimeout,
@@ -56,6 +59,7 @@ import {
   driveArms,
   entriesOf,
   finish,
+  gradeAll,
   isFinal,
   PINNED_BASE,
   type RunRecord,
@@ -318,6 +322,9 @@ const thrownBy = async (shell: CageShell): Promise<string> => {
 const message = (err: string, out = '', code = 1) => thrownBy(claudeShell(err, out, code));
 const resultOf = (result: string, subtype = 'success', is_error = true): string =>
   `${JSON.stringify({ type: 'result', subtype, is_error, result })}\n`;
+/** A session a model really ended: its last message, then the success line. */
+const worked = (text: string, model = 'claude-sonnet'): string =>
+  `${JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { model, content: [{ type: 'text', text }] } })}\n${resultOf(text, 'success', false)}`;
 const statusOf = (m: string) => classify(m, new Date('2026-11-25T00:00:00Z')).status;
 const status = async (err: string, out = '', code = 1) => statusOf(await message(err, out, code));
 
@@ -368,7 +375,7 @@ describe('a session that ends abnormally is never final', () => {
     ['text that is not json', '', 'Error: something\n', 1],
     ['a crash on stderr', 'Segmentation fault\n', '', 139],
     ['an error result nobody has seen', '', resultOf('A message from next year'), 1],
-    ['a success line with a nonzero exit', '', resultOf('done', 'success', false), 1],
+    ['a success line with a nonzero exit', '', worked('done'), 1],
     ['a success line with an empty reply', '', resultOf('', 'success', false), 0],
     ['max turns on stderr only', "You've hit your max turns\n", '', 1],
     ['a long prompt on stderr only', 'Prompt is too long\n', '', 1],
@@ -436,7 +443,7 @@ describe('a session that ends abnormally is never final', () => {
       async exec(argv) {
         if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
         if (argv.includes('diff')) return { code: 137, out: '', err: 'container is not running', timedOut: false };
-        return { code: 0, out: resultOf('done', 'success', false), err: '', timedOut: false };
+        return { code: 0, out: worked('done'), err: '', timedOut: false };
       },
     };
     const m = await thrownBy(shell);
@@ -456,7 +463,7 @@ describe('what is a result of the task, and final', () => {
     ],
     ['a long prompt', '', resultOf('Prompt is too long'), 1],
     ['max turns beside a stderr warning', 'a warning\n', resultOf("You've hit your max turns"), 1],
-    ['no committed change', '', resultOf('I could not do it', 'success', false), 0],
+    ['no committed change', '', worked('I could not do it'), 0],
   ])('%s', async (_name, err, out, code) => {
     expect(await status(err, out, code)).toBe('failed');
   });
@@ -493,7 +500,7 @@ describe('what is a result of the task, and final', () => {
       async exec(argv) {
         if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
         if (argv.includes('--numstat')) return { code: 0, out: '-\t-\ta.png\0', err: '', timedOut: false };
-        return { code: 0, out: resultOf('done', 'success', false), err: '', timedOut: false };
+        return { code: 0, out: worked('done'), err: '', timedOut: false };
       },
     };
     expect(statusOf(await thrownBy(binary))).toBe('failed');
@@ -548,12 +555,12 @@ describe('claude stderr and reset times', () => {
   });
 
   it('does not override a successful result with what stderr says', async () => {
-    const ran = await withStderr(claudeShell('Not logged in\n', resultOf('done', 'success', false), 0)).exec([
+    const ran = await withStderr(claudeShell('Not logged in\n', worked('done'), 0)).exec([
       'claude',
       '--output-format',
       'stream-json',
     ]);
-    expect(ran.out).toBe(resultOf('done', 'success', false));
+    expect(ran.out).toBe(worked('done'));
   });
 
   it('reads no reset time, and does not throw, when the parentheses name no time zone', () => {
@@ -1054,7 +1061,7 @@ describe('the drive loop stops', () => {
     { task: first, arm: 'factory' as const },
     { task: second, arm: 'factory' as const },
   ];
-  const drive = async (statuses: RunRecord['status'][], prior = 0) => {
+  const drive = async (statuses: RunRecord['status'][], prior = 0, priorStatus: RunRecord['status'] = 'transient') => {
     const dir = tempDir('setb-drive');
     const runsFile = join(dir, 'runs.jsonl');
     const stopFile = join(dir, 'STOP');
@@ -1074,7 +1081,7 @@ describe('the drive loop stops', () => {
       resetAt: null,
       baseSha: 'c'.repeat(40),
     });
-    for (let i = 0; i < prior; i += 1) appendRun(runsFile, record(first, 'transient'));
+    for (let i = 0; i < prior; i += 1) appendRun(runsFile, record(first, priorStatus));
     const ran: string[] = [];
     const slept: number[] = [];
     const code = await driveArms(items, {
@@ -1114,6 +1121,10 @@ describe('the drive loop stops', () => {
 
   it('writes the STOP file and exits 5 on a login failure', async () => {
     expect(await drive(['auth'])).toMatchObject({ code: 5, ran: [first.id], stop: true });
+  });
+
+  it('does not run an arm again after an aborted record unless that was allowed', async () => {
+    expect(await drive([], 1, 'aborted')).toMatchObject({ code: 75, ran: [], records: 1 });
   });
 });
 
@@ -1361,6 +1372,38 @@ exit 0`,
       expect(existsSync(join(cache, 'setb.lock'))).toBe(false);
     }, 40_000);
 
+    it('grade-all writes no rows while an arm has no done or failed record', () => {
+      const { out, cli } = stage();
+      writeFileSync(join(out, 'key.json'), '[]');
+      writeFileSync(join(out, 'judged.json'), JSON.stringify({ judged: [], unreadable: [], voided: null }));
+      const ran = cli('grade-all', out, ['--key', join(out, 'key.json'), '--judged', join(out, 'judged.json')]);
+      expect(ran.stderr).toMatch(/no done or failed record/);
+      expect(ran.status).toBe(3);
+      expect(existsSync(join(out, 'rows.jsonl'))).toBe(false);
+    });
+
+    it('runs an aborted arm again only with the flag for that abort, and journals why', () => {
+      const { out, cli } = driving(`printf 'HTTP/2.0 502 x\\n\\n{"message":"Server Error"}\\n'`);
+      const runsFile = join(out, 'runs.jsonl');
+      expect(cli('drive').status).toBe(75);
+      const held = cli('drive');
+      expect(held.status, held.stderr).toBe(75);
+      expect(held.stderr).toContain('--rerun-aborted check-sources-all-links:factory:1');
+      expect(readRuns(runsFile), 'a held arm is not started').toHaveLength(1);
+      const flag = ['--rerun-aborted', 'check-sources-all-links:factory:1'];
+      expect(cli('drive', out, flag).stderr).toMatch(/--reason must say why/);
+      const allowed = [...flag, '--reason', 'GitHub was down'];
+      expect(cli('drive', out, allowed).status).toBe(75);
+      expect(readRuns(runsFile)).toHaveLength(2);
+      expect(readJournal(runsFile).reruns).toMatchObject([
+        { task: 'check-sources-all-links', arm: 'factory', aborted: 1, reason: 'GitHub was down' },
+      ]);
+      const again = cli('drive', out, allowed);
+      expect(again.status, 'the same command allows nothing after the next abort').toBe(3);
+      expect(again.stderr).toMatch(/holds 2 aborted record/);
+      expect(readRuns(runsFile)).toHaveLength(2);
+    }, 60_000);
+
     it.each(['drive', 'close', 'reconcile'])('%s reports a torn journal line and goes on to the host', (command) => {
       const { out, touched, cli, lock } = stage();
       const runs = join(out, 'runs.jsonl');
@@ -1371,5 +1414,225 @@ exit 0`,
       expect(existsSync(lock), 'the lock is released after a failure').toBe(false);
       expect(existsSync(`${runs}.torn`), 'only drive writes the journal').toBe(command === 'drive');
     });
+  });
+});
+
+describe('a provider stop inside a reply claude marks successful', () => {
+  const reviewerJob = {
+    ...authorJob,
+    role: 'reviewer' as const,
+    worker: 'vega',
+    change: { number: 1, headSha: 'a'.repeat(40) } as never,
+    files: [],
+  };
+  const reviewStatus = async (out: string) => {
+    try {
+      await claudeCode({ shell: () => withStderr(claudeShell('', out, 0)) }).run(reviewerJob as never);
+    } catch (error) {
+      return statusOf((error as Error).message);
+    }
+    throw new Error('the review did not fail');
+  };
+
+  it.each(STOPS)('%s', async (text, expected) => {
+    for (const out of [resultOf(text, 'success', false), worked(text), worked(text, '<synthetic>')]) {
+      expect(await status('', out, 0), `author: ${out}`).toBe(expected);
+      expect(await reviewStatus(out), `reviewer: ${out}`).toBe(expected);
+    }
+  });
+});
+
+describe('who ended a session marked successful', () => {
+  const UNSEEN = 'A message from next year';
+  const line = (over: object) =>
+    `${JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-sonnet' }, ...over })}\n`;
+  const success = resultOf(UNSEEN, 'success', false);
+
+  it.each([
+    ['no model message at all', success],
+    ['a notice Claude Code wrote itself', line({ message: { model: '<synthetic>' } }) + success],
+    ['a last message flagged with an error', line({ error: 'rate_limit' }) + success],
+    ['a last message flagged as an API error', line({ isApiErrorMessage: true }) + success],
+    ['a notice after real work', line({}) + line({ message: { model: '<synthetic>' } }) + success],
+    ['only a subagent message', line({ parent_tool_use_id: 'toolu_1' }) + success],
+  ])('is not final after %s, whatever the text says', async (_name, out) => {
+    expect(await status('', out, 0)).toBe('aborted');
+  });
+
+  it.each([
+    ['a real model message', line({}) + success],
+    ['an error the session recovered from', line({ error: 'rate_limit' }) + line({}) + success],
+    ['a subagent that hit a limit', line({}) + line({ parent_tool_use_id: 'toolu_1', error: 'rate_limit' }) + success],
+    ['a long answer that opens like a notice', worked('API Error: 529 is now retried.\nI could not commit it.')],
+    ['a sentence about a login', worked('Not logged in users get a 403 now, but I could not commit it.')],
+    ['a sentence that quotes a notice', worked('I could not make the client retry on API Error: 529.')],
+  ])('counts no committed change as the result after %s', async (_name, out) => {
+    expect(await status('', out, 0)).toBe('failed');
+  });
+
+  it('reports a login failure on stderr over the notice in the reply', async () => {
+    const out = worked(UNSEEN, '<synthetic>');
+    for (const code of [0, 1]) expect(await status('Not logged in\n', out, code)).toBe('auth');
+  });
+});
+
+describe('an aborted arm', () => {
+  const id = (tasks[0] as SetBTask).id;
+  const aborted = (file: string, status: RunRecord['status'] = 'aborted') =>
+    appendRun(file, { task: id, arm: 'factory', status, stage: 2, note: 'why' } as RunRecord);
+  const held = (file: string) => heldBy(readJournal(file), id, 'factory');
+
+  it('is held per abort, and an allowance covers neither the next abort nor the other arm', () => {
+    const file = join(tempDir('setb-rerun'), 'runs.jsonl');
+    aborted(file, 'auth');
+    aborted(file, 'transient');
+    expect(held(file), 'only an abort holds an arm').toBeNull();
+    expect(() => allowRerun(file, `${id}:factory:0`, 'x')).toThrow(/holds 0 aborted/);
+    aborted(file);
+    expect(held(file)).toBe(`--rerun-aborted ${id}:factory:1`);
+    expect(heldBy(readJournal(file), id, 'baseline')).toBeNull();
+    expect(() => allowRerun(file, `${id}:factory:2`, 'x')).toThrow(/holds 1 aborted/);
+    expect(() => allowRerun(file, `${id}:factory:1`, '  ')).toThrow(/--reason/);
+    allowRerun(file, `${id}:factory:1`, 'read it');
+    allowRerun(file, `${id}:factory:1`, 'read it');
+    expect(readJournal(file).reruns).toHaveLength(1);
+    expect(readRuns(file), 'a rerun line is not a run record').toHaveLength(3);
+    expect(held(file)).toBeNull();
+    appendRun(file, { task: id, arm: 'baseline', status: 'aborted', stage: 2, note: 'why' } as RunRecord);
+    expect(heldBy(readJournal(file), id, 'baseline')).toBe(`--rerun-aborted ${id}:baseline:1`);
+    aborted(file);
+    expect(held(file)).toBe(`--rerun-aborted ${id}:factory:2`);
+  });
+});
+
+describe('the stage 1 journal, written before rerun lines existed', () => {
+  const file = join(import.meta.dirname, 'fixtures', 'stage1-runs.jsonl');
+
+  it('loads, keeps its base, holds nothing and leaves 18 arms in the same order', () => {
+    const journal = readJournal(file);
+    expect(journal).toMatchObject({ header: { baseSha: PINNED_BASE }, torn: null, reruns: [] });
+    expect([journal.intents.length, journal.runs.length]).toEqual([2, 3]);
+    const left = todo(tasks, journal.runs);
+    expect(left).toHaveLength(18);
+    expect(left.slice(0, 2).map((i) => `${i.task.id} ${i.arm}`)).toEqual([
+      'repo-id-edges baseline',
+      'repo-id-edges factory',
+    ]);
+    expect(left.filter((i) => heldBy(journal, i.task.id, i.arm) !== null)).toEqual([]);
+    expect(entriesOf(tasks, journal.runs).map((e) => e.pr)).toEqual([1, 2]);
+    expect(() => pinBase(file, PINNED_BASE)).not.toThrow();
+  });
+});
+
+describe('grading', () => {
+  const calibration = readWindow(join(import.meta.dirname, '..', 'window.json'));
+  const record = (task: SetBTask, arm: 'factory' | 'baseline', over: Partial<RunRecord> = {}): RunRecord => ({
+    task: task.id,
+    arm,
+    status: 'failed',
+    stage: 1,
+    branch: null,
+    pr: null,
+    readyHeadSha: null,
+    wallMs: 60_000,
+    tokens: null,
+    reviewRounds: null,
+    note: 'no committed change',
+    startedAt: '2026-11-26T00:00:00Z',
+    resetAt: null,
+    baseSha: PINNED_BASE,
+    ...over,
+  });
+  const all = tasks.flatMap((t) => [record(t, 'factory'), record(t, 'baseline')]);
+  const timed: Array<[number, number, number]> = [];
+  const grade = (runs: readonly RunRecord[]) =>
+    gradeAll({
+      tasks,
+      runs,
+      key: [],
+      judged: { judged: [], unreadable: [] },
+      calibration,
+      rootMinutes: 0,
+      read: {
+        pull: async () => expect.unreachable(),
+        ci: async () => expect.unreachable(),
+        paths: async () => expect.unreachable(),
+        ciWait: async (pr, from, to) => {
+          timed.push([pr, from, to]);
+          return 30_000;
+        },
+      },
+    });
+
+  it.each(['aborted', 'auth', 'transient'] as const)('refuses while an arm has only a %s record', async (status) => {
+    const [first, ...rest] = all as [RunRecord, ...RunRecord[]];
+    await expect(grade([{ ...first, status }, ...rest])).rejects.toThrow(
+      `1 arm(s) have no done or failed record: ${first.task} factory`,
+    );
+    await expect(grade(rest)).rejects.toThrow(/no done or failed record/);
+  });
+
+  it('grades every arm once all have finished, and times CI over the wall time of an arm that left a PR', async () => {
+    const [first, ...rest] = all as [RunRecord, ...RunRecord[]];
+    const rows = await grade([{ ...first, pr: 7 }, ...rest]);
+    expect(rows).toHaveLength(20);
+    expect(timed).toEqual([[7, Date.parse(first.startedAt), Date.parse(first.startedAt) + 60_000]]);
+    expect(rows.map((r) => r.ciWaitMs).slice(0, 2)).toEqual([30_000, null]);
+  });
+
+  it('refuses a done arm the key has no label for, which is not an arm with no PR', async () => {
+    const [first, ...rest] = all as [RunRecord, ...RunRecord[]];
+    const done = { ...first, status: 'done' as const, pr: 7, readyHeadSha: 'a'.repeat(40) };
+    await expect(grade([done, ...rest])).rejects.toThrow(/is done but the key has no label/);
+  });
+});
+
+describe('the CI wait inside an arm', () => {
+  const at = (s: number) => new Date(s * 1000).toISOString();
+  const run = (from: number, to: number | null) => ({
+    started_at: at(from),
+    completed_at: to === null ? null : at(to),
+  });
+
+  it('counts overlapping check runs once, gaps never, and only the time inside the arm', () => {
+    expect(ciRunningMs([run(10, 30), run(20, 40), run(25, 26), run(60, 70)], 0, 100_000)).toBe(40_000);
+    expect(ciRunningMs([run(0, 30), run(90, 200)], 10_000, 100_000)).toBe(30_000);
+    expect(ciRunningMs([run(10, 40), run(20, 25), run(30, 35)], 0, 100_000)).toBe(30_000);
+    expect(ciRunningMs([run(0, 5)], 10_000, 100_000)).toBe(0);
+    expect(ciRunningMs([run(90, null)], 0, 100_000)).toBe(10_000);
+    expect(ciRunningMs([run(200, 300), { started_at: null }], 0, 100_000)).toBe(0);
+  });
+
+  const github = (checks: Record<string, ReturnType<typeof run>[]>, total?: number) => async (path: string) => {
+    if (path === 'repos/o/r/pulls/7/commits?per_page=100') return Object.keys(checks).map((sha) => ({ sha }));
+    const sha = /^repos\/o\/r\/commits\/(\w+)\/check-runs\?filter=all&per_page=100$/.exec(path)?.[1] ?? '';
+    const runs = checks[sha] as ReturnType<typeof run>[];
+    return { total_count: total ?? runs.length, check_runs: runs };
+  };
+
+  it('adds up every commit of the PR, and is unknown when none has a check run', async () => {
+    expect(await readCiWait(github({ a: [run(10, 20)], b: [run(50, 80)] }), 'o/r', 7, 0, 100_000)).toBe(40_000);
+    expect(await readCiWait(github({ a: [] }), 'o/r', 7, 0, 100_000)).toBeNull();
+    await expect(readCiWait(github({ a: [run(10, 20)] }, 2), 'o/r', 7, 0, 100_000)).rejects.toThrow(/only 1 were read/);
+    const many = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`c${i}`, []]));
+    await expect(readCiWait(github(many), 'o/r', 7, 0, 100_000)).rejects.toThrow(/too many to time/);
+  });
+});
+
+describe('streams captured from claude 2.1.325, the version in the cage, against a fake API', () => {
+  const captured = (name: string) =>
+    readFileSync(join(import.meta.dirname, 'fixtures', `claude-2.1.325-${name}.jsonl`), 'utf8');
+
+  it('reads a real model reply as the model ending the session', async () => {
+    expect(await status('', captured('success'), 0)).toBe('failed');
+  });
+
+  it.each([
+    ['api-429', 'aborted'],
+    ['api-401', 'auth'],
+  ])('records %s as %s, also when the result line does not say it is an error', async (name, expected) => {
+    const out = captured(name);
+    expect(await status('', out, 1)).toBe(expected);
+    expect(await status('', out.replace('"is_error":true', '"is_error":false'), 0)).toBe(expected);
   });
 });

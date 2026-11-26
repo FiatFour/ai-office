@@ -21,6 +21,7 @@ const JN = 'bench/setb/journal.ts';
 const LK = 'bench/setb/lock.ts';
 const RN = 'bench/setb/run.ts';
 const C = 'bench/setb/cli.ts';
+const RP = 'bench/report.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[string, string, string]>, tests: string[] }>} */
 const MUTANTS = [
@@ -1115,7 +1116,7 @@ const MUTANTS = [
   {
     name: 'stop-overrides-success',
     claim: 'a successful result is left alone',
-    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", '']],
+    edits: [[AR, "if (ran.code === 0 && said !== '' && !notice) return null;", '']],
     tests: [ARMT],
   },
   {
@@ -1266,13 +1267,17 @@ const MUTANTS = [
   {
     name: 'success-nonzero-exit-accepted',
     claim: 'a nonzero exit is never a finished session',
-    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", "if (said !== '') return null;"]],
+    edits: [
+      [AR, "if (ran.code === 0 && said !== '' && !notice) return null;", "if (said !== '' && !notice) return null;"],
+    ],
     tests: [ARMT],
   },
   {
     name: 'success-empty-reply-accepted',
     claim: 'an empty reply is never a finished session',
-    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", 'if (ran.code === 0) return null;']],
+    edits: [
+      [AR, "if (ran.code === 0 && said !== '' && !notice) return null;", 'if (ran.code === 0 && !notice) return null;'],
+    ],
     tests: [ARMT],
   },
   {
@@ -1397,6 +1402,276 @@ const MUTANTS = [
     claim: 'judge does not start while a real PR has pending CI',
     edits: [[C, 'if (pending.length > 0)', 'if (false)']],
     tests: [SETB],
+  },
+  {
+    name: 'notice-ignored',
+    claim: 'a provider stop in a successful reply is never final',
+    edits: [
+      [AR, "const notice = said !== '' && (NOTICE.test(said) || !modelReplied(lines));", 'const notice = false;'],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'notice-text-ignored',
+    claim: 'a notice is read from its text when the stream does not mark it',
+    edits: [[AR, 'NOTICE.test(said) || ', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'notice-marks-ignored',
+    claim: 'a reply no model wrote is never final, whatever it says',
+    edits: [[AR, ' || !modelReplied(lines)', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'notice-unanchored',
+    claim: 'words about a login inside an answer are not a notice',
+    edits: [[AR, '/^(?:(?:API )?Error: |', '/(?:(?:API )?Error: |']],
+    tests: [ARMT],
+  },
+  {
+    name: 'notice-many-lines',
+    claim: 'a long answer that opens like a notice is an answer',
+    edits: [[AR, ')[^\\n]*$/;', ')/;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'model-no-message-trusted',
+    claim: 'a success with no model message is not final',
+    edits: [[AR, 'last !== undefined &&\n    (last.error', '(last === undefined) ||\n    (last.error']],
+    tests: [ARMT],
+  },
+  {
+    name: 'model-error-flag-ignored',
+    claim: 'a message flagged with an error is not the model',
+    edits: [[AR, '(last.error ?? null) === null &&', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'model-api-flag-ignored',
+    claim: 'a message flagged as an API error is not the model',
+    edits: [[AR, 'last.isApiErrorMessage !== true &&', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'model-synthetic-ignored',
+    claim: 'a synthetic message is not the model',
+    edits: [[AR, "last.message?.model !== '<synthetic>'", 'true']],
+    tests: [ARMT],
+  },
+  {
+    name: 'model-first-message',
+    claim: 'the last message decides, not an earlier one',
+    edits: [[AR, "lines.findLast((l) => l.type === 'assistant'", "lines.find((l) => l.type === 'assistant'"]],
+    tests: [ARMT],
+  },
+  {
+    name: 'model-subagent-counts',
+    claim: 'a subagent message neither ends nor fails the session',
+    edits: [[AR, ' && (l.parent_tool_use_id ?? null) === null);', ');']],
+    tests: [ARMT],
+  },
+  {
+    name: 'notice-hides-auth',
+    claim: 'a login failure on stderr wins over the notice',
+    edits: [[AR, "if (notice && stopOf(line ?? '') !== 'auth')", 'if (notice)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'grade-unfinished-allowed',
+    claim: 'grade-all refuses until every arm is done or failed',
+    edits: [[RN, 'if (open.length > 0)\n', 'if (false)\n']],
+    tests: [ARMT],
+  },
+  {
+    name: 'grade-unlabelled-done-failed',
+    claim: 'a done arm without a label is refused, not failed',
+    edits: [[RN, "if (rec.status === 'done')\n", 'if (false)\n']],
+    tests: [ARMT],
+  },
+  {
+    name: 'grade-ci-wait-dropped',
+    claim: 'grade-all records the CI wait of an arm with a PR',
+    edits: [
+      [
+        RN,
+        'const ciWaitMs = rec.pr === null ? null : await o.read.ciWait(rec.pr, from, from + rec.wallMs);',
+        'const ciWaitMs = null;',
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'held-arm-runs',
+    claim: 'an aborted arm does not run again on its own',
+    edits: [[RN, 'if (flag !== null) {', 'if (false) {']],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-flag-ignored',
+    claim: 'the flag journals an allowance',
+    edits: [
+      [
+        RN,
+        "if (values['rerun-aborted'] !== undefined) allowRerun(runsFile, values['rerun-aborted'], values.reason);",
+        '',
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-never-held',
+    claim: 'an abort holds the arm',
+    edits: [[JN, 'return n === 0 || allowed(journal.reruns, task, arm, n) ? null', 'return true ? null']],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-covers-later-aborts',
+    claim: 'an allowance covers one abort count',
+    edits: [[JN, 'r.arm === arm && r.aborted === aborted)', 'r.arm === arm)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-covers-other-arm',
+    claim: 'an allowance names its arm',
+    edits: [
+      [JN, 'r.task === task && r.arm === arm && r.aborted === aborted', 'r.task === task && r.aborted === aborted'],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-counts-every-status',
+    claim: 'only aborted records hold an arm',
+    edits: [[JN, "r.arm === arm && r.status === 'aborted').length", 'r.arm === arm).length']],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-stale-count',
+    claim: 'the flag must name the count on record',
+    edits: [[JN, 'if (n === 0 || count !== String(n))', 'if (n === 0)']],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-before-abort',
+    claim: 'nothing is allowed in advance',
+    edits: [[JN, 'if (n === 0 || count !== String(n))', 'if (count !== String(n))']],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-no-reason',
+    claim: 'a rerun states why',
+    edits: [[JN, "if (reason.trim() === '') throw", 'if (false) throw']],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-twice-journaled',
+    claim: 'repeating an allowance writes nothing',
+    edits: [[JN, 'if (allowed(reruns, task, arm, n)) return;', '']],
+    tests: [ARMT],
+  },
+  {
+    name: 'rerun-read-as-run',
+    claim: 'a rerun line is not a run record',
+    edits: [
+      [
+        JN,
+        "lines.filter((l) => l.kind === undefined || l.kind === 'run')",
+        "lines.filter((l) => l.kind === undefined || l.kind === 'run' || l.kind === 'rerun')",
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-overlap-twice',
+    claim: 'overlapping check runs count once',
+    edits: [[O, 'total += Math.max(0, end - Math.max(start, reached));', 'total += end - start;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-before-arm',
+    claim: 'time before the arm is not its wait',
+    edits: [[O, 'let reached = from;', 'let reached = 0;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-after-arm',
+    claim: 'time after the arm is not its wait',
+    edits: [
+      [
+        O,
+        'const end = Math.min(to, r.completed_at ? Date.parse(r.completed_at) : to);',
+        'const end = r.completed_at ? Date.parse(r.completed_at) : to;',
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-nested-rewinds',
+    claim: 'a short run inside a long one does not rewind',
+    edits: [[O, 'reached = Math.max(reached, end);', 'reached = end;']],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-no-checks-zero',
+    claim: 'no check runs means unknown, not zero',
+    edits: [[O, 'return runs.length === 0 ? null : ciRunningMs', 'return ciRunningMs']],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-truncated-read',
+    claim: 'a truncated check list is refused',
+    edits: [
+      [
+        O,
+        'runs.push(...allRead(sha, body as CheckRunsBody<CheckSpan>));',
+        'runs.push(...(body as CheckRunsBody<CheckSpan>).check_runs);',
+      ],
+    ],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-commits-truncated',
+    claim: 'a truncated commit list is refused',
+    edits: [[O, 'if (commits.length >= PAGE) throw', 'if (false) throw']],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-last-commit-only',
+    claim: 'every commit of the PR is timed',
+    edits: [[O, 'for (const { sha } of commits) {', 'for (const { sha } of commits.slice(-1)) {']],
+    tests: [ARMT],
+  },
+  {
+    name: 'ci-wait-first-attempt-lost',
+    claim: 'reruns of a check are counted too',
+    edits: [[O, 'check-runs?filter=all&per_page', 'check-runs?per_page']],
+    tests: [ARMT],
+  },
+  {
+    name: 'report-ci-column-absent',
+    claim: 'the CI wait is shown per task',
+    edits: [[RP, "  { head: 'CI wait s', pick: (r) => r.ciWaitMs ?? null, scale: 1000, setB: true },\n", '']],
+    tests: [REPORT],
+  },
+  {
+    name: 'report-ci-total-absent',
+    claim: 'the CI wait is shown in the totals',
+    edits: [
+      [RP, 'const ci = hasSetB(rows) ? [n(waited === null ? null : waited / 1000)] : [];', 'const ci: string[] = [];'],
+    ],
+    tests: [REPORT],
+  },
+  {
+    name: 'report-wall-note-absent',
+    claim: 'the report says the wall times are not comparable',
+    edits: [[RP, "...(hasSetB(measured) ? [WALL_NOTE, ''] : []),", '']],
+    tests: [REPORT],
+  },
+  {
+    name: 'report-wall-note-on-set-a',
+    claim: 'a Set A report says nothing about CI wait',
+    edits: [[RP, "...(hasSetB(measured) ? [WALL_NOTE, ''] : []),", "WALL_NOTE,\n    '',"]],
+    tests: [REPORT],
   },
   {
     name: 'shared-lock-close-absent',

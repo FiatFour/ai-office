@@ -42,9 +42,11 @@ import { ghHub, ghPullFiles } from './fetch.ts';
 import {
   ARMS,
   type Arm,
+  allowRerun,
   appendRun,
   checkBase,
   claimIntent,
+  heldBy,
   isFinal,
   pinBase,
   type RunRecord,
@@ -58,8 +60,8 @@ import {
 import type { Judged } from './judge.ts';
 import { type Entry, type Sealed, sealedEntry } from './labels.ts';
 import { holdLock, onStop } from './lock.ts';
-import { ghReadCi, gradeSetB, readWindow } from './outcome.ts';
-import type { Unreadable } from './packet.ts';
+import { type Grading, ghGet, ghReadCi, gradeSetB, readCiWait, readWindow, type WindowCalibration } from './outcome.ts';
+import type { Ci, Unreadable } from './packet.ts';
 import { loadFrozen, type SetBTask } from './task.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -414,10 +416,18 @@ export interface DriveDeps {
 
 /**
  * Runs the arms in order and returns the exit code. It goes on to the next arm only after a final record. A transient provider
- * error retries the same arm up to the cap; a login failure writes the STOP file and returns 5; anything else returns 75.
+ * error retries the same arm up to the cap; a login failure writes the STOP file and returns 5; anything else returns 75, and
+ * so does an arm with an aborted record that no rerun line covers.
  */
 export const driveArms = async (items: ReturnType<typeof todo>, deps: DriveDeps): Promise<number> => {
   for (const { task, arm } of items) {
+    const flag = heldBy(readJournal(deps.runsFile), task.id, arm);
+    if (flag !== null) {
+      console.error(
+        `${task.id} ${arm} was aborted and may not run again on its own. Read the record in ${deps.runsFile}, then pass ${flag} --reason "<why>"`,
+      );
+      return 75;
+    }
     await deps.waitSlot();
     console.log(`stage ${deps.stage}: ${task.id} ${arm}`);
     for (;;) {
@@ -450,6 +460,68 @@ export const driveArms = async (items: ReturnType<typeof todo>, deps: DriveDeps)
   return 0;
 };
 
+export interface GradeReads {
+  readonly pull: (pr: number) => Promise<Grading['pull']>;
+  readonly ci: (sha: string) => Promise<Ci>;
+  readonly paths: (pr: number) => Promise<readonly string[]>;
+  readonly ciWait: (pr: number, from: number, to: number) => Promise<number | null>;
+}
+
+/** One row per task and arm. Refuses a run that is not finished: an arm that did not finish is not a fail. */
+export const gradeAll = async (o: {
+  readonly tasks: readonly SetBTask[];
+  readonly runs: readonly RunRecord[];
+  readonly key: readonly Sealed[];
+  readonly judged: { readonly judged: readonly Judged[]; readonly unreadable: readonly Unreadable[] };
+  readonly calibration: WindowCalibration;
+  readonly rootMinutes: number;
+  readonly read: GradeReads;
+}): Promise<Row[]> => {
+  const open = todo(o.tasks, o.runs);
+  if (open.length > 0)
+    throw new TaskRefused(
+      `nothing is graded: ${open.length} arm(s) have no done or failed record: ${open.map((i) => `${i.task.id} ${i.arm}`).join(', ')}`,
+    );
+  const rows: Row[] = [];
+  for (const task of o.tasks)
+    for (const arm of ARMS) {
+      const sealed = o.key.find((s) => s.entry.task === task.id && s.entry.arm === arm);
+      const rec = o.runs.findLast((r) => r.task === task.id && r.arm === arm && isFinal(r)) as RunRecord;
+      const from = Date.parse(rec.startedAt);
+      const ciWaitMs = rec.pr === null ? null : await o.read.ciWait(rec.pr, from, from + rec.wallMs);
+      if (sealed === undefined) {
+        if (rec.status === 'done')
+          throw new TaskRefused(
+            `${task.id} ${arm} is done but the key has no label for it; run entries and label again`,
+          );
+        rows.push({ ...noPrRow(task.id, arm, rec.note, rec.wallMs, rec.tokens, o.calibration), ciWaitMs });
+        continue;
+      }
+      const mine =
+        o.judged.judged.find((j) => j.label === sealed.label) ??
+        o.judged.unreadable.find((u) => u.label === sealed.label);
+      if (mine === undefined) throw new TaskRefused(`no judgement for ${sealed.label}`);
+      const entry = sealedEntry(o.key, sealed.label);
+      if (entry.arm === 'seeded') continue;
+      rows.push(
+        gradeSetB({
+          entry: { ...entry, arm: entry.arm },
+          judged: mine,
+          pull: await o.read.pull(entry.pr),
+          ci: await o.read.ci(entry.readyHeadSha),
+          paths: await o.read.paths(entry.pr),
+          wallMs: rec.wallMs,
+          ciWaitMs,
+          tokens: rec.tokens,
+          operatorMinutes: 0,
+          rootMinutes: o.rootMinutes,
+          calibration: o.calibration,
+        }),
+      );
+    }
+  return rows;
+};
+
 const main = async (argv: string[]): Promise<number> => {
   const [command = '', ...rest] = argv;
   const { values } = parseArgs({
@@ -462,6 +534,8 @@ const main = async (argv: string[]): Promise<number> => {
       home: { type: 'string' },
       stage: { type: 'string', default: '1' },
       only: { type: 'string' },
+      'rerun-aborted': { type: 'string' },
+      reason: { type: 'string', default: '' },
       arms: { type: 'string' },
       'arm-timeout-min': { type: 'string', default: '60' },
       'factory-timeout-min': { type: 'string', default: '180' },
@@ -496,6 +570,7 @@ const main = async (argv: string[]): Promise<number> => {
     if (existsSync(stopFile)) throw new TaskRefused(`${stopFile} exists: ${readFileSync(stopFile, 'utf8').trim()}`);
     // The journal names its base on the first line; a different one is refused, so the base never moves after the first PR.
     pinBase(runsFile, baseSha);
+    if (values['rerun-aborted'] !== undefined) allowRerun(runsFile, values['rerun-aborted'], values.reason);
     const stage = Number(values.stage);
     const only = values.only === undefined ? null : new Set(values.only.split(','));
     const arms = values.arms === undefined ? ARMS : (values.arms.split(',') as Arm[]);
@@ -565,43 +640,21 @@ const main = async (argv: string[]): Promise<number> => {
       voided: string | null;
     };
     if (judged.voided !== null) throw new TaskRefused(`the judge run is void: ${judged.voided}`);
-    const runs = readRuns(runsFile);
+    const rows = await gradeAll({
+      tasks: list.tasks,
+      runs: readRuns(runsFile),
+      key,
+      judged,
+      calibration: readWindow(join(values.dir, 'window.json')),
+      rootMinutes: Number(values['root-minutes']),
+      read: {
+        pull: (pr) => ghReadPull(list.repo, pr),
+        ci: (sha) => ghHub.ci(list.repo, sha),
+        paths: (pr) => ghPullFiles(list.repo, pr),
+        ciWait: (pr, from, to) => readCiWait(ghGet, list.repo, pr, from, to),
+      },
+    });
     const rowsFile = join(values.out, 'rows.jsonl');
-    const calibration = readWindow(join(values.dir, 'window.json'));
-    const rows: Row[] = [];
-    for (const task of list.tasks)
-      for (const arm of ARMS) {
-        const sealed = key.find((s) => s.entry.task === task.id && s.entry.arm === arm);
-        const records = runs.filter((r) => r.task === task.id && r.arm === arm && isFinal(r));
-        const rec = records.at(-1);
-        const wallMs = rec?.wallMs ?? 0;
-        if (sealed === undefined) {
-          rows.push(
-            noPrRow(task.id, arm, rec?.note ?? 'the arm did not run', wallMs, rec?.tokens ?? null, calibration),
-          );
-          continue;
-        }
-        const mine =
-          judged.judged.find((j) => j.label === sealed.label) ??
-          judged.unreadable.find((u) => u.label === sealed.label);
-        if (mine === undefined) throw new TaskRefused(`no judgement for ${sealed.label}`);
-        const entry = sealedEntry(key, sealed.label);
-        if (entry.arm === 'seeded') continue;
-        rows.push(
-          gradeSetB({
-            entry: { ...entry, arm: entry.arm },
-            judged: mine,
-            pull: await ghReadPull(list.repo, entry.pr),
-            ci: await ghHub.ci(list.repo, entry.readyHeadSha),
-            paths: await ghPullFiles(list.repo, entry.pr),
-            wallMs,
-            tokens: rec?.tokens ?? null,
-            operatorMinutes: 0,
-            rootMinutes: Number(values['root-minutes']),
-            calibration,
-          }),
-        );
-      }
     writeFileSync(rowsFile, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
     console.log(`${rows.length} rows -> ${rowsFile}`);
     return 0;
@@ -651,7 +704,7 @@ const noPrRow = (
   why: string,
   wallMs: number,
   tokens: Tokens | null,
-  calibration: ReturnType<typeof readWindow>,
+  calibration: WindowCalibration,
 ): Row => ({
   task,
   set: 'B',

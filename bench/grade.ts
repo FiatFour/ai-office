@@ -1,4 +1,4 @@
-import { cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Change, TaskA } from './model.ts';
@@ -134,6 +134,18 @@ const throughLink = (root: string, rel: string): boolean => {
   return false;
 };
 
+// A deletion can leave empty directories behind; drop them so a path that
+// changes from a directory to a file can be written.
+const pruneEmptyParents = (root: string, target: string): void => {
+  for (let at = dirname(target); at !== root && at.startsWith(root); at = dirname(at)) {
+    try {
+      rmdirSync(at);
+    } catch {
+      return;
+    }
+  }
+};
+
 const apply = (work: string, change: Change, skipped: ReadonlySet<string>): string | null => {
   const act = (rel: string, linkCheck: string, step: (target: string) => void): string | null => {
     try {
@@ -147,16 +159,20 @@ const apply = (work: string, change: Change, skipped: ReadonlySet<string>): stri
       return `${rel} cannot be applied: ${error instanceof Error ? error.message : String(error)}`;
     }
   };
+  // Deletes go first so a typechange (file <-> directory) can be written.
+  for (const rel of change.deleted) {
+    const problem = act(rel, dirname(rel), (target) => {
+      rmSync(target, { force: true });
+      pruneEmptyParents(work, target);
+    });
+    if (problem !== null) return problem;
+  }
   for (const edit of change.files) {
     if (skipped.has(edit.path)) continue;
     const problem = act(edit.path, edit.path, (target) => {
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, edit.content);
     });
-    if (problem !== null) return problem;
-  }
-  for (const rel of change.deleted) {
-    const problem = act(rel, dirname(rel), (target) => rmSync(target, { force: true }));
     if (problem !== null) return problem;
   }
   return null;

@@ -155,6 +155,21 @@ describe.skipIf(POSIX_ONLY)('the answer stays out of the grader, channel by chan
     );
   });
 
+  it('grades a typechange like any other change: deletes apply before writes', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    mkdirSync(join(prepared.installed, 'src/pkg'), { recursive: true });
+    writeFileSync(join(prepared.installed, 'src/pkg/a.js'), 'x\n');
+    writeFileSync(join(prepared.installed, 'src/note'), 'x\n');
+    const fixed = { path: 'src/slug.js', content: FIXED };
+    const dirToFile: Change = { files: [fixed, { path: 'src/pkg', content: 'y\n' }], deleted: ['src/pkg/a.js'] };
+    expect((await grade(fx.task, prepared, dirToFile, localRunner, scratch)).outcome).toBe('pass');
+    const fileToDir: Change = {
+      files: [fixed, { path: 'src/note/index.txt', content: 'y\n' }],
+      deleted: ['src/note'],
+    };
+    expect((await grade(fx.task, prepared, fileToDir, localRunner, scratch)).outcome).toBe('pass');
+  });
+
   it('needs every hidden spec in the structured report with a nonzero pass count', async () => {
     const { fx, prepared, scratch } = await prepareFixture();
     const hiddenOnly = (cwd: string, hidden: readonly string[]) => hidden.slice(0, 1).map((h) => spec(cwd, h, 3, 0));

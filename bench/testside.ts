@@ -12,7 +12,12 @@ const SWAPS: Record<string, readonly string[]> = {
   '.cjs': ['.cts'],
 };
 const IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"](\.{1,2}(?:\/[^'"]*)?)['"]/g;
-const LITERAL = /['"](\.{1,2}\/[^'"]+)['"]/g;
+// Dot-relative strings in a runner config ('./x', '../x') are specifiers and get the full import-style resolution.
+const LITERAL = /['"](\.{1,2}\/[^'"\s]+)['"]/g;
+// A bare string ('src/setup-env.ts') counts only when it looks like a file: a name ending in an extension. It resolves
+// against the config directory to that exact file (or its .js -> .ts swap), never to a directory index or a
+// guessed extension, so values such as '.', 'src' or 'node' protect nothing.
+const BARE_FILE = /['"]([^'"\s/.][^'"\s]*\.[A-Za-z0-9]+)['"]/g;
 
 const stemOf = (rel: string): string => rel.replace(/\.[^./]+$/, '');
 
@@ -21,10 +26,11 @@ export interface TestSide {
   readonly stems: ReadonlySet<string>;
 }
 
-const candidates = (from: string, specifier: string): string[] => {
+const candidates = (from: string, specifier: string, bare = false): string[] => {
   const target = posix.join(posix.dirname(from), specifier);
   const ext = posix.extname(target);
   const swapped = (SWAPS[ext] ?? []).map((e) => target.slice(0, -ext.length) + e);
+  if (bare) return [target, ...swapped];
   return [
     target,
     ...EXTENSIONS.map((e) => target + e),
@@ -47,6 +53,11 @@ export const testSideOf = (tree: string, hidden: string): TestSide => {
     const specifiers = [...text.matchAll(IMPORT)].map((m) => m[1] ?? '');
     if (RUNNER_CONFIG.test(rel)) specifiers.push(...[...text.matchAll(LITERAL)].map((m) => m[1] ?? ''));
     for (const specifier of specifiers) queue.push(...candidates(rel, specifier).filter((c) => present.has(c)));
+    if (RUNNER_CONFIG.test(rel)) {
+      for (const m of text.matchAll(BARE_FILE)) {
+        queue.push(...candidates(rel, m[1] ?? '', true).filter((c) => present.has(c)));
+      }
+    }
   }
   return { files: new Set([...files].map(keyOf)), stems: new Set([...files].map((f) => keyOf(stemOf(f)))) };
 };

@@ -661,6 +661,12 @@ describe('the static scan of the files a PR changes', () => {
     ['process.reallyExit(0);', 'calls process.exit'],
     ['globalThis.expect = () => {};', 'reaches the test globals'],
     ["writeFileSync('.aw-bench/result.json', '{}');", 'names the grader work directory'],
+    ["const s = Symbol.for('anything');", 'calls Symbol.for'],
+    ["const k = 'expect-global';", 'names the expect-global symbol'],
+    ["const k = '$$jest-matchers-object';", 'names the jest matchers object'],
+    ['const w = globalThis.__vitest_worker__;', 'reaches __vitest_worker__'],
+    ['utils.overwriteMethod(proto, "equal", () => () => {});', 'calls overwriteMethod'],
+    ['utils.addMethod(proto, "equal", () => {});', 'calls addMethod'],
   ])('flags %s', (line, reason) => {
     expect(suspectReasons('src/x.ts', 'export {};\n', `export {};\n${line}\n`)).toEqual([`src/x.ts ${reason}`]);
   });

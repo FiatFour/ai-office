@@ -53,7 +53,7 @@ export const ciRunningMs = (runs: readonly CheckSpan[], from: number, to: number
   const spans = runs
     .flatMap((r) => {
       if (!r.started_at) return [];
-      const start = Math.max(from, Date.parse(r.started_at));
+      const start = Date.parse(r.started_at);
       const end = Math.min(to, r.completed_at ? Date.parse(r.completed_at) : to);
       return end > start ? [{ start, end }] : [];
     })
@@ -82,27 +82,24 @@ export const readCiWait = async (
   if (commits.length >= PAGE) throw new TaskRefused(`PR #${pr} has ${PAGE} commits or more, too many to time`);
   const runs: CheckSpan[] = [];
   for (const { sha } of commits) {
-    const body = (await get(`repos/${repo}/commits/${sha}/check-runs?filter=all&per_page=${PAGE}`)) as {
-      total_count: number;
-      check_runs: readonly CheckSpan[];
-    };
-    if (body.total_count > body.check_runs.length)
-      throw new TaskRefused(`${sha} has ${body.total_count} check runs, only ${body.check_runs.length} were read`);
-    runs.push(...body.check_runs);
+    const body = await get(`repos/${repo}/commits/${sha}/check-runs?filter=all&per_page=${PAGE}`);
+    runs.push(...allRead(sha, body as CheckRunsBody<CheckSpan>));
   }
   return runs.length === 0 ? null : ciRunningMs(runs, from, to);
 };
 
-export interface CheckRunsBody {
+export interface CheckRunsBody<T = CheckRun> {
   readonly total_count: number;
-  readonly check_runs: readonly CheckRun[];
+  readonly check_runs: readonly T[];
 }
 
-export const ciOfBody = (sha: string, body: CheckRunsBody): Ci => {
+const allRead = <T>(sha: string, body: CheckRunsBody<T>): readonly T[] => {
   if (body.total_count > body.check_runs.length)
     throw new TaskRefused(`${sha} has ${body.total_count} check runs, only ${body.check_runs.length} were read`);
-  return ciFrom(sha, body.check_runs);
+  return body.check_runs;
 };
+
+export const ciOfBody = (sha: string, body: CheckRunsBody): Ci => ciFrom(sha, allRead(sha, body));
 
 export interface PullFile {
   readonly filename: string;

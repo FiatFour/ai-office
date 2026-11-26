@@ -1116,7 +1116,7 @@ const MUTANTS = [
   {
     name: 'stop-overrides-success',
     claim: 'a successful result is left alone',
-    edits: [[AR, "if (ran.code === 0 && said !== '') return null;", '']],
+    edits: [[AR, "if (ran.code === 0 && said !== '' && !notice) return null;", '']],
     tests: [ARMT],
   },
   {
@@ -1590,7 +1590,7 @@ const MUTANTS = [
   {
     name: 'ci-wait-before-arm',
     claim: 'time before the arm is not its wait',
-    edits: [[O, 'const start = Math.max(from, Date.parse(r.started_at));', 'const start = Date.parse(r.started_at);']],
+    edits: [[O, 'let reached = from;', 'let reached = 0;']],
     tests: [ARMT],
   },
   {
@@ -1620,7 +1620,13 @@ const MUTANTS = [
   {
     name: 'ci-wait-truncated-read',
     claim: 'a truncated check list is refused',
-    edits: [[O, 'if (body.total_count > body.check_runs.length)\n      throw', 'if (false)\n      throw']],
+    edits: [
+      [
+        O,
+        'runs.push(...allRead(sha, body as CheckRunsBody<CheckSpan>));',
+        'runs.push(...(body as CheckRunsBody<CheckSpan>).check_runs);',
+      ],
+    ],
     tests: [ARMT],
   },
   {

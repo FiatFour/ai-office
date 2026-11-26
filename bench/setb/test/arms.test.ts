@@ -375,7 +375,7 @@ describe('a session that ends abnormally is never final', () => {
     ['text that is not json', '', 'Error: something\n', 1],
     ['a crash on stderr', 'Segmentation fault\n', '', 139],
     ['an error result nobody has seen', '', resultOf('A message from next year'), 1],
-    ['a success line with a nonzero exit', '', resultOf('done', 'success', false), 1],
+    ['a success line with a nonzero exit', '', worked('done'), 1],
     ['a success line with an empty reply', '', resultOf('', 'success', false), 0],
     ['max turns on stderr only', "You've hit your max turns\n", '', 1],
     ['a long prompt on stderr only', 'Prompt is too long\n', '', 1],
@@ -1465,6 +1465,7 @@ describe('who ended a session marked successful', () => {
     ['a subagent that hit a limit', line({}) + line({ parent_tool_use_id: 'toolu_1', error: 'rate_limit' }) + success],
     ['a long answer that opens like a notice', worked('API Error: 529 is now retried.\nI could not commit it.')],
     ['a sentence about a login', worked('Not logged in users get a 403 now, but I could not commit it.')],
+    ['a sentence that quotes a notice', worked('I could not make the client retry on API Error: 529.')],
   ])('counts no committed change as the result after %s', async (_name, out) => {
     expect(await status('', out, 0)).toBe('failed');
   });
@@ -1497,6 +1498,8 @@ describe('an aborted arm', () => {
     expect(readJournal(file).reruns).toHaveLength(1);
     expect(readRuns(file), 'a rerun line is not a run record').toHaveLength(3);
     expect(held(file)).toBeNull();
+    appendRun(file, { task: id, arm: 'baseline', status: 'aborted', stage: 2, note: 'why' } as RunRecord);
+    expect(heldBy(readJournal(file), id, 'baseline')).toBe(`--rerun-aborted ${id}:baseline:1`);
     aborted(file);
     expect(held(file)).toBe(`--rerun-aborted ${id}:factory:2`);
   });
@@ -1594,6 +1597,8 @@ describe('the CI wait inside an arm', () => {
   it('counts overlapping check runs once, gaps never, and only the time inside the arm', () => {
     expect(ciRunningMs([run(10, 30), run(20, 40), run(25, 26), run(60, 70)], 0, 100_000)).toBe(40_000);
     expect(ciRunningMs([run(0, 30), run(90, 200)], 10_000, 100_000)).toBe(30_000);
+    expect(ciRunningMs([run(10, 40), run(20, 25), run(30, 35)], 0, 100_000)).toBe(30_000);
+    expect(ciRunningMs([run(0, 5)], 10_000, 100_000)).toBe(0);
     expect(ciRunningMs([run(90, null)], 0, 100_000)).toBe(10_000);
     expect(ciRunningMs([run(200, 300), { started_at: null }], 0, 100_000)).toBe(0);
   });

@@ -181,6 +181,9 @@ describe('the body sanitizer', () => {
     for (const body of ['- [ ] /merge', '- [x] /merge', '[] /merge'])
       expect(bodyProblem(body), body).toMatch(/slash command/);
     for (const body of ['@Vega', '@1team', '@élodie', '@_x']) expect(bodyProblem(body), body).toMatch(/mentions/);
+    for (const body of ['&#64;x', '&#x40;x', '&#X040;x', '&#0064;x', '&commat;x', 'hi &#64;x', '&#64x'])
+      expect(bodyProblem(body), body).toMatch(/mentions/);
+    expect(bodyProblem('`&#64;x` and &commatx')).toBeNull();
     for (const body of ['<!-- x -->', '</b>', '<1>', 'a <?php ?>']) expect(bodyProblem(body), body).toMatch(/raw HTML/);
     for (const body of ['[a]: https://evil.example', '[a][b]', '[a] (https://evil.example)'])
       expect(bodyProblem(body), body).toMatch(/link/);

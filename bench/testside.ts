@@ -12,7 +12,9 @@ const SWAPS: Record<string, readonly string[]> = {
   '.cjs': ['.cts'],
 };
 const IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"](\.{1,2}(?:\/[^'"]*)?)['"]/g;
-const LITERAL = /['"](\.{1,2}\/[^'"]+)['"]/g;
+// Any quoted, whitespace-free string in a runner config. A bare path such as 'src/setup-env.ts' resolves against
+// the config directory like './src/setup-env.ts'; strings that name no file in the tree are filtered out later.
+const LITERAL = /['"]([^'"\s/][^'"\s]*|\.{1,2}\/[^'"\s]+)['"]/g;
 
 const stemOf = (rel: string): string => rel.replace(/\.[^./]+$/, '');
 

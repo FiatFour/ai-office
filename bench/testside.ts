@@ -12,7 +12,8 @@ const SWAPS: Record<string, readonly string[]> = {
   '.cjs': ['.cts'],
 };
 const IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"](\.{1,2}(?:\/[^'"]*)?)['"]/g;
-const LITERAL = /['"](\.{1,2}\/[^'"]+)['"]/g;
+// A runner config may name a file with a bare path ('src/setup-env.ts'); it resolves against the config directory.
+const LITERAL = /['"]([^'"\s/][^'"\s]*)['"]|['"](\.{1,2}\/[^'"]+)['"]/g;
 
 const stemOf = (rel: string): string => rel.replace(/\.[^./]+$/, '');
 
@@ -45,7 +46,7 @@ export const testSideOf = (tree: string, hidden: string): TestSide => {
     files.add(rel);
     const text = readFileSync(join(tree, rel), 'utf8');
     const specifiers = [...text.matchAll(IMPORT)].map((m) => m[1] ?? '');
-    if (RUNNER_CONFIG.test(rel)) specifiers.push(...[...text.matchAll(LITERAL)].map((m) => m[1] ?? ''));
+    if (RUNNER_CONFIG.test(rel)) specifiers.push(...[...text.matchAll(LITERAL)].map((m) => m[1] ?? m[2] ?? ''));
     for (const specifier of specifiers) queue.push(...candidates(rel, specifier).filter((c) => present.has(c)));
   }
   return { files: new Set([...files].map(keyOf)), stems: new Set([...files].map((f) => keyOf(stemOf(f)))) };

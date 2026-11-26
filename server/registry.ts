@@ -35,10 +35,11 @@ const DEFAULT_PORTS: Readonly<Record<string, string>> = {
   'git:': '9418',
 };
 
-const SCP_LIKE = /^(?:[^@/:\\]+@)?([^/:\\]{2,}):(?!\/\/)(.+)$/;
+const SCP_LIKE = /^(?:[^@/:\\]+@)?(\[[0-9a-f:.]+\]|[^/:\\]{2,}):(?!\/\/)(.+)$/i;
 
 const trimRepoPath = (path: string): string =>
   path
+    .replace(/\/{2,}/g, '/')
     .replace(/\/+$/, '')
     .replace(/\.git$/i, '')
     .replace(/^\/+/, '');

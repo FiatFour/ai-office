@@ -31,4 +31,21 @@ describe('runner config literals', () => {
     expect(refusesTestSide(side, 'src/other.ts')).toBe(false);
     expect(refusesTestSide(side, 'setup/boot.ts')).toBe(false);
   });
+
+  it('does not protect source files for non-file strings such as ".", "src" or "node"', () => {
+    const tree = tempDir('side-tree');
+    put(
+      tree,
+      'vitest.config.ts',
+      `export default { root: '.', test: { include: ['src', './'], environment: 'node' } };`,
+    );
+    put(tree, 'index.ts');
+    put(tree, 'src/index.ts');
+    put(tree, 'node.ts');
+    put(tree, 'src.ts');
+    const side = testSideOf(tree, tempDir('side-hidden'));
+    for (const path of ['index.ts', 'src/index.ts', 'node.ts', 'src.ts']) {
+      expect(refusesTestSide(side, path), path).toBe(false);
+    }
+  });
 });

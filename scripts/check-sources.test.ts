@@ -135,6 +135,25 @@ describe('check-sources', () => {
     expect(output).toContain(':10 row S-9: no check date (YYYY-MM-DD)');
   });
 
+  it('fails a sources row where every cell is a link', () => {
+    const allLinks = `| ${Array(7).fill('[x](https://a.example)').join(' | ')} |`;
+    const { status, output } = runChecker(writeTemp('sources.md', [...header, ...goodRows, allLinks].join('\n')));
+    expect(status).toBe(1);
+    expect(output).toContain(':6 row [x](https://a.example): every cell is a link');
+  });
+
+  it('does not report all-link for a row that has text cells', () => {
+    const { output } = runChecker(writeTemp('sources.md', [...header, ...goodRows].join('\n')));
+    expect(output).not.toContain('every cell is a link');
+  });
+
+  it('fails a prior-art row where every cell is a link', () => {
+    const allLinks = `| ${Array(6).fill('[x](https://a.example)').join(' | ')} |`;
+    const { status, output } = runChecker(writeTemp('prior-art.md', [...priorArt, allLinks].join('\n')));
+    expect(status).toBe(1);
+    expect(output).toContain(':6 row [x](https://a.example): every cell is a link');
+  });
+
   it('fails a prior-art row without a plan PR id', () => {
     const text = [...priorArt.slice(0, 3), priorArt[3]?.replace('P0-7', 'later'), priorArt[4]].join('\n');
     const { status, output } = runChecker(writeTemp('prior-art.md', text));

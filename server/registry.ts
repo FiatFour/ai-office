@@ -35,13 +35,14 @@ const DEFAULT_PORTS: Readonly<Record<string, string>> = {
   'git:': '9418',
 };
 
-const SCP_LIKE = /^(?:[^@/:\\]+@)?([^/:\\]{2,}):(?!\/\/)(.+)$/;
+const SCP_LIKE = /^(?:[^@/:\\]+@)?([^/:\\]{2,}|\[[^\]/\\]+\]):(?!\/\/)(.+)$/;
 
 const trimRepoPath = (path: string): string =>
   path
     .replace(/\/+$/, '')
     .replace(/\.git$/i, '')
-    .replace(/^\/+/, '');
+    .replace(/^\/+/, '')
+    .replace(/\/{2,}/g, '/');
 
 const localRemoteId = (remote: string, clone: string): string => {
   const path = resolve(clone, remote).replaceAll('\\', '/');

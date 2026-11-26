@@ -12,7 +12,9 @@ const SWAPS: Record<string, readonly string[]> = {
   '.cjs': ['.cts'],
 };
 const IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*['"](\.{1,2}(?:\/[^'"]*)?)['"]/g;
-const LITERAL = /['"](\.{1,2}\/[^'"]+)['"]/g;
+// Any string literal that could name a file: `./x`, `../x`, or a bare `x.ts` / `src/x.ts`.
+// Bare ones resolve against the config directory; only literals that hit a real file count.
+const LITERAL = /['"]([^'"\s:\\]+)['"]/g;
 
 const stemOf = (rel: string): string => rel.replace(/\.[^./]+$/, '');
 

@@ -28,7 +28,7 @@ const TEST_SIDE: readonly RegExp[] = [
 export const canonical = (path: string): string => {
   const rel = posix.normalize(path.replace(/\\/g, '/')).replace(/\/+$/, '');
   if (rel === '' || rel === '.') throw new TaskRefused(`${path} names the workspace root`);
-  if (rel === '..' || rel.startsWith('../') || rel.startsWith('/') || /^[a-z]:/i.test(rel) || rel.includes('\0'))
+  if (rel === '..' || rel.startsWith('../') || rel.startsWith('/') || /^[a-z]:\//i.test(rel) || rel.includes('\0'))
     throw new TaskRefused(`${path} leaves the workspace`);
   return rel;
 };

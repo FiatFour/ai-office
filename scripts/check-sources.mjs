@@ -12,6 +12,10 @@ const MIN_PRIOR_ART_PROJECTS = 3;
 const isLink = (cell) => /\]\(https?:\/\/[^)\s]+\)|^https?:\/\/\S+$/.test(cell);
 /** @param {string} cell */
 const isFilled = (cell) => !/^(|-|—|\?|n\/a|tbd|todo|unknown)$/i.test(cell);
+/** A cell that is nothing but a link: `[x](https://…)` or a bare URL. @param {string} cell */
+const isOnlyLink = (cell) => /^\[[^\]]*\]\(https?:\/\/[^)\s]+\)$|^https?:\/\/\S+$/.test(cell);
+/** @param {string} cell */
+const isText = (cell) => isFilled(cell) && !isOnlyLink(cell);
 /** @param {string} cell */
 const isDate = (cell) => {
   const date = new Date(`${cell}T00:00:00Z`);
@@ -50,9 +54,9 @@ const TABLE_BY_FILE = {
     name: 'source',
     columns: ['Id', 'Area', 'Fact', 'Link', 'Version checked', 'Date checked', 'Used by'],
     cells: {
-      Fact: must(isFilled, 'no fact'),
+      Fact: must(isText, 'no fact (a link is not a fact)'),
       Link: must(isLink, 'no link'),
-      'Version checked': must(isFilled, 'no checked version'),
+      'Version checked': must(isText, 'no checked version'),
       'Date checked': must(isDate, 'no check date (YYYY-MM-DD)'),
       'Used by': checkPlanIds,
     },

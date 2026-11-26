@@ -68,6 +68,18 @@ describe('check-sources', () => {
     expect(output).toContain('row S-5: no checked version');
   });
 
+  it('fails a row of all links, and a row with links for fact and version', () => {
+    const l = '[a](https://a.example)';
+    const allLinks = `| ${Array(7).fill(l).join(' | ')} |`;
+    const linkText = `| S-4 | Docker | ${l} | ${goodLink} | ${l} | 2026-11-16 | P0-2 |`;
+    const text = [...header, ...goodRows, allLinks, linkText].join('\n');
+    const { status, output } = runChecker(writeTemp('sources.md', text));
+    expect(status).toBe(1);
+    expect(output).toContain(':6 row [a](https://a.example): no fact');
+    expect(output).toContain(':7 row S-4: no fact');
+    expect(output).toContain(':7 row S-4: no checked version');
+  });
+
   it('fails when a spike has no source row', () => {
     const { status, output } = runChecker(writeTemp('sources.md', [...header, ...goodRows.slice(0, 2)].join('\n')));
     expect(status).toBe(1);

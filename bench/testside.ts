@@ -69,6 +69,12 @@ const SUSPECT: ReadonlyArray<readonly [string, RegExp]> = [
   ['calls process.exit', /\bprocess\s*\.\s*(exit|reallyExit|abort)\b/g],
   ['reaches the test globals', /\bglobalThis\s*\.\s*(expect|vi|it|test|describe|assert)\b/g],
   ['names the grader work directory', /\.aw-bench/g],
+  ['calls Symbol.for', /\bSymbol\s*\.\s*for\s*\(/g],
+  ['names the expect-global symbol', /expect-global/g],
+  ['names the jest matchers global', /\$\$jest-matchers-object/g],
+  ['names the vitest worker global', /__vitest_worker__/g],
+  ['uses chai overwriteMethod', /\boverwriteMethod\b/g],
+  ['uses chai addMethod', /\baddMethod\b/g],
 ];
 
 const count = (text: string, pattern: RegExp): number => text.match(pattern)?.length ?? 0;

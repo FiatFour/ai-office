@@ -179,6 +179,17 @@ describe('registry', () => {
       expect(id(remote)).toBe('github.com/acme/repo');
     });
 
+    it('collapses repeated slashes in the path', () => {
+      expect(id('https://github.com//org//repo')).toBe('github.com/org/repo');
+      expect(id('git@github.com:org//repo.git')).toBe('github.com/org/repo');
+    });
+
+    it('keeps a bracketed IPv6 host whole in scp-like and URL spellings', () => {
+      expect(id('git@[::1]:org/repo')).toBe('[::1]/org/repo');
+      expect(id('ssh://git@[::1]/org/repo.git')).toBe('[::1]/org/repo');
+      expect(id('ssh://git@[::1]:22/org/repo')).toBe('[::1]/org/repo');
+    });
+
     it('keeps a port that is not the default for the scheme', () => {
       expect(id('ssh://git@git.example.com:2222/acme/repo.git')).toBe('git.example.com:2222/acme/repo');
       expect(id('https://git.example.com:8443/acme/repo')).toBe('git.example.com:8443/acme/repo');

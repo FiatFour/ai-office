@@ -640,6 +640,20 @@ describe.skipIf(POSIX_ONLY)('the tests the grader runs come from the base tree',
     });
   });
 
+  it('grades a typechange like any other change, in both directions', async () => {
+    const { fx, prepared, scratch } = await prepareFixture();
+    mkdirSync(join(prepared.installed, 'was-dir'), { recursive: true });
+    writeFileSync(join(prepared.installed, 'was-dir/a.txt'), 'a\n');
+    writeFileSync(join(prepared.installed, 'was-file'), 'f\n');
+    const change = {
+      files: [fixed, { path: 'was-dir', content: 'now a file\n' }, { path: 'was-file/b.txt', content: 'b\n' }],
+      deleted: ['was-dir/a.txt', 'was-file'],
+    };
+    const g = await grade(fx.task, prepared, change, localRunner, scratch);
+    expect(g.outcome).toBe('pass');
+    expect(g.note).not.toMatch(/refused|directory/);
+  });
+
   it('keeps the code under test editable: a source file a hidden spec imports is not test-side', async () => {
     const { fx, prepared, scratch } = await prepareFixture();
     expect((await grade(fx.task, prepared, { files: [fixed], deleted: [] }, localRunner, scratch)).outcome).toBe(

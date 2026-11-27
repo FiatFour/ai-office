@@ -821,3 +821,20 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
     expect((await post(hq, '/api/tickets', { id: 'alpha/t1' })).status).toBe(200);
   });
 });
+
+/** The `ci` status of the first `red` heads the fake sees fails; later heads pass. */
+const redFirst = (fake: FakeGithub, red: number) => {
+  const set = fake.setStatus.bind(fake);
+  let heads = 0;
+  fake.setStatus = (sha, context) => set(sha, context, heads++ < red ? 'failure' : 'success');
+};
+
+describe.skipIf(!hasSqlite)('a red check', () => {
+  it('goes back to the author as a fix round', async () => {
+    const { fake, hosts } = twoAccounts();
+    redFirst(fake, 1);
+    const { hq } = await boot(hosts);
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    await until(hq, () => fake.filesAt('aw/alpha/t2').get('docs/note.md') === '# Note\n\nsecond draft\n');
+  });
+});

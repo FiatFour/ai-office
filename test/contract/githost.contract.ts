@@ -35,6 +35,8 @@ export interface GithostSubject extends Subject {
   readonly firstNumber?: number;
   /** The host keeps the login's case on every read, so logins compare byte for byte. A live host may not. */
   readonly exactLogin?: boolean;
+  /** Fails one job on a commit, with this log. Set by a subject that has `failing-checks`. */
+  readonly fail?: (headSha: string, name: string, log: string) => void;
   branch(tag: string): string;
 }
 
@@ -42,6 +44,7 @@ const folded = (s: GithostSubject, login: string): string => (s.exactLogin === t
 
 const SECOND_ACCOUNT = 'second-account';
 const BULK = 'bulk-writes';
+const FAILING = 'failing-checks';
 const BASE = 'main';
 
 const parse = (p: Payload): HostEvent | null =>
@@ -242,6 +245,25 @@ export const githostCases: readonly Case<GithostSubject>[] = [
         }),
       ).rejects.toThrow(WriteRefused);
       expect(moves()).toBe(before);
+    },
+  },
+  {
+    id: 'a-failed-job-reads-back-bounded-and-without-secrets',
+    rule: 'failures names each failed job of a commit with the end of its log, bounded and with token shapes removed',
+    needs: [FAILING],
+    run: async (s) => {
+      const { head, pr } = await open(s, 'red', [{ path: 'contract/a.txt', content: 'a\n' }]);
+      expect(await s.author.failures(s.repo, head)).toEqual([]);
+      const token = `ghp_${'a1B2'.repeat(9)}`;
+      const noise = Array.from({ length: 5_000 }, (_, i) => `noise line ${i}`).join('\n');
+      s.fail?.(head, 'unit', `${noise}\nexpected 1 to be 2 with ${token}\n`);
+      expect((await s.author.snapshot(s.repo, pr.number)).checks.map((c) => c.state)).toContain('failure');
+      const [failure, ...rest] = await s.author.failures(s.repo, head);
+      expect(rest).toEqual([]);
+      expect(failure?.name).toBe('unit');
+      expect(failure?.output).toContain('expected 1 to be 2');
+      expect(failure?.output).not.toContain(token);
+      expect(failure?.output?.length).toBeLessThan(10_000);
     },
   },
   {

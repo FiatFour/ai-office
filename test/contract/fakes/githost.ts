@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
+import { logExcerpt } from '../../../server/githost/ci-log.ts';
 import type {
   ApiCall,
   ChangeFact,
   ChangeSnapshot,
+  CheckFailure,
   CommentFact,
   FileEdit,
   GitHost,
@@ -24,7 +26,9 @@ export type HostFault =
   | 'any-branch'
   | 'merges'
   | 'login-drifts'
-  | 'foreign-marker-trusted';
+  | 'foreign-marker-trusted'
+  | 'hides-failures'
+  | 'raw-logs';
 
 interface Branch {
   head: string;
@@ -41,6 +45,7 @@ class World {
   readonly comments: Array<{ number: number; author: string; id: string; body: string }> = [];
   readonly calls: ApiCall[] = [];
   readonly lines: CommentFact[] = [];
+  readonly red: Array<{ headSha: string; name: string; log: string }> = [];
   clock = Date.parse('2026-11-22T00:00:00Z');
   next = 1;
 }
@@ -120,7 +125,26 @@ export class MemoryHost implements GitHost {
     call(this.world, 'GET', `/pulls/${number}`);
     if (this.faults.has('merges')) call(this.world, 'PUT', `/pulls/${number}/merge`);
     const change = this.world.changes.find((c) => c.number === number) as ChangeFact;
-    return { change, reviews: this.world.reviews.filter((r) => r.number === number), checks: [] };
+    const checks = this.world.red
+      .filter((c) => c.headSha === change.headSha)
+      .map(({ headSha, name }) => ({
+        host: 'github' as const,
+        kind: 'check' as const,
+        repo: change.repo,
+        headSha,
+        name,
+        state: 'failure' as const,
+        at: this.world.clock,
+      }));
+    return { change, reviews: this.world.reviews.filter((r) => r.number === number), checks };
+  }
+
+  async failures(_repo: string, headSha: string): Promise<CheckFailure[]> {
+    call(this.world, 'GET', `/commits/${headSha}/check-runs`);
+    if (this.faults.has('hides-failures')) return [];
+    return this.world.red
+      .filter((c) => c.headSha === headSha)
+      .map(({ name, log }) => ({ name, output: this.faults.has('raw-logs') ? log : logExcerpt(log) }));
   }
 
   async comments(_repo: string, number: number): Promise<CommentFact[]> {
@@ -204,7 +228,7 @@ export class MemoryHost implements GitHost {
 export const memorySubject = (
   faults: readonly HostFault[] = [],
   payloads: readonly Payload[] = [],
-  has: readonly string[] = ['second-account', 'bulk-writes'],
+  has: readonly string[] = ['second-account', 'bulk-writes', 'failing-checks'],
 ): GithostSubject => {
   const world = new World();
   const set = new Set(faults);
@@ -222,5 +246,6 @@ export const memorySubject = (
     firstNumber: 1,
     exactLogin: true,
     branch: (tag) => `aw/alpha/${tag}`,
+    fail: (headSha, name, log) => world.red.push({ headSha, name, log }),
   };
 };

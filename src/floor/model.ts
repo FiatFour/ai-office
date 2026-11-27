@@ -19,6 +19,7 @@ export const ACTION_KINDS = [
   'ready_to_merge',
   'closed_unmerged',
   'round_limit',
+  'checks_failed',
   'website',
   'alert',
   'job_failed',
@@ -31,6 +32,7 @@ export interface SnapshotActionLike {
   readonly subject?: string;
   readonly site?: string;
   readonly url?: string;
+  readonly checks?: readonly string[];
 }
 
 export interface SnapshotLike {
@@ -108,6 +110,8 @@ const actionOf = (action: SnapshotActionLike): { kind: ActionKind; detail: strin
       return { kind: 'ready_to_merge', detail: null };
     case 'round_limit':
       return { kind: 'round_limit', detail: null };
+    case 'checks_failed':
+      return { kind: 'checks_failed', detail: action.checks?.join(', ') ?? null };
     case 'website':
       return { kind: 'website', detail: action.site ?? null };
     case 'alert':

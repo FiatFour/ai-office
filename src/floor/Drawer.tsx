@@ -84,7 +84,7 @@ export const Drawer = ({
                     <b className="pixel">{t('floor.actions.for', { name: action.worker })}</b>
                   )}
                   <span>
-                    {/* i18n-keys: floor.actions.kind.ready_to_merge floor.actions.kind.closed_unmerged floor.actions.kind.round_limit floor.actions.kind.website floor.actions.kind.alert floor.actions.kind.job_failed */}
+                    {/* i18n-keys: floor.actions.kind.ready_to_merge floor.actions.kind.closed_unmerged floor.actions.kind.round_limit floor.actions.kind.checks_failed floor.actions.kind.website floor.actions.kind.alert floor.actions.kind.job_failed */}
                     {t(`floor.actions.kind.${action.kind}`, { task: action.task ?? '', detail: action.detail ?? '' })}
                   </span>
                   {action.url === null ? null : (

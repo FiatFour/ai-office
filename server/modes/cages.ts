@@ -16,6 +16,7 @@ import { briefMarker, mergeBrief, type ReviewRound, renderBrief } from '../brief
 import { InvalidEvent } from '../events.ts';
 import {
   type ChangeSnapshot,
+  type CheckFailure,
   type CommentFact,
   DROPPED_MARK,
   type GitHost,
@@ -23,6 +24,7 @@ import {
   type LineComment,
   type ReviewDraft,
   type ReviewFact,
+  redChecks,
   toPoll,
 } from '../githost/host.ts';
 import { inlineCode, plainLine, quoteBlock, TASK_ID, unquote } from '../githost/sanitize.ts';
@@ -45,6 +47,13 @@ export type ActionItem =
   | { readonly kind: 'ready_to_merge'; readonly task: TaskId; readonly url: string; readonly brief: string }
   | { readonly kind: 'round_limit'; readonly task: TaskId; readonly url: string; readonly fixRounds: number }
   | {
+      readonly kind: 'checks_failed';
+      readonly task: TaskId;
+      readonly url: string;
+      readonly fixRounds: number;
+      readonly checks: readonly string[];
+    }
+  | {
       readonly kind: 'website';
       readonly site: string;
       readonly host: string;
@@ -59,6 +68,8 @@ export type ActionItem =
 export interface ModeView {
   readonly rounds: Readonly<Record<TaskId, number>>;
   readonly usage: Readonly<Record<TaskId, readonly (Usage | null)[]>>;
+  /** The checks that are red on the current head of each task. */
+  readonly red: Readonly<Record<TaskId, readonly string[]>>;
   readonly jobs: readonly string[];
   readonly reviewGap: string | null;
 }
@@ -100,9 +111,17 @@ export interface CagesOptions {
 
 const ROUND_LIMIT = 3;
 
+interface FixJob<K extends 'fix' | 'ci'> {
+  readonly kind: K;
+  readonly box: Box & { pr: string };
+  readonly change: Change;
+  readonly round: number;
+}
+
 type Job =
   | { readonly kind: 'author'; readonly box: Box; readonly round: 0 }
-  | { readonly kind: 'fix'; readonly box: Box & { pr: string }; readonly change: Change; readonly round: number }
+  | FixJob<'fix'>
+  | FixJob<'ci'>
   | {
       readonly kind: 'review';
       readonly box: Box & { pr: string };
@@ -147,6 +166,9 @@ const objectOf = (raw: unknown): Record<string, unknown> => {
 
 const REVIEW_POSTS = 4;
 
+const hasOpenChange = (box: Box): box is Box & { state: 'test' | 'qc' | 'merge' } =>
+  box.state === 'test' || box.state === 'qc' || box.state === 'merge';
+
 export const cagesMode = (options: CagesOptions): ModeFactory => {
   for (const task of Object.keys(options.tickets))
     if (!TASK_ID.test(task)) throw new InvalidEvent(`the task id ${JSON.stringify(task)} is not <factory>/<task>`);
@@ -157,6 +179,8 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
     const maxFailures = options.maxFailures ?? 3;
     const abort = new AbortController();
     const votes = new Map<string, Array<{ reviewer: string; verdict: Verdict; head: string }>>();
+    const redHeads = new Map<string, Set<string>>();
+    const red = new Map<string, { head: string; names: string[] }>();
     let seen = 0;
     const running = new Map<TaskId, Promise<void>>();
     const again = new Set<TaskId>();
@@ -178,23 +202,35 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         seen = seq;
         if (event.source === 'webhook' && event.kind === 'review')
           record(changeRef(event.repo, event.number), event.reviewer, event.verdict, event.headSha);
-        if (event.source === 'poll')
-          for (const r of event.reviews)
-            record(changeRef(event.repo, event.number), r.reviewer, r.verdict, event.headSha);
+        if (event.source === 'poll') {
+          const ref = changeRef(event.repo, event.number);
+          for (const r of event.reviews) record(ref, r.reviewer, r.verdict, event.headSha);
+          if (event.checks.some((check) => check.state === 'failure'))
+            redHeads.set(ref, (redHeads.get(ref) ?? new Set()).add(event.headSha));
+        }
       }
     };
-    const roundsOf = (change: Change): number =>
-      new Set(
-        (votes.get(changeRef(change.repo, change.number)) ?? [])
-          .filter((v) => v.verdict === 'changes')
-          .map((v) => v.head),
-      ).size;
+    /** The heads sent back to the author, for a changes verdict or a red check: both spend the one round limit. */
+    const roundsOf = (change: Change): number => {
+      const ref = changeRef(change.repo, change.number);
+      return new Set([
+        ...(votes.get(ref) ?? []).filter((v) => v.verdict === 'changes').map((v) => v.head),
+        ...(redHeads.get(ref) ?? []),
+      ]).size;
+    };
+    const redOn = (change: Change): readonly string[] => {
+      const seenRed = red.get(changeRef(change.repo, change.number));
+      return seenRed?.head === change.head.v ? seenRed.names : [];
+    };
 
     const ingest = (event: Event | null) => {
       if (event !== null) hq.ingest(event);
     };
+    // Red is read from the host's own answer, never from the reducer state: a poll carries the PR's time for every check,
+    // so there a failure does not replace a pending check. A read that fails changes nothing here.
     const take = (snapshot: ChangeSnapshot) => {
       const event = toPoll(snapshot);
+      red.set(changeRef(event.repo, event.number), { head: event.headSha, names: redChecks(snapshot) });
       const key = `${event.repo}#${event.number}`;
       const body = canonicalJson(event);
       if (lastPoll.get(key) === body) return event;
@@ -216,13 +252,18 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       const box = state.boxes[task];
       if (box === undefined) return null;
       if (box.state === 'building') return { kind: 'author', box, round: 0 };
-      if (box.state !== 'qc' && box.state !== 'merge') return null;
+      if (!hasOpenChange(box)) return null;
       const change = state.changes[box.pr];
       if (change === undefined || change.state !== 'open') return null;
+      const rounds = roundsOf(change);
+      const fixRound = <K extends 'fix' | 'ci'>(kind: K) => {
+        return rounds > roundLimit ? null : { kind, box, change, round: rounds };
+      };
+      if (redOn(change).length > 0) return fixRound('ci');
+      if (box.state === 'test') return null;
       if (box.state === 'merge')
         return briefs.get(task)?.head === change.head.v ? null : { kind: 'brief', box, change };
-      const rounds = roundsOf(change);
-      if (box.changesRequested) return rounds > roundLimit ? null : { kind: 'fix', box, change, round: rounds };
+      if (box.changesRequested) return fixRound('fix');
       if (box.reviewer !== null && !reviewed(state, change, box.reviewer))
         return { kind: 'review', box, change, reviewer: box.reviewer, round: rounds + 1 };
       return null;
@@ -269,7 +310,13 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       return [...inline, ...carried];
     };
 
-    const runAuthor = async (task: TaskId, worker: string, round: number, comments: readonly CommentFact[]) => {
+    const runAuthor = async (
+      task: TaskId,
+      worker: string,
+      round: number,
+      comments: readonly CommentFact[],
+      failures?: readonly CheckFailure[],
+    ) => {
       const result = await runtimeOf(worker).run({
         role: 'author',
         task,
@@ -277,6 +324,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         ticket: ticketOf(task),
         round,
         comments,
+        ...(failures === undefined ? {} : { failures }),
         signal: abort.signal,
       });
       if (result.role !== 'author') throw new Error('the author runtime returned a review');
@@ -309,7 +357,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       await settle(opened.number, head);
     };
 
-    const fix = async (job: Extract<Job, { kind: 'fix' }>) => {
+    const fix = async (job: FixJob<'fix'>) => {
       const task = job.box.id;
       const now = await poll(job.change.number);
       if (now.headSha !== job.change.head.v) return;
@@ -318,9 +366,20 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         (await host.snapshot(repo, job.change.number)).reviews,
         job.change.head.v,
       );
-      const head = await runAuthor(task, options.author, job.round, asked);
+      await push(job, await runAuthor(task, options.author, job.round, asked));
+    };
+
+    const push = async (job: FixJob<'fix' | 'ci'>, head: string) => {
       if (head === job.change.head.v) throw new Error('the fix round changed no file');
       await settle(job.change.number, head);
+    };
+
+    const fixChecks = async (job: FixJob<'ci'>) => {
+      const now = await poll(job.change.number);
+      if (now.headSha !== job.change.head.v || redOn(job.change).length === 0) return;
+      const failures = await host.failures(repo, job.change.head.v);
+      if (failures.length === 0) return;
+      await push(job, await runAuthor(job.box.id, options.author, job.round, [], failures));
     };
 
     const reviewFact = (posted: ReviewFact, change: Change, worker: string, intended: Verdict): Event | null => {
@@ -451,6 +510,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
     const execute = (job: Job): Promise<void> => {
       if (job.kind === 'author') return author(job);
       if (job.kind === 'fix') return fix(job);
+      if (job.kind === 'ci') return fixChecks(job);
       if (job.kind === 'review') return review(job);
       return brief(job);
     };
@@ -525,6 +585,20 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       const state = hq.state();
       const items: ActionItem[] = [];
       for (const box of Object.values(state.boxes)) {
+        if (hasOpenChange(box)) {
+          const change = state.changes[box.pr];
+          if (change?.state === 'open' && redOn(change).length > 0) {
+            if (roundsOf(change) > roundLimit)
+              items.push({
+                kind: 'checks_failed',
+                task: box.id,
+                url: `${repo}#${change.number}`,
+                fixRounds: roundsOf(change) - 1,
+                checks: redOn(change),
+              });
+            continue;
+          }
+        }
         if (box.state === 'merge') {
           const written = briefs.get(box.id);
           const change = state.changes[box.pr];
@@ -564,14 +638,18 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       project();
       const state = hq.state();
       const rounds: Record<TaskId, number> = {};
+      const failing: Record<TaskId, readonly string[]> = {};
       for (const box of Object.values(state.boxes)) {
         const change = 'pr' in box ? state.changes[box.pr] : undefined;
-        if (change !== undefined) rounds[box.id] = roundsOf(change);
+        if (change === undefined) continue;
+        rounds[box.id] = roundsOf(change);
+        if (redOn(change).length > 0) failing[box.id] = redOn(change);
       }
       const runtimes = new Set<RuntimeId>([runtimeOf(options.author).id, runtimeOf(options.reviewer).id]);
       return {
         rounds,
         usage: Object.fromEntries(usage),
+        red: failing,
         jobs: [...running.keys()],
         reviewGap:
           runtimes.size === 1 ? `author and reviewer both run on ${[...runtimes][0]}; Codex is deferred (G0)` : null,

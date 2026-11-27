@@ -1,5 +1,5 @@
 import type { TaskId, Verdict } from '@agent-works/core';
-import type { ChangeFact, CommentFact, FileEdit, HeadFile, LineComment } from '../githost/host.ts';
+import type { ChangeFact, CheckFailure, CommentFact, FileEdit, HeadFile, LineComment } from '../githost/host.ts';
 
 export type RuntimeId = 'claude-code' | 'codex' | 'scripted';
 
@@ -30,7 +30,12 @@ interface JobBase {
 
 export type AgentJob = JobBase &
   (
-    | { readonly role: 'author'; readonly comments: readonly CommentFact[] }
+    | {
+        readonly role: 'author';
+        readonly comments: readonly CommentFact[];
+        /** Set on a fix round that answers red CI. */
+        readonly failures?: readonly CheckFailure[];
+      }
     | { readonly role: 'reviewer'; readonly change: ChangeFact; readonly files: readonly HeadFile[] }
   );
 

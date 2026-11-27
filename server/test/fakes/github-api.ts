@@ -99,6 +99,8 @@ export class FakeGithub {
   readonly comments: Comment[] = [];
   readonly issueComments: Array<{ id: number; pr: number; user: string; body: string; at: number }> = [];
   readonly statuses: Array<{ sha: string; context: string; state: string; at: number }> = [];
+  readonly runs: Array<Record<string, unknown> & { id: number; head_sha: string }> = [];
+  readonly logs = new Map<number, string>();
   private clock = Date.parse('2026-11-17T00:00:00Z');
   private next = 100;
 
@@ -162,6 +164,27 @@ export class FakeGithub {
 
   filesAt(branch: string): Map<string, string> {
     return new Map(this.trees.get(this.refs.get(branch) ?? '') ?? []);
+  }
+
+  /** A finished Actions job, recorded as its check run and its log. A run of the same name replaces the one before. */
+  failJob(headSha: string, name: string, log: string | null, conclusion = 'failure', app = 'github-actions'): number {
+    const run = this.next++;
+    const at = iso(this.tick());
+    const before = this.runs.findIndex((r) => r.head_sha === headSha && r.name === name);
+    if (before >= 0) this.runs.splice(before, 1);
+    this.runs.push({
+      id: run,
+      head_sha: headSha,
+      name,
+      status: 'completed',
+      conclusion,
+      started_at: at,
+      completed_at: at,
+      app: { slug: app },
+      output: { title: null, summary: null, text: null },
+    });
+    if (log !== null) this.logs.set(run, log);
+    return run;
   }
 
   private prObject(pr: Pr) {
@@ -418,13 +441,19 @@ export class FakeGithub {
     m = /^\/commits\/([0-9a-f]+)\/status$/.exec(rest);
     if (m) {
       const head = m[1];
+      // GitHub's combined status holds the latest status of each context.
+      const latest = new Map(this.statuses.filter((s) => s.sha === head).map((s) => [s.context, s]));
       return ok({
-        statuses: this.statuses
-          .filter((s) => s.sha === head)
-          .map((s) => ({ context: s.context, state: s.state, updated_at: iso(s.at) })),
+        statuses: [...latest.values()].map((s) => ({ context: s.context, state: s.state, updated_at: iso(s.at) })),
       });
     }
-    if (/^\/commits\/[0-9a-f]+\/check-runs$/.test(rest)) return ok({ check_runs: [] });
+    m = /^\/commits\/([0-9a-f]+)\/check-runs$/.exec(rest);
+    if (m) return ok({ check_runs: this.runs.filter((r) => r.head_sha === m?.[1]) });
+    m = method === 'GET' ? /^\/actions\/jobs\/(\d+)\/logs$/.exec(rest) : null;
+    if (m) {
+      const log = this.logs.get(Number(m[1]));
+      return log === undefined ? fail(404, 'Not Found') : ok(log);
+    }
     return fail(404, `Not Found: ${method} ${rest}`);
   }
 }

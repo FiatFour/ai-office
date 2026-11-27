@@ -5,6 +5,7 @@ import type { CageShell } from '../server/agents/claude-code.ts';
 import { claudeCode } from '../server/agents/claude-code.ts';
 import { AgentFailed, type Ticket, type Usage } from '../server/agents/runtime.ts';
 import { allPages, type ChangeSnapshot, type GitHost, type Transport } from '../server/githost/host.ts';
+import { plainLine } from '../server/githost/sanitize.ts';
 import { type RunningHq, startHq } from '../server/hq.ts';
 import { type ModeFactory, REVIEW_MARK } from '../server/modes/cages.ts';
 import { type Arm, ArmFailed, type ArmRun } from './arms.ts';
@@ -112,7 +113,9 @@ export interface FactoryEnv {
   readonly reviewPollMs?: number;
 }
 
-const STOPS = new Set(['ready_to_merge', 'round_limit', 'job_failed']);
+const STOPS = new Set(['ready_to_merge', 'round_limit', 'checks_failed', 'job_failed']);
+
+const namesOfChecks = (checks: readonly string[]): string => checks.map((name) => plainLine(name, 80)).join(', ');
 
 export const removedPaths = (pullFiles: readonly unknown[]): string[] =>
   pullFiles.flatMap((f) => {
@@ -164,8 +167,12 @@ export const factoryArm = (env: FactoryEnv): Arm => ({
           note: `the host refused what the crew pushed, so nothing is graded: ${stop.error}`,
           refused: true,
         };
-      if (stop.kind === 'failed') throw new ArmFailed(`no retry after the first failure: ${stop.error}`);
-      if (stop.kind === 'job_failed') throw new ArmFailed(`job failed: ${stop.error}`);
+      const red = view?.red[ticket.id] ?? [];
+      const during = red.length === 0 ? '' : ` [CI red: ${namesOfChecks(red)}]`;
+      if (stop.kind === 'failed') throw new ArmFailed(`no retry after the first failure: ${stop.error}${during}`);
+      if (stop.kind === 'job_failed') throw new ArmFailed(`job failed: ${stop.error}${during}`);
+      if (stop.kind === 'checks_failed')
+        throw new ArmFailed(`CI was still red at the round limit: ${namesOfChecks(red)}`);
       if (stop.kind === 'round_limit') throw new ArmFailed('the reviewer still asked for changes at the round limit');
       const change = await handle.host.findChange(handle.repo, branch);
       if (change === null) throw new ArmFailed(`no PR on ${branch}`);

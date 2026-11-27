@@ -318,6 +318,32 @@ const MUTANTS = [
     caught: [],
     table: /github-recorded on linux never ran every-/,
   },
+  {
+    name: 'github-job-log-passed-raw',
+    claim: 'a GitHub job log is bounded and stripped of token shapes before it leaves the adapter',
+    edits: [
+      [
+        'server/githost/github.ts',
+        "return typeof log === 'string' ? logExcerpt(log) : null;",
+        "return typeof log === 'string' ? log : null;",
+      ],
+    ],
+    test: HOST,
+    caught: ['a-failed-job-reads-back-bounded-and-without-secrets'],
+  },
+  {
+    name: 'gitlab-job-trace-passed-raw',
+    claim: 'a GitLab job trace is bounded and stripped of token shapes before it leaves the adapter',
+    edits: [
+      [
+        'server/githost/gitlab.ts',
+        "return typeof trace === 'string' ? logExcerpt(trace) : null;",
+        "return typeof trace === 'string' ? trace : null;",
+      ],
+    ],
+    test: HOST,
+    caught: ['a-failed-job-reads-back-bounded-and-without-secrets'],
+  },
 ];
 
 const { names: only, shard } = parseArgs(process.argv.slice(2));

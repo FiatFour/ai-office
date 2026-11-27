@@ -1,10 +1,12 @@
 import type { HostChangeState } from '@agent-works/core';
+import { logExcerpt } from './ci-log.ts';
 import {
   type ApiCall,
   allPages,
   branchProblem,
   type ChangeFact,
   type CheckFact,
+  type CheckFailure,
   type CommentFact,
   carriedList,
   contentText,
@@ -19,10 +21,13 @@ import {
   type HttpRequest,
   id,
   isPlaced,
+  MAX_FAILURES,
+  MAX_LOGS,
   once,
   oneOf,
   optLine,
   orNull,
+  outputOf,
   type ReviewFact,
   type Scope,
   str,
@@ -262,6 +267,32 @@ export const gitlab = ({ send, log, repo, base }: GitlabOptions): GitHost => {
     }));
   };
 
+  /** The failed jobs of the commit's failed pipelines. A pipeline with none, such as a canceled one, is named itself. */
+  const failures = async (repo: string, headSha: string): Promise<CheckFailure[]> => {
+    const failed = (await pipelines(repo, headSha)).filter((p) => p.state === 'failure');
+    const found: { name: string; job: string | null }[] = [];
+    for (const pipeline of failed) {
+      const number = pipeline.name.slice('pipeline '.length);
+      const jobs = (await allPages(get, `${project(repo)}/pipelines/${number}/jobs?scope[]=failed`)).filter(
+        (job) => (job as { allow_failure?: unknown }).allow_failure !== true,
+      );
+      if (jobs.length === 0) found.push({ name: pipeline.name, job: null });
+      for (const job of jobs) found.push({ name: str(job, 'name'), job: id(job, 'id') });
+    }
+    return Promise.all(
+      found.slice(0, MAX_FAILURES).map(async ({ name, job }, index) => ({
+        name,
+        output:
+          job === null || index >= MAX_LOGS
+            ? null
+            : await outputOf(async () => {
+                const trace = await get(`${project(repo)}/jobs/${job}/trace`);
+                return typeof trace === 'string' ? logExcerpt(trace) : null;
+              }),
+      })),
+    );
+  };
+
   const paths = async (repo: string, number: number): Promise<string[]> => {
     const diffs = await allPages(get, `${project(repo)}/merge_requests/${number}/diffs`);
     return diffs.filter((d) => field(d, 'deleted_file') !== true).map((d) => str(d, 'new_path'));
@@ -335,6 +366,8 @@ export const gitlab = ({ send, log, repo, base }: GitlabOptions): GitHost => {
       const list = await allPages(get, `${project(repo)}/merge_requests/${number}/notes`);
       return list.filter((n) => field(n, 'system') !== true).map((n) => note(repo, number, n));
     },
+
+    failures,
 
     paths,
 

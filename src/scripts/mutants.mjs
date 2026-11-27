@@ -327,6 +327,11 @@ const MUTANTS = [
     claim: 'the box code is upper case',
     edits: [[MODEL, "(id.split('/').pop() ?? id).toUpperCase()", "(id.split('/').pop() ?? id)"]],
   },
+  {
+    name: 'floor-drops-checks-failed',
+    claim: 'the floor shows red CI as an Action item that names the checks',
+    edits: [[MODEL, "return { kind: 'checks_failed', detail: action.checks?.join(', ') ?? null };", 'return null;']],
+  },
   { name: 'rev-zero', claim: 'the view carries the snapshot rev', edits: [[MODEL, 'rev: snapshot.rev,', 'rev: 0,']] },
   {
     name: 'action-worker-last-owner',

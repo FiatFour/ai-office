@@ -1577,6 +1577,30 @@ const MUTANTS = [
     edits: [['bench/no-ci.ts', '    o.signal.throwIfAborted();\n', '']],
     tests: [NOCI],
   },
+  {
+    name: 'arm-waits-out-red-ci',
+    claim: 'the factory arm ends when red CI reaches the round limit',
+    edits: [['bench/arms-live.ts', "'round_limit', 'checks_failed', 'job_failed'", "'round_limit', 'job_failed'"]],
+    tests: ['bench/setb/test/arms.test.ts'],
+  },
+  {
+    name: 'arm-failure-hides-red',
+    claim: 'a failure during a CI fix round names the red check',
+    edits: [['bench/arms-live.ts', "red.length === 0 ? '' : `", "red.length >= 0 ? '' : `"]],
+    tests: ['bench/setb/test/arms.test.ts'],
+  },
+  {
+    name: 'red-limit-not-final',
+    claim: 'red CI at the round limit is a result of the task',
+    edits: [['bench/setb/arms.ts', '  String.raw`CI was still red at the round limit: [^\\n]*$`,\n', '']],
+    tests: ['bench/setb/test/arms.test.ts'],
+  },
+  {
+    name: 'red-note-hides-outcome',
+    claim: 'the red-check note does not stop a failure from being a result',
+    edits: [['bench/setb/arms.ts', "message.replace(RED_NOTE, '')", 'message']],
+    tests: ['bench/setb/test/arms.test.ts'],
+  },
 ];
 
 /** @param {string[]} tests */

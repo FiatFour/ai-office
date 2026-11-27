@@ -251,6 +251,13 @@ describe('Action items', () => {
   });
 });
 
+describe('the item for CI that stayed red', () => {
+  it('names the failing checks', () => {
+    const items = view(atQc, [{ kind: 'checks_failed', task: TASK, checks: ['unit', 'lint'] }]).actions;
+    expect(items).toMatchObject([{ kind: 'checks_failed', detail: 'unit, lint' }]);
+  });
+});
+
 describe('the recorded demo run', () => {
   const lines = readFileSync(join(import.meta.dirname, '../../fixtures/demo/events.jsonl'), 'utf8')
     .trim()

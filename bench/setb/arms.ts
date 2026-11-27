@@ -243,13 +243,18 @@ const TASK_OUTCOMES: readonly RegExp[] = [
   "claude ended with (?:success|error_during_execution): (?:You['’]ve hit your max turns|Prompt is too long)",
   'the fix round changed no file$',
   'the reviewer still asked for changes at the round limit$',
+  String.raw`CI was still red at the round limit: [^\n]*$`,
   'the reviewer gave no json block with a verdict ',
   'the reviewer text holds a changes verdict that could not be read ',
   String.raw`refusing to push a change under \.github: `,
   String.raw`refusing POST \S+ on github: the file path "[^\n]*" is empty, hidden or holds a backslash$`,
 ].map((form) => new RegExp(`${FACTORY_WRAPPERS}${form}`));
 
-export const isTaskOutcome = (message: string): boolean => TASK_OUTCOMES.some((form) => form.test(message));
+/** The note a factory failure during a red check carries. It says what was red, not how the session ended. */
+const RED_NOTE = / \[CI red: [^\]\n]*\]$/;
+
+export const isTaskOutcome = (message: string): boolean =>
+  TASK_OUTCOMES.some((form) => form.test(message.replace(RED_NOTE, '')));
 
 /** A provider message starts a line, or follows the `claude ended with <subtype>: ` wrapper of `parseStream`. */
 const TRANSIENT =

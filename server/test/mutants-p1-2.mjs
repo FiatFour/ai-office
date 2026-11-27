@@ -20,6 +20,7 @@ const DOCKER = 'server/test/sandbox/cage-shell.test.ts';
 const CLI = 'server/test/cli.test.ts';
 const SITE = 'server/test/site.test.ts';
 const TMP = 'server/test/tmp-cleanup.test.ts';
+const CILOG = 'server/test/ci-log.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string, all?: 'all']>, tests: string[], survives?: boolean }>} */
 const MUTANTS = [
@@ -1118,6 +1119,244 @@ const MUTANTS = [
     claim: 'AW_KEEP_TMP=1 keeps the temp directories',
     edits: [['server/test/helpers.ts', "process.env.AW_KEEP_TMP !== '1'", 'true']],
     tests: [TMP],
+  },
+  {
+    name: 'red-never-reaches-author',
+    claim: 'a red check starts a fix round',
+    edits: [['server/modes/cages.ts', "if (redOn(change).length > 0) return fixRound('ci');", '']],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-while-pending',
+    claim: 'no fix round while a check is still running',
+    edits: [['server/githost/host.ts', "if (head.some((check) => check.state === 'pending')) return [];", '']],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-waits-for-skipped',
+    claim: 'a skipped check holds no fix round back',
+    edits: [
+      [
+        'server/githost/host.ts',
+        "check.state === 'pending')) return [];",
+        "check.state !== 'success' && check.state !== 'failure')) return [];",
+      ],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-rounds-not-counted',
+    claim: 'a red check spends a round of the limit',
+    edits: [['server/modes/cages.ts', '        ...(redHeads.get(ref) ?? []),\n', '']],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-limit-silent',
+    claim: 'red CI at the round limit files an Action item',
+    edits: [
+      [
+        'server/modes/cages.ts',
+        "            if (roundsOf(change) > roundLimit)\n              items.push({\n                kind: 'checks_failed',",
+        "            if (roundsOf(change) < 0)\n              items.push({\n                kind: 'checks_failed',",
+      ],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-still-ready-to-merge',
+    claim: 'a red head is never shown as ready to merge',
+    edits: [
+      [
+        'server/modes/cages.ts',
+        "            continue;\n          }\n        }\n        if (box.state === 'merge')",
+        "          }\n        }\n        if (box.state === 'merge')",
+      ],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-on-a-replaced-head',
+    claim: 'red of a replaced head says nothing about the new one',
+    edits: [
+      [
+        'server/modes/cages.ts',
+        'return seenRed?.head === change.head.v ? seenRed.names : [];',
+        'return seenRed?.names ?? [];',
+      ],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'read-error-is-red',
+    claim: 'a host read that fails is never a red check',
+    edits: [
+      [
+        'server/modes/cages.ts',
+        '          await poll(change.number);\n        } catch {}',
+        "          await poll(change.number);\n        } catch {\n          red.set(changeRef(repo, change.number), { head: change.head.v, names: ['unread'] });\n        }",
+      ],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-fix-without-recheck',
+    claim: 'the fix job reads the checks again before it spends a session',
+    edits: [
+      ['server/modes/cages.ts', 'if (now.headSha !== job.change.head.v || redOn(job.change).length === 0) return;', ''],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-fix-with-no-failure',
+    claim: 'no session starts when the host lists no failing check',
+    edits: [['server/modes/cages.ts', '      if (failures.length === 0) return;\n', '']],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-fix-without-output',
+    claim: 'the author is given the failing jobs',
+    edits: [['server/modes/cages.ts', '...(failures === undefined ? {} : { failures }),', '']],
+    tests: [CAGES],
+  },
+  {
+    name: 'red-prompt-drops-output',
+    claim: 'the prompt of a CI fix round holds the failing jobs',
+    edits: [
+      [
+        'server/agents/claude-code.ts',
+        '    if (job.failures !== undefined) return ciPrompt(order, job.round, job.failures);\n',
+        '',
+      ],
+    ],
+    tests: [AGENTS],
+  },
+  {
+    name: 'red-prompt-unquoted',
+    claim: 'job output reaches the author quoted as data',
+    edits: [['server/agents/claude-code.ts', 'quoteBlock(output, MAX_OUTPUT)', 'output']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'red-prompt-cut',
+    claim: 'the end of the excerpt is not cut off by the quote limit',
+    edits: [['server/agents/claude-code.ts', 'quoteBlock(output, MAX_OUTPUT)', 'quoteBlock(output)']],
+    tests: [AGENTS],
+  },
+  {
+    name: 'log-keeps-secrets',
+    claim: 'token shapes are removed from job output',
+    edits: [
+      [
+        'server/githost/ci-log.ts',
+        'SECRETS.reduce((text, [find, put]) => text.replace(find, put), line.slice(0, SCANNED));',
+        'line.slice(0, SCANNED);',
+      ],
+    ],
+    tests: [CILOG],
+  },
+  {
+    name: 'log-keeps-private-key',
+    claim: 'a private key is removed from job output',
+    edits: [['server/githost/ci-log.ts', 'return hidden ? HIDDEN : line;', 'return line;']],
+    tests: [CILOG],
+  },
+  {
+    name: 'log-unbounded',
+    claim: 'the excerpt has a total bound',
+    edits: [['server/githost/ci-log.ts', '    if (used > room) break;\n', '']],
+    tests: [CILOG],
+  },
+  {
+    name: 'log-long-line',
+    claim: 'one line of the excerpt has a bound',
+    edits: [['server/githost/ci-log.ts', 'redact(lines[i] as string).slice(0, LINE)', 'redact(lines[i] as string)']],
+    tests: [CILOG],
+  },
+  {
+    name: 'log-keeps-cleanup',
+    claim: 'the excerpt ends at the last marked error',
+    edits: [
+      [
+        'server/githost/ci-log.ts',
+        'const upTo = marked < 0 ? lines : lines.slice(0, marked + 1);',
+        'const upTo = lines;',
+      ],
+    ],
+    tests: [CILOG],
+  },
+  {
+    name: 'log-loses-early-failure',
+    claim: 'a failure line above the tail is kept',
+    edits: [['server/githost/ci-log.ts', 'filter((line) => FAILED_LINE.test(line)),', 'filter(() => false),']],
+    tests: [CILOG],
+  },
+  {
+    name: 'gh-escape-refusal-kept',
+    claim: 'a job log with colour codes is still read',
+    edits: [
+      [
+        'server/githost/host.ts',
+        "if (request.method === 'GET' && ran.err.includes(ESCAPES_FLAG)) ran = await run([ESCAPES_FLAG]);",
+        '',
+      ],
+    ],
+    tests: [CILOG],
+  },
+  {
+    name: 'log-read-error-throws',
+    claim: 'a job log that cannot be read still leaves the job named',
+    edits: [
+      [
+        'server/githost/host.ts',
+        '  } catch {\n    return null;\n  }\n};\n\nexport const signatureValid',
+        '  } catch (error) {\n    throw error;\n  }\n};\n\nexport const signatureValid',
+      ],
+    ],
+    tests: [CILOG],
+  },
+  {
+    name: 'cancelled-logs-first',
+    claim: 'the logs of cancelled jobs do not crowd out the failed one',
+    edits: [['server/githost/github.ts', '      .sort((a, b) => cancelled(a) - cancelled(b));', '      ;']],
+    tests: [CILOG],
+  },
+  {
+    name: 'every-log-read',
+    claim: 'only a few job logs are read',
+    edits: [['server/githost/github.ts', 'output: index < MAX_LOGS ? ((', 'output: index < MAX_FAILURES ? ((']],
+    tests: [CILOG],
+  },
+  {
+    name: 'any-app-log',
+    claim: 'only an Actions check run has a job log',
+    edits: [
+      [
+        'server/githost/github.ts',
+        "if ((run as { app?: { slug?: unknown } }).app?.slug !== 'github-actions') return null;",
+        '',
+      ],
+    ],
+    tests: [CILOG],
+  },
+  {
+    name: 'gitlab-allowed-failure-sent',
+    claim: 'a job allowed to fail is not sent to the author',
+    edits: [
+      ['server/githost/gitlab.ts', '(job as { allow_failure?: unknown }).allow_failure !== true,', 'job !== null,'],
+    ],
+    tests: [CILOG],
+  },
+  {
+    name: 'gitlab-canceled-unnamed',
+    claim: 'a failed pipeline with no failed job is still named',
+    edits: [
+      [
+        'server/githost/gitlab.ts',
+        '      if (jobs.length === 0) found.push({ name: pipeline.name, job: null });\n',
+        '',
+      ],
+    ],
+    tests: [CILOG],
   },
 ];
 

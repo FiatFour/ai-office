@@ -24,7 +24,8 @@ export const REVIEWER = 'vega';
 
 const BASE_REF = /^bench-base\/t-[0-9a-f]{8}-r[1-9]\d{0,2}$/;
 const WORK_REF = /^aw\/bench\/t-[0-9a-f]{8}-r[1-9]\d{0,2}$/;
-const SCRATCH_NAME = /^[\w-][\w.-]*\/[\w.-]*-scratch$/;
+export const SCRATCH_OWNER = 'FiatFour';
+const SCRATCH_NAME = /^FiatFour\/\w[\w.-]*-scratch$/;
 const GITHUB_REMOTE =
   /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([\w-]+\/[\w.-]+?)(?:\.git)?$/;
 
@@ -39,7 +40,9 @@ export const namesOf = (ticketId: string): ScratchNames => ({
 });
 
 export const scratchRepoProblem = (repo: string): string | null =>
-  SCRATCH_NAME.test(repo) ? null : `${repo} is not a scratch repo: its name must end in -scratch`;
+  SCRATCH_NAME.test(repo)
+    ? null
+    : `${repo} is not a scratch repo: it must be ${SCRATCH_OWNER}/<name>-scratch, with a name before -scratch`;
 
 const isBareRepo = (path: string): boolean =>
   existsSync(join(path, 'HEAD')) && existsSync(join(path, 'objects')) && !existsSync(join(path, '.git'));

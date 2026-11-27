@@ -18,7 +18,7 @@ import { readMergeState } from './merge-state.ts';
 import { type Flag, parseTask, type Row, type Task, type TaskA, TaskRefused } from './model.ts';
 import { readRows } from './report.ts';
 import { dockerRunner, localRunner, type Runner } from './runner.ts';
-import { AUTHOR, REVIEWER, SCRATCH_REPO, ScratchTarget, scratchEnv } from './scratch.ts';
+import { AUTHOR, MAX_RUNS, REVIEWER, SCRATCH_REPO, ScratchTarget, scratchEnv } from './scratch.ts';
 import { fixChange, mirrorPath, type Prepared, prepareTask } from './workspace.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -235,7 +235,7 @@ const runLive = async (
   timeoutFactor: number,
   homeWorker: (worker: string) => string = () => LOGIN_WORKER,
 ): Promise<number> => {
-  const runs = countOf('--runs', values.runs, 1, 1000);
+  const runs = countOf('--runs', values.runs, 1, MAX_RUNS);
   const timeoutMs = timeoutOf(task, values['timeout-ms'], timeoutFactor);
   if (!task.confirmed) throw new TaskRefused(`task ${task.id} is not confirmed by the operator: no model run`);
   if (process.env.AW_BENCH_LOGIN_CONFIRMED !== '1') throw new TaskRefused(NEEDS_LOGIN);

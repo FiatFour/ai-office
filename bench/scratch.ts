@@ -22,8 +22,10 @@ export const SCRATCH_REPO = 'FiatFour/agent-works-scratch';
 export const AUTHOR = 'nova';
 export const REVIEWER = 'vega';
 
-const BASE_REF = /^bench-base\/t-[0-9a-f]{8}-r[1-9]\d{0,2}$/;
-const WORK_REF = /^aw\/bench\/t-[0-9a-f]{8}-r[1-9]\d{0,2}$/;
+// The most runs `--runs` accepts. The ref patterns below must admit r1..r<MAX_RUNS>, no more.
+export const MAX_RUNS = 1000;
+const BASE_REF = /^bench-base\/t-[0-9a-f]{8}-r(?:[1-9]\d{0,2}|1000)$/;
+const WORK_REF = /^aw\/bench\/t-[0-9a-f]{8}-r(?:[1-9]\d{0,2}|1000)$/;
 const SCRATCH_NAME = /^[\w-][\w.-]*\/[\w.-]*-scratch$/;
 const GITHUB_REMOTE =
   /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([\w-]+\/[\w.-]+?)(?:\.git)?$/;

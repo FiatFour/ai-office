@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, main, parseArgs } from '../cli.ts';
+import { readRuntime } from '../config.ts';
 import { Store } from '../store/store.ts';
 import { folder, tempDir } from './helpers.ts';
 
@@ -50,7 +51,8 @@ const cli = (cwd: string, home: string, args: string[], env: NodeJS.ProcessEnv =
 const homes: string[] = [];
 const holders: Server[] = [];
 afterEach(() => {
-  for (const home of homes.splice(0)) cli(process.cwd(), home, ['stop']);
+  // With no HQ, `stop` still asks the container engine, which can hang for 20 s on a Windows runner.
+  for (const home of homes.splice(0)) if (readRuntime(home) !== null) cli(process.cwd(), home, ['stop']);
   for (const server of holders.splice(0)) server.close();
 });
 

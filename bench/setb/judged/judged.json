@@ -1,0 +1,127 @@
+{
+  "voided": null,
+  "judged": [
+    {
+      "verdict": "REJECT",
+      "editLines": 0,
+      "label": "pr-0e6ae968",
+      "headSha": "37c8ba63d44f70f24a7ee223ff5ba6fa8467a179",
+      "judgeMinutes": 0.5166,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AS IS",
+      "editLines": 0,
+      "label": "pr-1f4cff81",
+      "headSha": "615fd9f54680226a422be67fc7f3dadc217889b7",
+      "judgeMinutes": 0.4802,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AS IS",
+      "editLines": 0,
+      "label": "pr-228aff7b",
+      "headSha": "9472118b55502bb0dc9f2bb500bbae2e36549e99",
+      "judgeMinutes": 0.6356333333333334,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AS IS",
+      "editLines": 0,
+      "label": "pr-552ad55e",
+      "headSha": "dd34b29c1c35728b4455646835d14486795c2ca5",
+      "judgeMinutes": 0.65435,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AS IS",
+      "editLines": 0,
+      "label": "pr-590bbe20",
+      "headSha": "87c4e2ce25e9431019982b04019c7898b5535905",
+      "judgeMinutes": 0.4207166666666667,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AFTER EDITS",
+      "editLines": 3,
+      "label": "pr-5a7a5230",
+      "headSha": "fa6d5a07b6f7fc204504a544be0349d162e5f9b3",
+      "judgeMinutes": 1.1841666666666666,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AFTER EDITS",
+      "editLines": 7,
+      "label": "pr-64adfb1b",
+      "headSha": "e62a96dc51c24acdbc74f2b41de2c3708cd97bd7",
+      "judgeMinutes": 0.48165,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AFTER EDITS",
+      "editLines": 2,
+      "label": "pr-68ccccfa",
+      "headSha": "62ad0062996dbd57fb7e80390af0d4b29935b05c",
+      "judgeMinutes": 1.9840333333333333,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AS IS",
+      "editLines": 0,
+      "label": "pr-850b029a",
+      "headSha": "6e0298ba5b42897b79b0559ae5544b9ba74aec20",
+      "judgeMinutes": 0.83515,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AS IS",
+      "editLines": 0,
+      "label": "pr-911bef13",
+      "headSha": "8d9c37b13591e33e22d69b81a2b9f83972b8ca4f",
+      "judgeMinutes": 0.89405,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AFTER EDITS",
+      "editLines": 18,
+      "label": "pr-b0f44002",
+      "headSha": "6ed2d22be3b2955ccd1be1b6d5582caa1fc20785",
+      "judgeMinutes": 1.52085,
+      "attempts": 1
+    },
+    {
+      "verdict": "REJECT",
+      "editLines": 0,
+      "label": "pr-daf78816",
+      "headSha": "971520f55ca0689b4a1a574e0dba2f4f1029bdc8",
+      "judgeMinutes": 0.7289333333333333,
+      "attempts": 1
+    },
+    {
+      "verdict": "REJECT",
+      "editLines": 0,
+      "label": "pr-dd4c900f",
+      "headSha": "0de3d2b4b4e45fc51ded75ef25bcce4a35a950d3",
+      "judgeMinutes": 0.8361333333333333,
+      "attempts": 1
+    },
+    {
+      "verdict": "MERGE AS IS",
+      "editLines": 0,
+      "label": "pr-eefa16a3",
+      "headSha": "e0bcc00051992b7bdc32857e301ef71b991a869c",
+      "judgeMinutes": 0.6178,
+      "attempts": 1
+    }
+  ],
+  "unreadable": [
+    {
+      "label": "pr-3d5f6284",
+      "reason": "unreadable by leak: pr-3d5f6284: the packet would show the arm through the text \"aw-bench\""
+    },
+    {
+      "label": "pr-ea452ece",
+      "reason": "unreadable by leak: pr-ea452ece: the packet would show the arm through the text \"aw-bench\""
+    }
+  ]
+}

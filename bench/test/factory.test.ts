@@ -36,7 +36,7 @@ import {
 import { prepareTask } from '../workspace.ts';
 import { FIXED, makeFixture } from './fixture.ts';
 
-const REPO = 'acme/app-scratch';
+const REPO = 'FiatFour/app-scratch';
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
@@ -230,15 +230,32 @@ describe('what the cleanup may touch on the host', () => {
       call('PATCH', `${home}/pulls/7`, { state: 'closed', title: 'x' }),
       call('PUT', `${home}/pulls/7/merge`),
       call('POST', `${home}/pulls/7/merge`),
-      call('DELETE', '/repos/acme/other-scratch/git/refs/heads/aw/bench/t-0a1b2c3d-r1'),
+      call('DELETE', '/repos/FiatFour/other-scratch/git/refs/heads/aw/bench/t-0a1b2c3d-r1'),
     ])
       expect(cleanupProblem(bad, REPO), `${bad.method} ${bad.path}`).not.toBeNull();
   });
 
   it('accepts a scratch repo by its name and refuses a repo that is not one', () => {
     expect(scratchRepoProblem('FiatFour/agent-works-scratch')).toBeNull();
-    for (const repo of ['FiatFour/ai-office', 'FiatFour/agent-works', 'ai-office', 'a/b-scratch/c'])
+    for (const repo of [
+      'FiatFour/ai-office',
+      'FiatFour/agent-works',
+      'ai-office',
+      'a/b-scratch/c',
+      'someoneelse/agent-works-scratch',
+      'fiatfour/agent-works-scratch',
+      'FiatFour/-scratch',
+      'FiatFour/.-scratch',
+      'FiatFour/-x-scratch',
+      'FiatFour/a/b-scratch',
+    ])
       expect(scratchRepoProblem(repo), repo).not.toBeNull();
+  });
+
+  it('pins the owner and requires a real repo name when the target is made', () => {
+    for (const repo of ['someoneelse/agent-works-scratch', 'FiatFour/-scratch'])
+      expect(() => ScratchTarget.of(repo), repo).toThrow(TaskRefused);
+    expect(ScratchTarget.of('FiatFour/x-scratch').repo).toBe('FiatFour/x-scratch');
   });
 
   it('names the base and the work branch from the ticket id and nothing else', () => {

@@ -19,7 +19,7 @@ import { AUTHOR, namesOf, oneSessionEach, REVIEWER, scratchEnv } from '../scratc
 import { prepareTask } from '../workspace.ts';
 import { FIXED, makeFixture } from './fixture.ts';
 
-const REPO = 'acme/app-scratch';
+const REPO = 'FiatFour/app-scratch';
 const FIXED_AGAIN = `${FIXED}// tidy\n`;
 
 const gitOf = (dir: string, ...args: string[]) =>
@@ -108,7 +108,7 @@ const CASES: readonly Case[] = [
     files: () => slug(FIXED),
     sessions: { author0: 1 },
     outcome: 'error',
-    note: 'POST /repos/acme/app-scratch/pulls -> 500',
+    note: 'POST /repos/FiatFour/app-scratch/pulls -> 500',
   },
   {
     name: 'after the fix session: the round changed no file',

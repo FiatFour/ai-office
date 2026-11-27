@@ -1003,8 +1003,8 @@ describe.skipIf(!hasSqlite)('a red check', () => {
     return fixes();
   };
 
-  it('starts no fix round when a rerun has begun before the fix job read the checks', async () => {
-    expect(await atTheFixRead((set, head) => set(head, 'ci', 'pending'))).toEqual([]);
+  it('starts no fix round when another check has started before the fix job read the checks', async () => {
+    expect(await atTheFixRead((set, head) => set(head, 'late', 'pending'))).toEqual([]);
   });
 
   it('starts no fix round when the host then lists no failing check', async () => {

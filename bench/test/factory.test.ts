@@ -235,6 +235,13 @@ describe('what the cleanup may touch on the host', () => {
       expect(cleanupProblem(bad, REPO), `${bad.method} ${bad.path}`).not.toBeNull();
   });
 
+  it('accepts every run number --runs allows, 1 through 1000, and no other', () => {
+    const del = (n: string) => call('DELETE', `${home}/git/refs/heads/aw/bench/t-0a1b2c3d-r${n}`);
+    for (const n of ['1', '999', '1000']) expect(cleanupProblem(del(n), REPO), n).toBeNull();
+    for (const n of ['0', '1001', '9999', '01']) expect(cleanupProblem(del(n), REPO), n).not.toBeNull();
+    expect(namesOf('bench/t-0a1b2c3d-r1000').base).toBe('bench-base/t-0a1b2c3d-r1000');
+  });
+
   it('accepts a scratch repo by its name and refuses a repo that is not one', () => {
     expect(scratchRepoProblem('FiatFour/agent-works-scratch')).toBeNull();
     for (const repo of ['FiatFour/ai-office', 'FiatFour/agent-works', 'ai-office', 'a/b-scratch/c'])

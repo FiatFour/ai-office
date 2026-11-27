@@ -784,7 +784,7 @@ const MUTANTS = [
     edits: [
       [
         'bench/scratch.ts',
-        'const BASE_REF = /^bench-base\\/t-[0-9a-f]{8}-r[1-9]\\d{0,2}$/;',
+        'const BASE_REF = /^bench-base\\/t-[0-9a-f]{8}-r(?:[1-9]\\d{0,2}|1000)$/;',
         'const BASE_REF = /^.*$/;',
       ],
     ],
@@ -796,7 +796,7 @@ const MUTANTS = [
     edits: [
       [
         'bench/scratch.ts',
-        'const WORK_REF = /^aw\\/bench\\/t-[0-9a-f]{8}-r[1-9]\\d{0,2}$/;',
+        'const WORK_REF = /^aw\\/bench\\/t-[0-9a-f]{8}-r(?:[1-9]\\d{0,2}|1000)$/;',
         'const WORK_REF = /^.*$/;',
       ],
     ],

@@ -24,6 +24,7 @@ import {
   cleanupProblem,
   dropBase,
   gitEnv,
+  MAX_RUNS,
   namesOf,
   oneSessionEach,
   REVIEWER,
@@ -233,6 +234,24 @@ describe('what the cleanup may touch on the host', () => {
       call('DELETE', '/repos/acme/other-scratch/git/refs/heads/aw/bench/t-0a1b2c3d-r1'),
     ])
       expect(cleanupProblem(bad, REPO), `${bad.method} ${bad.path}`).not.toBeNull();
+  });
+
+  it('admits the scratch refs of every run --runs accepts and no run past it', async () => {
+    const work = join(tempDir('cap'), 'scratch');
+    const remote = bare();
+    for (const n of [1, 9, 10, 99, 100, 999, MAX_RUNS]) {
+      const id = `t-0a1b2c3d-r${n}`;
+      expect(cleanupProblem(call('DELETE', `${home}/git/refs/heads/aw/bench/${id}`), REPO), `work r${n}`).toBeNull();
+      await dropBase(target(remote), `bench-base/${id}`, work);
+    }
+    for (const n of [0, MAX_RUNS + 1, 1010, 10000]) {
+      const id = `t-0a1b2c3d-r${n}`;
+      expect(
+        cleanupProblem(call('DELETE', `${home}/git/refs/heads/aw/bench/${id}`), REPO),
+        `work r${n}`,
+      ).not.toBeNull();
+      await expect(dropBase(target(remote), `bench-base/${id}`, work), `base r${n}`).rejects.toThrow(TaskRefused);
+    }
   });
 
   it('accepts a scratch repo by its name and refuses a repo that is not one', () => {

@@ -4,7 +4,7 @@ import { type Scope, writeProblem } from '../../server/githost/host.ts';
 import { FakeGithub } from '../../server/test/fakes/github-api.ts';
 import { NO_CI_CONTEXT, NO_CI_DESCRIPTION, NO_CI_WRITES, withNoCiStatus } from '../no-ci.ts';
 
-const REPO = 'acme/app-scratch';
+const REPO = 'FiatFour/app-scratch';
 const BRANCH = 'aw/bench/t-0123abcd-r1';
 const SHA = 'a'.repeat(40);
 const scope: Scope = { home: `/repos/${REPO}`, base: 'main' };

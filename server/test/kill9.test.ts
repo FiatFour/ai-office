@@ -80,15 +80,19 @@ describe.skipIf(!canRun)('kill -9 durability', () => {
           } catch {}
         }
       };
+      const floor = acked.size + 10;
       const writers = [writer(), writer(), writer(), writer()];
-      await sleep(80 + Math.random() * 200);
+      // A fixed write window acks almost nothing on a slow disk, so wait for the acks, then kill at a random point.
+      const deadline = Date.now() + 15_000;
+      while (acked.size < floor && Date.now() < deadline) await sleep(5);
+      await sleep(Math.random() * 200);
       hq.child.kill('SIGKILL');
       stop = true;
       await Promise.all(writers);
       await exited(hq.child);
       expect(existsSync(join(home, 'state', 'hq.lock'))).toBe(true);
       expect(Number(readFileSync(join(home, 'state', 'hq.lock'), 'utf8'))).toBe(hq.child.pid);
+      expect(acked.size, `round ${round} acked enough writes to test`).toBeGreaterThanOrEqual(floor);
     }
-    expect(acked.size).toBeGreaterThan(50);
   }, 120_000);
 });

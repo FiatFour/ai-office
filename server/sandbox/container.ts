@@ -256,7 +256,7 @@ export class SandboxDriver {
     const current = lines(readFileSync(allowlistPath, 'utf8'));
     if (current.includes(rule)) return;
     writeAllowlist(allowlistPath, [...current, rule]);
-    this.allowlist = [...current, rule];
+    this.allowlist = [...this.allowlist, rule];
   }
 
   async releaseCage(id: string): Promise<boolean> {

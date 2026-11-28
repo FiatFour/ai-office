@@ -754,7 +754,7 @@ const MUTANTS = [
   {
     name: 'allow-not-in-rules',
     claim: 'an allowed site is counted as part of the allowlist',
-    edits: [['server/sandbox/container.ts', '    this.allowlist = [...current, rule];\n', '']],
+    edits: [['server/sandbox/container.ts', '    this.allowlist = [...this.allowlist, rule];\n', '']],
     tests: [DRIVER],
   },
   {

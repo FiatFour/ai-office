@@ -124,7 +124,7 @@ const MUTANTS = [
   {
     name: 'repeat-never-pauses',
     claim: 'HQ pauses a worker that repeats a blocked attempt',
-    edits: [['server/blocked.ts', 'repeats >= repeat ||', 'repeats >= repeat + 1000 ||']],
+    edits: [['server/blocked.ts', 'repeats >= REPEAT_LIMIT ||', 'repeats >= REPEAT_LIMIT + 1000 ||']],
     tests: [BLOCKED],
   },
   {
@@ -154,7 +154,7 @@ const MUTANTS = [
   {
     name: 'repeat-window-ignored',
     claim: 'repeats older than the window do not add up',
-    edits: [['server/blocked.ts', 'if (attempt.at - streak.last < windowMs) break;', 'break;']],
+    edits: [['server/blocked.ts', 'if (attempt.at - streak.last < REPEAT_WINDOW_MS) break;', 'break;']],
     tests: [BLOCKED],
   },
   {
@@ -274,7 +274,7 @@ const MUTANTS = [
   {
     name: 'distinct-never-pauses',
     claim: 'ten distinct denials pause a worker',
-    edits: [['server/blocked.ts', ' || counts.size >= distinct) &&', ') &&']],
+    edits: [['server/blocked.ts', ' || counts.size >= DISTINCT_LIMIT) &&', ') &&']],
     tests: [BLOCKED],
   },
   {
@@ -319,7 +319,7 @@ const MUTANTS = [
     edits: [
       [
         'server/blocked.ts',
-        'if (counts.has(key) || counts.size < distinct) counts.set(key, repeats);',
+        'if (counts.has(key) || counts.size < DISTINCT_LIMIT) counts.set(key, repeats);',
         'counts.set(key, repeats);',
       ],
     ],
@@ -331,8 +331,8 @@ const MUTANTS = [
     edits: [
       [
         'server/blocked.ts',
-        'if (this.streaks.size > streaks) this.streaks.delete(this.streaks.keys().next().value as string);',
-        'void streaks;',
+        'if (this.streaks.size > MAX_STREAKS) this.streaks.delete(this.streaks.keys().next().value as string);',
+        '',
       ],
     ],
     tests: [BLOCKED],
@@ -468,6 +468,18 @@ const MUTANTS = [
     claim: "a worker's own rules apply to its cages",
     edits: [['server/sandbox/proxy/node-proxy.mjs', '[...parseAllowlist(text), ...extra]', 'parseAllowlist(text)']],
     tests: [IDENTITY],
+  },
+  {
+    name: 'burst-end-not-pushed',
+    claim: 'the state after the last denial of a burst reaches open floors',
+    edits: [
+      [
+        'server/hq.ts',
+        'denialPush ??= setTimeout(() => {\n      denialPush = null;\n      push();\n    }, 250);',
+        'if (denialPush === null) {\n      push();\n      denialPush = setTimeout(() => {\n        denialPush = null;\n      }, 250);\n    }',
+      ],
+    ],
+    tests: [BLOCKED],
   },
 ];
 

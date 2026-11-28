@@ -57,18 +57,11 @@ export const parseAttempt = (raw: unknown, now: number): Attempt => {
   };
 };
 
-/** One worker's denials at one layer. It ends when `windowMs` passes with no new denial, so a slow retry stays in it. */
+/** One worker's denials at one layer. It ends when `REPEAT_WINDOW_MS` passes with no new denial, so a slow retry stays in it. */
 interface Streak {
   readonly last: number;
-  /** Attempts per distinct tool call and detail. Holds at most `distinct` keys. */
+  /** Attempts per distinct tool call and detail. Holds at most `DISTINCT_LIMIT` keys. */
   readonly counts: Map<string, number>;
-}
-
-export interface Limits {
-  readonly repeat?: number;
-  readonly distinct?: number;
-  readonly windowMs?: number;
-  readonly streaks?: number;
 }
 
 export class BlockedLog {
@@ -77,38 +70,26 @@ export class BlockedLog {
   private readonly streaks = new Map<string, Streak>();
   private readonly held = new Set<string>();
   private seq = 0;
-  private readonly limits: Required<Limits>;
-
-  constructor(limits: Limits = {}) {
-    this.limits = {
-      repeat: REPEAT_LIMIT,
-      distinct: DISTINCT_LIMIT,
-      windowMs: REPEAT_WINDOW_MS,
-      streaks: MAX_STREAKS,
-      ...limits,
-    };
-  }
 
   record(attempt: Attempt): { readonly entry: BlockedEntry; readonly paused: boolean } {
-    const { repeat, distinct, windowMs, streaks } = this.limits;
     for (const [id, streak] of this.streaks) {
-      if (attempt.at - streak.last < windowMs) break;
+      if (attempt.at - streak.last < REPEAT_WINDOW_MS) break;
       this.streaks.delete(id);
     }
     const id = `${attempt.worker}\u0000${attempt.layer}`;
     const counts = this.streaks.get(id)?.counts ?? new Map<string, number>();
     const key = `${attempt.tool}\u0000${attempt.detail}`;
     const repeats = (counts.get(key) ?? 0) + 1;
-    if (counts.has(key) || counts.size < distinct) counts.set(key, repeats);
+    if (counts.has(key) || counts.size < DISTINCT_LIMIT) counts.set(key, repeats);
     this.streaks.delete(id);
     this.streaks.set(id, { last: attempt.at, counts });
-    if (this.streaks.size > streaks) this.streaks.delete(this.streaks.keys().next().value as string);
+    if (this.streaks.size > MAX_STREAKS) this.streaks.delete(this.streaks.keys().next().value as string);
 
     this.seq += 1;
     const entry: BlockedEntry = { ...attempt, seq: this.seq, repeats };
     this.list.push(entry);
     if (this.list.length > MAX_ENTRIES) this.list.shift();
-    const paused = (repeats >= repeat || counts.size >= distinct) && !this.held.has(attempt.worker);
+    const paused = (repeats >= REPEAT_LIMIT || counts.size >= DISTINCT_LIMIT) && !this.held.has(attempt.worker);
     if (paused) this.held.add(attempt.worker);
     return { entry, paused };
   }

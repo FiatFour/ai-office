@@ -1494,6 +1494,12 @@ const MUTANTS = [
     tests: [CHECKOUT],
   },
   {
+    name: 'checkout-git-unbounded',
+    claim: 'a git call in the cage that hangs ends the review job instead of holding it',
+    edits: [['server/agents/checkout.ts', '      timeoutMs: GIT_TIMEOUT_MS,\n', '']],
+    tests: [CHECKOUT],
+  },
+  {
     name: 'github-tree-lists-folders',
     claim: 'a tree holds files only',
     edits: [

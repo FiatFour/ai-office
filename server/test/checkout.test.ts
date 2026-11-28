@@ -180,6 +180,22 @@ describe.skipIf(process.platform === 'win32')('checking out the head under revie
     expect(cage.read('a.txt')).toBe('a\n');
   });
 
+  it('bounds every git call in the cage, and names the one that ran past the limit', async () => {
+    const cage = await exported({ 'a.txt': 'a\n' });
+    const limits: Array<number | undefined> = [];
+    const stuck: CageShell = {
+      async exec(argv, options) {
+        limits.push(options?.timeoutMs);
+        if (argv.includes('cat-file')) return { code: -1, out: '', err: '', timedOut: true };
+        return cage.shell.exec(argv, options);
+      },
+    };
+    const run = checkoutHead(stuck, HEAD, headTree({ 'a.txt': 'new\n' }), signal);
+    await expect(run).rejects.toThrow('git cat-file --batch-check in the cage ran past its time limit');
+    expect(limits).toHaveLength(3);
+    for (const limit of limits) expect(limit).toBeGreaterThan(0);
+  });
+
   const reviewJob = (tree: HeadTree): AgentJob => ({
     role: 'reviewer',
     task: 'alpha/t1',

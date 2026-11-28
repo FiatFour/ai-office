@@ -14,6 +14,8 @@ const isCredential = (path: string): boolean =>
     .split('/')
     .some((_, i, parts) => isProtectedPath(`/${parts.slice(0, i + 1).join('/')}`, { home: '/nonexistent', cwd: '/' }));
 
+const GIT_TIMEOUT_MS = 120_000;
+
 const records = (out: string): string[] => out.split('\0').filter(Boolean);
 
 const entryOf = (record: string): TreeEntry & { type: string } => {
@@ -36,9 +38,15 @@ export const checkoutHead = async (
   signal: AbortSignal,
 ): Promise<string[]> => {
   const git = async (args: readonly string[], input?: string | Uint8Array): Promise<string> => {
-    const ran = await shell.exec([...GIT, ...args], { signal, ...(input === undefined ? {} : { input }) });
-    if (ran.code !== 0)
-      throw new AgentFailed(`git ${args[0]} in the cage failed, so ${headSha} is not checked out: ${ran.err.trim()}`);
+    const ran = await shell.exec([...GIT, ...args], {
+      signal,
+      timeoutMs: GIT_TIMEOUT_MS,
+      ...(input === undefined ? {} : { input }),
+    });
+    if (ran.code !== 0) {
+      const why = ran.timedOut ? 'ran past its time limit' : `failed: ${ran.err.trim()}`;
+      throw new AgentFailed(`git ${args.join(' ')} in the cage ${why}, so ${headSha} is not checked out`);
+    }
     return ran.out;
   };
 

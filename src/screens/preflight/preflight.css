@@ -1,0 +1,124 @@
+.pf {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 12px;
+}
+.pf main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.pf code {
+  font-family: "VT323", "Sarabun", monospace;
+  font-size: 16px;
+  background: var(--ink);
+  color: var(--cream);
+  padding: 1px 6px;
+  overflow-wrap: anywhere;
+}
+.pf-head,
+.pf-title,
+.pf-host,
+.pf-verdict,
+.pf-card-head,
+.pf-line,
+.pf-fix,
+.pf-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.pf-logo {
+  font-size: 17px;
+  text-decoration: none;
+}
+.pf-title h1 {
+  margin: 0;
+  font-size: 22px;
+  color: var(--yellow);
+}
+.pf-grow {
+  flex: 1;
+}
+.pf-mute {
+  font-size: 12px;
+  color: var(--mute);
+}
+.pf-tag {
+  font-size: 11px;
+  color: var(--yellow);
+}
+.pf-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pf-word {
+  font-size: 18px;
+}
+.pf-verdict[data-verdict="ready"] .pf-word {
+  color: #81c784;
+}
+.pf-verdict[data-verdict="warned"] .pf-word {
+  color: var(--yellow);
+}
+.pf-verdict[data-verdict="blocked"] .pf-word,
+.pf-verdict[data-verdict="failed"] .pf-word {
+  color: #ff8a80;
+}
+.pf .btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pf-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.pf-card h2 {
+  margin: 0;
+  font-size: 13px;
+}
+.pf-card ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pf-row {
+  border-top: 2px solid var(--ink);
+  padding: 6px 0;
+}
+.pf-status {
+  min-width: 44px;
+  text-align: center;
+  font-size: 11px;
+  padding: 1px 4px;
+  border: 2px solid var(--ink);
+  color: var(--ink);
+}
+.pf-row[data-status="PASS"] .pf-status {
+  background: #66bb6a;
+}
+.pf-row[data-status="WARN"] .pf-status {
+  background: var(--yellow);
+}
+.pf-row[data-status="FAIL"] .pf-status {
+  background: #ff8a80;
+}
+.pf-row[data-status="SKIP"] .pf-status {
+  background: var(--mute);
+}
+.pf-detail {
+  font-size: 12px;
+  color: var(--mute);
+  overflow-wrap: anywhere;
+}
+.pf-fix {
+  margin: 6px 0 0 56px;
+}
+.pf-foot {
+  margin: 0;
+}

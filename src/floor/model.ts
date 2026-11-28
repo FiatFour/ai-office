@@ -1,4 +1,5 @@
 import type { Box, State } from '@agent-works/core';
+import type { HostInfo } from '../../server/snapshot/host.ts';
 
 export const STATIONS = ['ORDER', 'CODE', 'TEST', 'QC', 'MERGE', 'SHIPPING'] as const;
 export type StationLabel = (typeof STATIONS)[number];
@@ -39,6 +40,8 @@ export interface SnapshotLike {
   readonly rev: number;
   readonly state: State;
   readonly actions?: readonly SnapshotActionLike[];
+  readonly cages?: readonly unknown[];
+  readonly host?: HostInfo | null;
 }
 
 export interface BoxView {

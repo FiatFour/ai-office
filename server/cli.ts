@@ -31,7 +31,8 @@ import type { ModeFactory } from './modes/cages.ts';
 import { ConfigError, cagesFromConfig } from './modes/cages-config.ts';
 import { DemoFixtureError, demoMode, loadDemo } from './modes/demo.ts';
 import { type DoctorContext, exitCodeOf, formatChecks, type PortState, runDoctor } from './preflight/checks.ts';
-import { realHostProbe } from './preflight/host.ts';
+import { hostProbeFor, realHostProbe } from './preflight/host.ts';
+import { preflightService } from './preflight/report.ts';
 import { Registry } from './registry.ts';
 import { SandboxDriver } from './sandbox/container.ts';
 import { Engine, pickEngine, runBinary } from './sandbox/engine.ts';
@@ -249,6 +250,11 @@ export const makeDoctorContext = (env: NodeJS.ProcessEnv, home: string, port: nu
   };
 };
 
+const hqPreflight = (env: NodeJS.ProcessEnv, home: string) => {
+  const host = hostProbeFor(env);
+  return preflightService((port) => ({ ...makeDoctorContext(env, home, port), host }));
+};
+
 const hqDriver =
   (env: NodeJS.ProcessEnv, home: string) =>
   async (hq: string, onDenial: ConstructorParameters<typeof SandboxDriver>[0]['onDenial']) => {
@@ -317,6 +323,7 @@ const runDemo = async (port: number, env: NodeJS.ProcessEnv, noOpen: boolean, io
       port,
       mode: demoMode(source, interval),
       readOnly: DEMO_READ_ONLY,
+      preflight: hqPreflight(env, home),
       ...(assets === undefined ? {} : { assets }),
     }).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE')
@@ -378,6 +385,7 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
       home,
       port,
       makeDriver,
+      preflight: hqPreflight(env, home),
       ...(mode === undefined ? {} : { mode }),
       ...(assets === undefined ? {} : { assets }),
     }).catch((error: unknown) => {

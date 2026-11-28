@@ -3,7 +3,7 @@ import { arch, release } from 'node:os';
 
 export type OsKind = 'linux' | 'wsl2' | 'macos' | 'windows' | 'other';
 
-export interface HostInfo {
+export interface HostName {
   readonly kind: OsKind;
   readonly label: string;
 }
@@ -26,7 +26,50 @@ export const realHostProbe = (): HostProbe => {
   return { platform: process.platform, release: release(), arch: arch(), env: process.env, procVersion };
 };
 
-export const describeHost = (probe: HostProbe): HostInfo => {
+/** The shell the user works in. Windows has no `SHELL`, and PowerShell 7 is the one that adds its user module folder. */
+export const shellOf = (probe: Pick<HostProbe, 'platform' | 'env'>): string => {
+  const base = (path: string): string =>
+    path
+      .replace(/^.*[\\/]/, '')
+      .replace(/\.exe$/i, '')
+      .toLowerCase();
+  const named = base(probe.env.SHELL ?? '');
+  if (named !== '') return named;
+  if (probe.platform !== 'win32') return 'sh';
+  return /[\\/]Documents[\\/]PowerShell[\\/]/i.test(probe.env.PSModulePath ?? '')
+    ? 'pwsh'
+    : base(probe.env.ComSpec ?? 'cmd.exe');
+};
+
+export const hasKvm = (kind: OsKind, exists: (path: string) => boolean): boolean =>
+  (kind === 'linux' || kind === 'wsl2') && exists('/dev/kvm');
+
+const FAKE_HOSTS: Readonly<Record<string, HostProbe>> = {
+  windows: {
+    platform: 'win32',
+    release: '10.0.26100',
+    arch: 'x64',
+    env: { PSModulePath: 'C:\\Users\\you\\Documents\\PowerShell\\Modules' },
+    procVersion: '',
+  },
+  macos: { platform: 'darwin', release: '24.1.0', arch: 'arm64', env: { SHELL: '/bin/zsh' }, procVersion: '' },
+  linux: {
+    platform: 'linux',
+    release: '6.8.0',
+    arch: 'x64',
+    env: { SHELL: '/bin/bash' },
+    procVersion: 'Linux version 6.8.0',
+  },
+};
+
+/**
+ * The computer HQ reports. `AGENT_WORKS_HOST` (windows, macos, linux) makes the screen and the chip describe another one,
+ * so the lanes can compare the artboard and read each OS's fix text anywhere. `agent-works doctor` ignores it.
+ */
+export const hostProbeFor = (env: NodeJS.ProcessEnv): HostProbe =>
+  FAKE_HOSTS[env.AGENT_WORKS_HOST ?? ''] ?? realHostProbe();
+
+export const describeHost = (probe: HostProbe): HostName => {
   if (probe.platform === 'win32') return { kind: 'windows', label: `Windows (${probe.release}, ${probe.arch})` };
   if (probe.platform === 'darwin') return { kind: 'macos', label: `macOS (darwin ${probe.release}, ${probe.arch})` };
   if (probe.platform === 'linux') {

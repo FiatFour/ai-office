@@ -18,7 +18,7 @@ Status: `fixed` (built now equals the canvas), `changed` (both show something, d
 
 D01 | fixed | Demo data | - | The demo chip, the Debug drawer's mode line and the `--demo` start line say "Demo data" as on the canvas (they said "Demo replay"). Operator call 2026-11-21, follow the canvas. The demo shows the recorded run's own worker names (nova, vega); the canvas crew (Captain, Byte, Pixel, Echo) is not copied in, because the recorded export is the demo's provenance and the snapshot has no field the canvas names would honestly fill.
   covers: text:demo data
-D02 | not-built | WIN · PWSH | - | Host chip (detected computer) in the run-mode button. The snapshot has no host or shell field.
+D02 | fixed | WIN · PWSH | - | Host chip (detected computer) in the run-mode chip, from the snapshot's host field. The lane starts HQ with AGENT_WORKS_HOST=windows, the computer the canvas is drawn for, so the compare does not depend on the lane machine.
   covers: text:win · pwsh
 D03 | not-built | elsewhere | - | Factory switcher ("FACTORY my-app", "3 lines", "+2 elsewhere"). Needs the factory park screen.
   covers: text:# lines ;; text:+# elsewhere ;; text:factory
@@ -29,7 +29,7 @@ D05 | not-built | 4x | - | Line speed buttons 1x, 2x, 4x.
   covers: text:#x
 D06 | not-built | Zoom in | - | Zoom out and zoom in buttons.
   covers: text:+ ;; text:−
-D07 | not-built | Sandbox cages | - | Run-mode chip ("MODE Cages | Sandbox cages · 6 running", WIN · PWSH, blinking dot). The snapshot has no run mode.
+D07 | fixed | Sandbox cages | - | Run-mode chip ("MODE Cages | Sandbox cages · 6 running", WIN · PWSH, dot). The count is the cages HQ holds. Cages is the only run mode.
   covers: text:cages ;; text:mode ;; text:sandbox cages · running
   covers: text:|
 D08 | not-built | Preflight | - | HQ menu: + New order, Setup, Preflight, Boards, Docs, PRs / MRs, Terminal, Settings. Built has Action items, Debug and a Settings button (see D44). Each target is a later screen.
@@ -232,7 +232,7 @@ D59 | not-built | - | - | Per-cell top-border colours on the station cells, the 
   covers: paint:dom:span:border-top:#42a5f5 ;; paint:dom:span:border-top:#454b55 ;; paint:dom:span:border-top:#66bb6a
   covers: paint:dom:span:border-top:#9aa1ab ;; paint:dom:span:border-top:#ffa726 ;; paint:dom:span:border-top:#ffca28
 D60 | changed | - | - | HUD colours. The canvas HUD paints about 70 distinct background, border and text colours (page #1f2328, plates #15181c, chips per status, runtime badges #00add8 and #c74634); built paints its own smaller set from floor.css variables.
-  covers: paint:dom:a:bg:#15181c ;; paint:dom:a:bg:#454b55 ;; paint:dom:a:bg:#66bb6a
+  covers: paint:dom:a:bg:#454b55 ;; paint:dom:a:bg:#66bb6a
   covers: paint:dom:a:bg:#ffca28 ;; paint:dom:a:border-bottom:#15181c ;; paint:dom:a:border-bottom:#454b55
   covers: paint:dom:a:border-left:#15181c ;; paint:dom:a:border-left:#454b55 ;; paint:dom:a:border-right:#15181c
   covers: paint:dom:a:border-right:#454b55 ;; paint:dom:a:border-top:#15181c ;; paint:dom:a:border-top:#454b55
@@ -249,11 +249,11 @@ D60 | changed | - | - | HUD colours. The canvas HUD paints about 70 distinct bac
   covers: paint:dom:nav:bg:#2f343b ;; paint:dom:nav:border-bottom:#15181c ;; paint:dom:nav:border-left:#15181c
   covers: paint:dom:nav:border-right:#15181c ;; paint:dom:nav:border-top:#15181c ;; paint:dom:span:bg:#00add8
   covers: paint:dom:span:bg:#15181c ;; paint:dom:span:bg:#2fbf71 ;; paint:dom:span:bg:#3a3f4a
-  covers: paint:dom:span:bg:#454b55 ;; paint:dom:span:bg:#66bb6a ;; paint:dom:span:bg:#b06cff
+  covers: paint:dom:span:bg:#b06cff
   covers: paint:dom:span:bg:#b9b4a6 ;; paint:dom:span:bg:#c74634 ;; paint:dom:span:bg:#d97757
   covers: paint:dom:span:bg:#ff9f43 ;; paint:dom:span:bg:#ffa726 ;; paint:dom:span:border-bottom:#454b55
   covers: paint:dom:span:border-left:#454b55 ;; paint:dom:span:border-right:#454b55 ;; paint:dom:span:color:#1f2328
-  covers: paint:dom:span:color:#42a5f5 ;; paint:dom:span:color:#66bb6a ;; paint:dom:span:color:#9aa1ab
+  covers: paint:dom:span:color:#42a5f5 ;; paint:dom:span:color:#66bb6a
   covers: paint:dom:span:color:#c62828 ;; paint:dom:span:color:#e3e6ea ;; paint:dom:span:color:#ef5350
   covers: paint:dom:span:color:#ff7043 ;; paint:dom:span:color:#ff8a65 ;; paint:dom:span:color:#ff8a80
   covers: paint:dom:span:color:#ffa726
@@ -289,7 +289,7 @@ D66 | changed | - | - | HUD font sizes. The canvas HUD mixes 7 to 16 px in Silks
   covers: font:dom:pixelify sans:13px ;; font:dom:pixelify sans:16px ;; font:dom:press start 2p:10px
   covers: font:dom:press start 2p:14px ;; font:dom:press start 2p:7px ;; font:dom:press start 2p:8px
   covers: font:dom:silkscreen:10px ;; font:dom:silkscreen:14px ;; font:dom:silkscreen:7px
-  covers: font:dom:silkscreen:8px ;; font:dom:silkscreen:9px ;; font:dom:vt323:13px
+  covers: font:dom:silkscreen:8px ;; font:dom:vt323:13px
   covers: font:dom:vt323:14px ;; font:dom:vt323:16px
 D68 | changed | - | - | Boxes per station. The canvas draws 2 at ORDER, 3 at CODE and 4 at QC; built draws the boxes of its snapshot (the live run has two in QC and none elsewhere), so the counts differ by design.
   covers: boxes:CODE ;; boxes:MERGE ;; boxes:ORDER
@@ -313,3 +313,5 @@ D74 | fixed | - | - | TEST scan lines, the QC press and light stack, and the MER
   covers: class:zz ;; class:belt
 D75 | changed | - | - | Built-only SHIPPED stamp on a delivered box (green), next to SCRAPPED and CHANGES; the canvas has the HOTFIX and BLOCKED tags only (D33).
   covers: text:shipped
+D76 | changed | - | - | The built run-mode chip is a link that opens the preflight screen, so its green frame is painted on a link. The canvas has a button that cycles run modes and a dot that blinks; the built dot is still.
+  covers: paint:dom:a:border-bottom:#66bb6a ;; paint:dom:a:border-left:#66bb6a ;; paint:dom:a:border-right:#66bb6a ;; paint:dom:a:border-top:#66bb6a

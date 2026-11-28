@@ -55,7 +55,8 @@ function status(host: string) {
   });
 }
 
-describe('serveTerminal', () => {
+// Each opened terminal starts a Node process on a PTY, seen up to 4.0 s on Windows runners.
+describe('serveTerminal', { timeout: 30_000 }, () => {
   it('opens a terminal for its own page', async () => {
     const outcome = await connect('?cols=90&rows=30', { origin: `http://${url.host}` });
     expect(sizeOf(outcome)).toBe('90x30');

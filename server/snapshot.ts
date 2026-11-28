@@ -3,6 +3,7 @@ import type { BlockedEntry } from './blocked.ts';
 import type { ActionItem, ModeView } from './modes/cages.ts';
 import type { RegistryView } from './registry.ts';
 import type { CageView } from './sandbox/container.ts';
+import type { HostInfo } from './snapshot/host.ts';
 import type { OutboxEntry } from './store/store.ts';
 
 export interface Denial {
@@ -28,6 +29,8 @@ export interface Snapshot {
   readonly paused: readonly string[];
   readonly actions: readonly ActionItem[];
   readonly mode: ModeView | null;
+  /** `null` on an HQ started without a preflight service. */
+  readonly host: HostInfo | null;
 }
 
 export const outboxSummary = (outbox: readonly OutboxEntry[]): Snapshot['outbox'] => ({

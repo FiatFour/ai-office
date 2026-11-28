@@ -524,3 +524,33 @@ main {
     min-height: 44px;
   }
 }
+.mode-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 3px 8px;
+  background: var(--ink);
+  color: var(--cream);
+  border: 2px solid #66bb6a;
+  font-size: 12px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.mode-host,
+.mode-word {
+  font-size: 9px;
+}
+.mode-host {
+  padding: 0 4px;
+  background: #454b55;
+}
+.mode-word,
+.mode-sep {
+  color: #9aa1ab;
+}
+.mode-dot {
+  width: 8px;
+  height: 8px;
+  background: #66bb6a;
+}

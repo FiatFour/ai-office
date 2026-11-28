@@ -10,6 +10,8 @@ export interface CageShell {
     argv: readonly string[],
     options?: { input?: string | Uint8Array; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<RunResult>;
+  /** Drops the cage, so the next exec runs in a new one made from `source`. The worker's home stays. */
+  renew(): Promise<void>;
 }
 
 export interface ClaudeOptions {
@@ -31,6 +33,33 @@ interface StreamLine {
 
 const TOOLS = 'Bash,Read,Edit,Write,Grep,Glob';
 const WITHOUT_WEB = 'WebSearch,WebFetch';
+
+/**
+ * A reviewer reads a change and runs none of it: its login home is writable and the cage reaches the git host. `--tools`
+ * is the whole set of built-in tools, `--restricted` loads no user or project settings (so no hooks) and keeps the file
+ * tools inside /work, and the deny rules outrank any allow rule. CI runs the tests.
+ */
+const REVIEWER_TOOLS = [
+  '--restricted',
+  '--tools',
+  'Read,Grep,Glob',
+  '--strict-mcp-config',
+  '--disallowedTools',
+  'Bash',
+  'PowerShell',
+  'Monitor',
+  'Edit',
+  'Write',
+  'NotebookEdit',
+  'Agent',
+  'Skill',
+  'Workflow',
+  'WebSearch',
+  'WebFetch',
+  'mcp__*',
+  'Read(//home/agent/**)',
+  'Read(//proc/**)',
+];
 
 const tokens = (usage: Record<string, unknown>, key: string): number => {
   const value = usage[key];
@@ -98,10 +127,10 @@ const promptFor = (job: AgentJob, notAtHead: readonly string[] = []): string => 
   const files = job.files
     .map((f) => (f.content === null ? `--- ${f.path} (binary file, content not shown)` : `--- ${f.path}\n${f.content}`))
     .join('\n');
-  return `${order}\n\nReview change #${job.change.number} at ${job.change.headSha}. The files of that head are checked out in your working directory, so run the repository's tests there. It is a local commit with another id and there is no git remote, so do not fetch.${differs(notAtHead)}\n\nFiles at the head:\n${files}\n\nEnd your answer with a \`\`\`json block: {"verdict": "approve" | "changes", "body": "...", "comments": [{"path": "...", "line": 1, "body": "..."}]}.`;
+  return `${order}\n\nReview change #${job.change.number} at ${job.change.headSha}. The files of that head are checked out in your working directory. You can read and search them. You cannot run code or write files, so do not say you ran anything; CI runs the tests. A symbolic link appears as a plain file that holds its target.${differs(notAtHead)}\n\nFiles at the head:\n${files}\n\nEnd your answer with a \`\`\`json block: {"verdict": "approve" | "changes", "body": "...", "comments": [{"path": "...", "line": 1, "body": "..."}]}.`;
 };
 
-const claudeArgv = (bin: string, model: string, maxTurns: number): string[] => [
+const claudeArgv = (bin: string, role: AgentJob['role'], model: string, maxTurns: number): string[] => [
   bin,
   '-p',
   '--model',
@@ -109,10 +138,7 @@ const claudeArgv = (bin: string, model: string, maxTurns: number): string[] => [
   '--output-format',
   'stream-json',
   '--verbose',
-  '--allowedTools',
-  TOOLS,
-  '--disallowedTools',
-  WITHOUT_WEB,
+  ...(role === 'reviewer' ? REVIEWER_TOOLS : ['--allowedTools', TOOLS, '--disallowedTools', WITHOUT_WEB]),
   '--no-session-persistence',
   '--max-turns',
   String(maxTurns),
@@ -156,9 +182,12 @@ export const claudeCode = (options: ClaudeOptions): AgentRuntime => ({
     job.signal.throwIfAborted();
     const shell = options.shell(job.worker, job.task);
     const before = job.role === 'author' ? await head(shell) : '';
-    const notAtHead =
-      job.role === 'reviewer' ? await checkoutHead(shell, job.change.headSha, job.tree, job.signal) : [];
-    const argv = claudeArgv(options.bin ?? 'claude', options.model ?? 'sonnet', options.maxTurns ?? 40);
+    let notAtHead: string[] = [];
+    if (job.role === 'reviewer') {
+      await shell.renew();
+      notAtHead = await checkoutHead(shell, job.change.headSha, job.tree, job.signal);
+    }
+    const argv = claudeArgv(options.bin ?? 'claude', job.role, options.model ?? 'sonnet', options.maxTurns ?? 40);
     const ran = await shell.exec(argv, {
       input: promptFor(job, notAtHead),
       timeoutMs: options.timeoutMs ?? 30 * 60_000,

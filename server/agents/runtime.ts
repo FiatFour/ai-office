@@ -75,6 +75,8 @@ export interface AgentRuntime {
 
 export class RuntimeUnavailable extends Error {}
 export class AgentFailed extends Error {}
+/** The job would fail the same way again, so it is not retried. */
+export class AgentRefused extends AgentFailed {}
 
 const VERDICTS: readonly Verdict[] = ['approve', 'changes', 'comment'];
 

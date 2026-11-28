@@ -14,6 +14,8 @@ const signal = new AbortController().signal;
 const result = (out: string, code = 0) => ({ code, out, err: '', timedOut: false });
 
 const CHECKOUT = [
+  'add',
+  'tee',
   'rev-list',
   'ls-tree',
   'cat-file',
@@ -32,6 +34,7 @@ const shell = (
   inputs: string[] = [],
   diff = '3\t0\tsrc/greet.txt\0',
 ): CageShell => ({
+  renew: async () => {},
   exec: async (argv, options) => {
     calls.push([...argv]);
     inputs.push(String(options?.input ?? ''));
@@ -220,6 +223,7 @@ describe('the Claude Code runtime', () => {
       claudeCode({ shell: () => shell(fixture('claude-stream-error.jsonl'), []) }).run(authorJob),
     ).rejects.toThrow(/error_max_turns/);
     const empty: CageShell = {
+      renew: async () => {},
       exec: async (argv) =>
         argv[0] === 'claude'
           ? result(fixture('claude-stream-author.jsonl'))
@@ -478,6 +482,7 @@ describe('the prompt of a fix round for red CI', () => {
     const ok = (out: string) => ({ code: 0, out, err: '', timedOut: false });
     const runtime = claudeCode({
       shell: () => ({
+        renew: async () => {},
         async exec(argv, options) {
           if (argv[0] !== 'claude') return ok(argv.includes('--numstat') ? '1\t0\ta.txt\0' : 'x\n');
           prompt = String(options?.input ?? '');

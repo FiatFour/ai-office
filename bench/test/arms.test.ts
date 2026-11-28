@@ -39,6 +39,7 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
     const { fx, scratch, prepared } = await verified();
     const seen: string[][] = [];
     const arm = baselineArm(() => ({
+      renew: async () => {},
       async exec(argv, options) {
         seen.push([...argv]);
         if (argv[0] === 'claude') return { code: 0, out: STREAM, err: '', timedOut: false, ...(options ? {} : {}) };
@@ -63,6 +64,7 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
       usage: { input_tokens: 1, output_tokens: 1, server_tool_use: { web_search_requests: 2, web_fetch_requests: 0 } },
     });
     const arm = baselineArm(() => ({
+      renew: async () => {},
       async exec(argv) {
         if (argv[0] === 'claude') return { code: 0, out: stream, err: '', timedOut: false };
         if (argv.includes('rev-parse')) return { code: 0, out: 'base\n', err: '', timedOut: false };
@@ -87,6 +89,7 @@ describe.skipIf(process.platform === 'win32')('baseline arm', () => {
     git('add', '-A');
     git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'base');
     const arm = baselineArm(() => ({
+      renew: async () => {},
       async exec(argv) {
         const git2 = argv.slice(argv.indexOf('git') + 1).filter((a, i, all) => a !== '-c' && all[i - 1] !== '-c');
         if (git2[0] === 'diff' && git2.includes('--numstat')) {

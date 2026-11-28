@@ -19,6 +19,14 @@ export const cageShells = (
     return { active, cage: await cage };
   };
   return (worker, task) => ({
+    async renew() {
+      const key = `${worker}\n${task}`;
+      const old = cages.get(key);
+      if (old === undefined) return;
+      cages.delete(key);
+      const view = await old.catch(() => null);
+      if (view !== null) await (await driver())?.releaseCage(view.id);
+    },
     async exec(argv, options) {
       const { active, cage } = await cageFor(worker, task);
       return active.exec(cage.id, argv, options);

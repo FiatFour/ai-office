@@ -355,6 +355,7 @@ const withResult = (ran: Ran, result: string): Ran => {
  * read as a session that changed no file.
  */
 export const withStderr = (shell: CageShell): CageShell => ({
+  renew: () => shell.renew(),
   async exec(argv, options) {
     const ran = await shell.exec(argv, options);
     if (!argv.includes('--output-format')) {

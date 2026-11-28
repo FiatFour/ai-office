@@ -11,7 +11,7 @@ import {
   toLogin,
   type Verdict,
 } from '@agent-works/core';
-import type { AgentRuntime, RuntimeId, Ticket, Usage } from '../agents/runtime.ts';
+import { AgentRefused, type AgentRuntime, type RuntimeId, type Ticket, type Usage } from '../agents/runtime.ts';
 import { briefMarker, mergeBrief, type ReviewRound, renderBrief } from '../brief/merge-brief.ts';
 import { InvalidEvent } from '../events.ts';
 import {
@@ -536,7 +536,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         } catch (error) {
           if (abort.signal.aborted) return;
           options.onJobFailed?.(task, error);
-          const count = (failures.get(key)?.count ?? 0) + 1;
+          const count = error instanceof AgentRefused ? maxFailures : (failures.get(key)?.count ?? 0) + 1;
           failures.set(key, { count, error: (error as Error).message });
           if (count >= maxFailures && job.kind === 'author' && job.box.worker !== null)
             ingest({ source: 'hook', kind: 'session_ended', task, worker: job.box.worker });

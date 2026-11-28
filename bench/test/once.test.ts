@@ -409,6 +409,7 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
       const seen: Array<AbortSignal | undefined> = [];
       const runtime = claudeCode({
         shell: () => ({
+          renew: async () => {},
           async exec(argv, options) {
             if (argv[0] === 'claude') seen.push(options?.signal);
             return {

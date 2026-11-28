@@ -611,6 +611,7 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
       });
       const baseline = await runTask(fx.task, 1, prepared, {
         arm: baselineArm(() => ({
+          renew: async () => {},
           async exec(argv) {
             if (argv[0] === 'claude') return ok(stream);
             if (argv.includes('rev-parse')) return ok('base\n');

@@ -11,6 +11,7 @@ import { clearRuntime, hqIdFor, VERSION, writeRuntime } from './config.ts';
 import { InvalidEvent, parseEvent } from './events.ts';
 import { Ledger } from './ledger.ts';
 import type { HqPort, ModeFactory } from './modes/cages.ts';
+import type { Preflight } from './preflight/report.ts';
 import { Registry, RegistryError } from './registry.ts';
 import type { SandboxDriver } from './sandbox/container.ts';
 import { NOT_ALLOWLISTED, type Denial as RawDenial } from './sandbox/firewall.ts';
@@ -32,6 +33,7 @@ export interface HqOptions {
   readonly mode?: ModeFactory;
   readonly assets?: string;
   readonly readOnly?: string;
+  readonly preflight?: Preflight;
 }
 
 export interface RunningHq {
@@ -157,6 +159,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     paused: blocked.paused(),
     actions: mode?.actions() ?? [],
     mode: mode?.view() ?? null,
+    host: options.preflight?.host() ?? null,
   });
 
   const push = (): void => {
@@ -236,6 +239,11 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     if (method === 'GET' && url.pathname === '/api/events') {
       const after = Number(url.searchParams.get('after') ?? 0);
       return send(200, { events: store.events(Number.isFinite(after) ? after : 0) });
+    }
+    if (method === 'GET' && url.pathname === '/api/preflight' && options.preflight !== undefined) {
+      const report = await options.preflight.run(boundPort);
+      push();
+      return send(200, report);
     }
     if (method === 'GET') {
       const read = mode?.route(method, url.pathname, () => readBody(req));

@@ -8,6 +8,7 @@ import { readRuntime } from '../config.ts';
 import { parseEvent } from '../events.ts';
 import { type RunningHq, startHq } from '../hq.ts';
 import { Ledger, MAX_ATTEMPTS } from '../ledger.ts';
+import type { Preflight, PreflightReport } from '../preflight/report.ts';
 import type { Snapshot } from '../snapshot.ts';
 import { Store } from '../store/store.ts';
 import { change, folder, hasSqlite, human, tempDir } from './helpers.ts';
@@ -166,6 +167,35 @@ describe.skipIf(!hasSqlite)('HQ', () => {
   const outside = Object.values(networkInterfaces())
     .flat()
     .find((entry) => entry !== undefined && entry.family === 'IPv4' && !entry.internal)?.address;
+
+  it('serves a preflight run, puts the host it saw in the snapshot and pushes it', async () => {
+    const before = { os: 'linux', label: 'Linux', shell: 'sh', arch: 'x64', kvm: false, engines: null } as const;
+    let host: ReturnType<Preflight['host']> = before;
+    const ports: number[] = [];
+    const preflight: Preflight = {
+      host: () => host,
+      run: async (port) => {
+        ports.push(port);
+        host = { ...before, engines: [{ name: 'docker', running: false }] };
+        return { checkedAt: 1, host, checks: [], canStart: false };
+      },
+    };
+    const { hq } = await boot(tempDir('hq'), { preflight, readOnly: 'read-only' });
+    expect(hq.snapshot().host).toEqual(before);
+    const socket = new WebSocket(`${hq.url.replace('http', 'ws')}/api/ws`);
+    const pushed: Snapshot[] = [];
+    socket.on('message', (data) => pushed.push(JSON.parse(String(data)) as Snapshot));
+    await expect.poll(() => pushed.length).toBe(1);
+    const res = await call<PreflightReport>(hq, '/api/preflight');
+    expect(res.status).toBe(200);
+    expect(res.json.canStart).toBe(false);
+    expect(ports).toEqual([hq.port]);
+    await expect.poll(() => pushed.at(-1)?.host?.engines).toEqual([{ name: 'docker', running: false }]);
+    socket.close();
+    const bare = await boot();
+    expect(bare.hq.snapshot().host).toBeNull();
+    expect((await call(bare.hq, '/api/preflight')).status).toBe(404);
+  });
 
   it.skipIf(outside === undefined)('listens on loopback only, so another machine cannot reach it', async () => {
     const { hq } = await boot();

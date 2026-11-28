@@ -1,11 +1,27 @@
 import { accessSync, constants, mkdirSync } from 'node:fs';
 import { ENGINE_NAMES, type Engine, type EngineInfo, type EngineName } from '../sandbox/engine.ts';
-import { describeHost, FIXES, type HostProbe, type OsKind } from './host.ts';
+import { describeHost, FIXES, type HostProbe, hasKvm, type OsKind } from './host.ts';
 
 export type Status = 'PASS' | 'WARN' | 'FAIL' | 'SKIP';
 
+export const GROUPS = {
+  host: 'computer',
+  node: 'computer',
+  git: 'computer',
+  port: 'computer',
+  home: 'computer',
+  engine: 'sandbox',
+  rootless: 'sandbox',
+  image: 'sandbox',
+  kvm: 'sandbox',
+} as const;
+
+export type CheckId = keyof typeof GROUPS;
+export type Group = (typeof GROUPS)[CheckId];
+
 export interface Check {
-  readonly id: string;
+  readonly id: CheckId;
+  readonly group: Group;
   readonly label: string;
   readonly status: Status;
   readonly detail: string;
@@ -39,8 +55,9 @@ export const nodeAtLeast = (version: string, min: readonly [number, number] = MI
   return major > min[0] || (major === min[0] && minor >= min[1]);
 };
 
-const check = (id: string, label: string, status: Status, detail: string, fix: string | null = null): Check => ({
+const check = (id: CheckId, label: string, status: Status, detail: string, fix: string | null = null): Check => ({
   id,
+  group: GROUPS[id],
   label,
   status,
   detail,
@@ -143,9 +160,8 @@ export const runDoctor = async (ctx: DoctorContext): Promise<Check[]> => {
     checks.push(check('image', 'Cage image', 'SKIP', 'no engine answered'));
   }
 
-  const kvm = kind === 'linux' || kind === 'wsl2';
   checks.push(
-    kvm && ctx.exists('/dev/kvm')
+    hasKvm(kind, ctx.exists)
       ? check('kvm', 'krun (/dev/kvm)', 'PASS', '/dev/kvm present')
       : check('kvm', 'krun (/dev/kvm)', 'SKIP', 'only needed for the krun runtime', FIXES.kvm(kind)),
   );
@@ -183,7 +199,10 @@ export const runDoctor = async (ctx: DoctorContext): Promise<Check[]> => {
   return checks;
 };
 
-export const exitCodeOf = (checks: readonly Check[]): number => (checks.some((c) => c.status === 'FAIL') ? 1 : 0);
+/** The one rule for the CLI's exit code and the screen's START button: a FAIL blocks, a WARN or SKIP does not. */
+export const canStart = (checks: readonly Check[]): boolean => !checks.some((c) => c.status === 'FAIL');
+
+export const exitCodeOf = (checks: readonly Check[]): number => (canStart(checks) ? 0 : 1);
 
 export const formatChecks = (checks: readonly Check[]): string =>
   checks

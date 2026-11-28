@@ -4,10 +4,12 @@ import { canvasCompare, textOf } from './canvas-compare.mjs';
 import { change, green, human, launch, review, sha, startHq } from './harness.mjs';
 
 const WORKERS = ['nova', 'vega', 'orion', 'lyra', 'atlas', 'juno', 'kai'];
+/** The artboard is drawn for a Windows computer, so the host chip is compared on one, on any lane machine. */
+const CANVAS_HOST = { AGENT_WORKS_HOST: 'windows' };
 
 /** @param {import('playwright').Browser} browser */
 export const runLane9 = async (browser) => {
-  const demo = await startHq({ demo: true, port: 7473, intervalMs: 900 });
+  const demo = await startHq({ demo: true, port: 7473, intervalMs: 900, env: CANVAS_HOST });
   let demoState;
   try {
     const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
@@ -20,7 +22,7 @@ export const runLane9 = async (browser) => {
     await demo.stop();
   }
 
-  const live = await startHq({ port: 7474 });
+  const live = await startHq({ port: 7474, env: CANVAS_HOST });
   try {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await ctx.newPage();

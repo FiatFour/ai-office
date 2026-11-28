@@ -1,6 +1,16 @@
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { type DoctorContext, exitCodeOf, formatChecks, nodeAtLeast, runDoctor } from '../preflight/checks.ts';
-import { describeHost, type HostProbe } from '../preflight/host.ts';
+import {
+  canStart,
+  type DoctorContext,
+  exitCodeOf,
+  formatChecks,
+  GROUPS,
+  nodeAtLeast,
+  runDoctor,
+} from '../preflight/checks.ts';
+import { describeHost, type HostProbe, hostProbeFor, shellOf } from '../preflight/host.ts';
+import { inspect, preflightService } from '../preflight/report.ts';
 
 const HOSTS: Record<string, HostProbe> = {
   linux: { platform: 'linux', release: '6.8.0', arch: 'x64', env: {}, procVersion: 'Linux version 6.8.0 gcc' },
@@ -151,5 +161,133 @@ describe('doctor', () => {
     );
     console.log(`doctor on ${process.platform}:\n${formatChecks(checks)}`);
     expect(checks[0]?.detail.length).toBeGreaterThan(0);
+  });
+});
+
+const linux = HOSTS.linux as HostProbe;
+const noEngine = { docker: engine({ version: null }), podman: engine({ version: null }) };
+
+describe('what blocks a start', () => {
+  const row = (status: 'PASS' | 'WARN' | 'FAIL' | 'SKIP') => ({
+    id: 'git' as const,
+    group: 'computer' as const,
+    label: 'git',
+    status,
+    detail: '',
+    fix: null,
+  });
+
+  it('lets PASS, WARN and SKIP start and stops on one FAIL', () => {
+    expect(canStart([row('PASS'), row('WARN'), row('SKIP')])).toBe(true);
+    expect(canStart([row('PASS'), row('FAIL'), row('PASS')])).toBe(false);
+  });
+
+  it('reports a warned machine as startable and a stopped engine as not', async () => {
+    const warned = await inspect(
+      context(linux, { engines: { docker: engine({ image: false }), podman: engine({ version: null }) } }),
+    );
+    expect(warned.checks.map((c) => c.status)).toContain('WARN');
+    expect(warned.canStart).toBe(true);
+    const down = await inspect(
+      context(linux, { engines: { docker: engine({ ok: false }), podman: engine({ version: null }) } }),
+    );
+    expect(down.canStart).toBe(false);
+  });
+
+  it('gives every WARN and FAIL row a fix and every row its group', async () => {
+    const worst = await runDoctor(
+      context(linux, {
+        nodeVersion: 'v20.0.0',
+        gitVersion: async () => null,
+        engines: noEngine,
+        portState: async () => ({ state: 'busy' }),
+        home: join(process.execPath, 'under-a-file'),
+      }),
+    );
+    const rootful = await runDoctor(
+      context(linux, { engines: { docker: engine({ version: null }), podman: engine({ image: false }) } }),
+    );
+    const bad = [...worst, ...rootful].filter((c) => c.status === 'FAIL' || c.status === 'WARN');
+    expect(bad.map((c) => c.id).sort()).toEqual(['engine', 'git', 'home', 'image', 'node', 'port', 'rootless']);
+    for (const c of bad) expect(c.fix, c.id).toBeTruthy();
+    for (const c of [...worst, ...rootful]) expect(c.group, c.id).toBe(GROUPS[c.id]);
+  });
+});
+
+describe('the host HQ reports', () => {
+  it('lists installed engines, running or not, and asks each question once', async () => {
+    const asked: string[] = [];
+    const counted = (name: string, over: Parameters<typeof engine>[0]) => {
+      const base = engine(over);
+      return {
+        ...base,
+        version: async () => {
+          asked.push(`${name} version`);
+          return base.version();
+        },
+        info: async () => {
+          asked.push(`${name} info`);
+          return base.info();
+        },
+      };
+    };
+    const report = await inspect(
+      context(linux, { engines: { docker: counted('docker', { ok: false }), podman: counted('podman', {}) } }),
+    );
+    expect(report.host.engines).toEqual([
+      { name: 'docker', running: false },
+      { name: 'podman', running: true, version: '29', rootless: false },
+    ]);
+    expect(asked.sort()).toEqual(['docker info', 'docker version', 'podman info', 'podman version']);
+    expect((await inspect(context(linux, { engines: noEngine }))).host.engines).toEqual([]);
+  });
+
+  it('names the OS, arch, shell and kvm, and only Linux and WSL2 can have kvm', async () => {
+    const wsl = await inspect(context({ ...(HOSTS.wsl2 as HostProbe), env: { SHELL: '/usr/bin/zsh' } }));
+    expect(wsl.host).toMatchObject({
+      os: 'wsl2',
+      label: 'Linux (WSL2 on Windows)',
+      arch: 'x64',
+      shell: 'zsh',
+      kvm: true,
+    });
+    expect((await inspect(context(HOSTS.windows as HostProbe))).host.kvm).toBe(false);
+    expect((await inspect(context(linux, { exists: () => false }))).host.kvm).toBe(false);
+  });
+
+  it('reads the shell from SHELL, then from the Windows variables', () => {
+    const windows = (env: NodeJS.ProcessEnv) => shellOf({ platform: 'win32', env });
+    expect(windows({ SHELL: 'C:\\Program Files\\Git\\bin\\bash.exe' })).toBe('bash');
+    expect(windows({ PSModulePath: 'C:\\Users\\a\\Documents\\PowerShell\\Modules' })).toBe('pwsh');
+    expect(windows({ PSModulePath: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules' })).toBe('cmd');
+    expect(windows({ ComSpec: 'C:\\Windows\\System32\\CMD.EXE' })).toBe('cmd');
+    expect(shellOf({ platform: 'linux', env: {} })).toBe('sh');
+  });
+
+  it('describes another computer only when AGENT_WORKS_HOST names one', () => {
+    expect(describeHost(hostProbeFor({ AGENT_WORKS_HOST: 'windows' })).kind).toBe('windows');
+    expect(describeHost(hostProbeFor({ AGENT_WORKS_HOST: 'macos' })).kind).toBe('macos');
+    expect(hostProbeFor({}).platform).toBe(process.platform);
+    expect(hostProbeFor({ AGENT_WORKS_HOST: 'amiga' }).platform).toBe(process.platform);
+  });
+
+  it('shares one run between callers that arrive together and asks again afterwards', async () => {
+    let runs = 0;
+    const service = preflightService((port) =>
+      context(linux, {
+        port,
+        gitVersion: async () => {
+          runs += 1;
+          return 'git version 2.50';
+        },
+      }),
+    );
+    expect(service.host().engines).toBeNull();
+    const [first, second] = await Promise.all([service.run(7420), service.run(7420)]);
+    expect(second).toBe(first);
+    expect(runs).toBe(1);
+    expect(service.host().engines).toEqual(first.host.engines);
+    await service.run(7420);
+    expect(runs).toBe(2);
   });
 });

@@ -87,9 +87,9 @@ export const within = (work, ms) =>
   Promise.race([work, new Promise((resolve) => setTimeout(resolve, ms, undefined).unref())]);
 
 /**
- * @param {{ demo?: boolean, port: number, intervalMs?: number, args?: string[] }} options `args` go to `serve` after the port and home, for example a mode and its config
+ * @param {{ demo?: boolean, port: number, intervalMs?: number, args?: string[], env?: NodeJS.ProcessEnv }} options `args` go to `serve` after the port and home, for example a mode and its config. `env` is added to the HQ process.
  */
-export const startHq = async ({ demo = false, port, intervalMs = 1500, args: extra = [] }) => {
+export const startHq = async ({ demo = false, port, intervalMs = 1500, args: extra = [], env = {} }) => {
   if (halted) throw new Error('HQ start refused: the run is stopping');
   const home = mkdtempSync(join(tmpdir(), 'aw-e2e-'));
   homes.add(home);
@@ -97,7 +97,7 @@ export const startHq = async ({ demo = false, port, intervalMs = 1500, args: ext
     ? [BIN, '--demo', '--no-open', '--port', String(port)]
     : [BIN, 'serve', '--port', String(port), '--home', home, ...extra];
   const child = spawn(process.execPath, args, {
-    env: { ...process.env, AGENT_WORKS_HOME: home, AGENT_WORKS_DEMO_INTERVAL_MS: String(intervalMs) },
+    env: { ...process.env, AGENT_WORKS_HOME: home, AGENT_WORKS_DEMO_INTERVAL_MS: String(intervalMs), ...env },
     stdio: 'ignore',
   });
   children.add(child);

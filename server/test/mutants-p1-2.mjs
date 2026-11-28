@@ -1556,7 +1556,7 @@ const MUTANTS = [
   {
     name: 'renew-keeps-handle',
     claim: 'the call after a renew starts another cage',
-    edits: [['server/agents/cage-shell.ts', '      cages.delete(key);\n      const view', '      const view']],
+    edits: [['server/agents/cage-shell.ts', '        cages.delete(key);\n        const view', '        const view']],
     tests: [CHECKOUT],
   },
   {

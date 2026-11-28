@@ -20,9 +20,11 @@ const SCREENS = 'src/floor/screens.ts';
 const HOST = 'src/floor/ScreenHost.tsx';
 const PARITY = 'src/test/i18n-parity.test.ts';
 const APP = 'src/floor/App.tsx';
+const PF_MODEL = 'src/screens/preflight/model.ts';
+const PF_SCREEN = 'src/screens/preflight/screen.tsx';
 const DRAWER = 'src/floor/Drawer.tsx';
 
-/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
+/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt' | 'preflight', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
 const MUTANTS = [
   {
     name: 'belt-is-code',
@@ -97,7 +99,7 @@ const MUTANTS = [
   {
     name: 'counts-skip',
     claim: 'the station counters count every box',
-    edits: [[MODEL, 'if (station !== null) counts[station] += 1;', 'if (station !== null) counts[station] += 0;']],
+    edits: [[MODEL, 'counts[panelOf(station)] += 1;', 'counts[panelOf(station)] += 0;']],
   },
   {
     name: 'shipped-count-off',
@@ -268,7 +270,9 @@ const MUTANTS = [
   {
     name: 'cancelled-counted-at-ORDER',
     claim: 'a scrapped box counts at no station',
-    edits: [[MODEL, 'if (station !== null) counts[station] += 1;', "counts[station ?? 'ORDER'] += 1;"]],
+    edits: [
+      [MODEL, 'if (station !== null) counts[panelOf(station)] += 1;', "counts[panelOf(station ?? 'ORDER')] += 1;"],
+    ],
   },
   {
     name: 'shipping-counted-as-shipped',
@@ -761,7 +765,7 @@ const MUTANTS = [
     name: 'lane9-relabel-status',
     claim: 'relabelling an entry status makes lane 9 fail',
     tier: 'lane9',
-    edits: [[DIFFS, 'D02 | not-built |', 'D02 | fixed |']],
+    edits: [[DIFFS, 'D02 | fixed |', 'D02 | not-built |']],
   },
   {
     name: 'lane9-compare-image-replaced',
@@ -1315,6 +1319,73 @@ const MUTANTS = [
     claim: 'the key scan treats a template with ${} as a dynamic key',
     edits: [[PARITY, "!(quote === '`' && text.includes('${'))", 'true']],
   },
+  {
+    name: 'preflight-start-on-fail',
+    claim: 'a FAIL disables START',
+    edits: [[PF_MODEL, "run.phase === 'done' && run.report.canStart", "run.phase === 'done'"]],
+  },
+  {
+    name: 'preflight-start-while-checking',
+    claim: 'a report that is being replaced cannot start',
+    edits: [[PF_MODEL, "run.phase === 'done' && run.report.canStart", 'reportOf(run)?.canStart === true']],
+  },
+  {
+    name: 'preflight-warned-reads-ready',
+    claim: 'a warned machine is named as warned',
+    edits: [[PF_MODEL, "? 'warned' : 'ready'", "? 'ready' : 'ready'"]],
+  },
+  {
+    name: 'preflight-no-fix-on-warn',
+    claim: 'a WARN shows its fix',
+    edits: [[PF_MODEL, "check.status === 'FAIL' || check.status === 'WARN'", "check.status === 'FAIL'"]],
+  },
+  {
+    name: 'preflight-http-error-read',
+    claim: 'an HTTP error is not a report',
+    edits: [[PF_MODEL, 'if (!res.ok) throw new Error(`HTTP ${res.status}`);', '']],
+  },
+  {
+    name: 'preflight-start-always-enabled',
+    claim: 'the START button follows the rule',
+    tier: 'preflight',
+    edits: [[PF_SCREEN, 'disabled={!mayStart(run)}', 'disabled={false}']],
+  },
+  {
+    name: 'preflight-start-without-recheck',
+    claim: 'START checks again before it leaves',
+    tier: 'preflight',
+    edits: [
+      [
+        PF_SCREEN,
+        "if (ended !== null && mayStart(ended)) location.hash = '';",
+        "if (ended !== null) location.hash = '';",
+      ],
+    ],
+  },
+  {
+    name: 'preflight-fix-hidden',
+    claim: 'a FAIL row shows its fix',
+    tier: 'preflight',
+    edits: [[PF_SCREEN, 'needsFix(check) && check.fix !== null', 'needsFix(check) && check.fix === null']],
+  },
+  {
+    name: 'preflight-check-again-dead',
+    claim: 'Check again runs the checks',
+    tier: 'preflight',
+    edits: [[PF_SCREEN, 'disabled={busy} onClick={again}>', 'disabled={busy} onClick={() => {}}>']],
+  },
+  {
+    name: 'preflight-serve-without-checks',
+    claim: 'a served HQ answers the preflight screen',
+    tier: 'preflight',
+    edits: [[CLI, '      preflight: hqPreflight(env, home),\n      ...(mode', '      ...(mode']],
+  },
+  {
+    name: 'preflight-chip-dropped',
+    claim: 'the floor shows the run-mode chip',
+    tier: 'lane9',
+    edits: [[APP, '{hq.snapshot.host ? <ModeChip', '{false && hq.snapshot.host ? <ModeChip']],
+  },
 ];
 
 const only = process.argv.slice(2);
@@ -1359,6 +1430,17 @@ const lane9 = async () => {
     OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-lane9'),
   });
   return result.status === 0 ? null : (result.stdout.match(/FAIL lane 9[^\n]{0,160}/) ?? ['lane 9 crashed'])[0];
+};
+const preflight = async () => {
+  const built = await build();
+  if (built.status !== 0) return 'build failed';
+  const result = await run('node', ['src/e2e/preflight.mjs'], 300_000, {
+    ...process.env,
+    OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-preflight'),
+  });
+  return result.status === 0
+    ? null
+    : (result.stdout.match(/FAIL preflight[^\n]{0,160}/) ?? ['preflight lane crashed'])[0];
 };
 const gates = async () => {
   const result = await run('node', ['src/e2e/gates.mjs'], 300_000, {
@@ -1452,6 +1534,7 @@ for (const mutant of MUTANTS) {
     } else {
       how = (await vitest()).status !== 0 ? 'unit tests' : null;
       if (how === null && mutant.tier === 'e2e') how = await lanes();
+      if (how === null && mutant.tier === 'preflight') how = await preflight();
     }
     if (how === null) bad += 1;
     log(
@@ -1467,7 +1550,8 @@ for (const mutant of MUTANTS) {
         } catch {}
       } else writeFileSync(path, bytes);
     }
-    if (mutant.tier === 'e2e' || mutant.edits.some(([file]) => file.endsWith('.css'))) await build();
+    if (mutant.tier === 'e2e' || mutant.tier === 'preflight' || mutant.edits.some(([file]) => file.endsWith('.css')))
+      await build();
   }
 }
 /** Orphans are cleaned up and reported on their own line: a mutant that breaks the kill code leaves them, which is not a survivor. */

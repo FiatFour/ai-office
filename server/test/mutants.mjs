@@ -69,13 +69,7 @@ const MUTANTS = [
   {
     name: 'doctor-exit-zero',
     claim: 'doctor exits 1 on a FAIL',
-    edits: [
-      [
-        'server/preflight/checks.ts',
-        "checks.some((c) => c.status === 'FAIL') ? 1 : 0",
-        "checks.some((c) => c.status === 'FAIL') ? 0 : 0",
-      ],
-    ],
+    edits: [['server/preflight/checks.ts', 'canStart(checks) ? 0 : 1', 'canStart(checks) ? 0 : 0']],
     tests: ['server/test/preflight.test.ts'],
   },
   {
@@ -604,6 +598,128 @@ const MUTANTS = [
       ],
     ],
     tests: [CLI],
+  },
+  {
+    name: 'preflight-fail-does-not-block',
+    claim: 'a FAIL blocks start',
+    edits: [['server/preflight/checks.ts', "!checks.some((c) => c.status === 'FAIL')", 'true']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-warn-blocks',
+    claim: 'a WARN does not block start',
+    edits: [
+      [
+        'server/preflight/checks.ts',
+        "!checks.some((c) => c.status === 'FAIL')",
+        "!checks.some((c) => c.status === 'FAIL' || c.status === 'WARN')",
+      ],
+    ],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-report-always-startable',
+    claim: 'the report the screen reads carries the rule',
+    edits: [['server/preflight/report.ts', 'canStart: canStart(checks),', 'canStart: true,']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-engine-asked-twice',
+    claim: 'one run asks each engine each question once',
+    edits: [['server/preflight/report.ts', 'return () => (asked ??= ask());', 'return () => ask();']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-stopped-engine-running',
+    claim: 'an engine that does not answer info is not running',
+    edits: [['server/preflight/report.ts', 'info.ok\n', 'true\n']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-missing-engine-listed',
+    claim: 'an engine that is not installed is not listed',
+    edits: [['server/preflight/report.ts', 'if ((await engines[name].version()) === null) return [];', '']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-no-single-flight',
+    claim: 'callers that arrive together share one run',
+    edits: [['server/preflight/report.ts', 'running ??= inspect', 'running = inspect']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-run-never-again',
+    claim: 'a later call runs the checks again',
+    edits: [['server/preflight/report.ts', 'running = null;', '']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-host-not-kept',
+    claim: 'the snapshot host is the one the last run saw',
+    edits: [['server/preflight/report.ts', 'host = report.host;', '']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-no-image-fix',
+    claim: 'a WARN row carries a fix',
+    edits: [
+      [
+        'server/preflight/checks.ts',
+        '`${usable.name} build -t ${ctx.image} -f server/sandbox/Containerfile server/sandbox`,',
+        'null,',
+      ],
+    ],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-group-wrong',
+    claim: 'every row carries the group of its id',
+    edits: [['server/preflight/checks.ts', 'group: GROUPS[id],', "group: 'computer',"]],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-kvm-any-os',
+    claim: 'only Linux and WSL2 can have kvm',
+    edits: [['server/preflight/host.ts', "(kind === 'linux' || kind === 'wsl2') && exists", 'exists']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-shell-env-ignored',
+    claim: 'SHELL names the shell',
+    edits: [['server/preflight/host.ts', "if (named !== '') return named;", '']],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-shell-no-pwsh',
+    claim: 'PowerShell 7 is named pwsh',
+    edits: [['server/preflight/host.ts', "? 'pwsh'", "? 'cmd'"]],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'preflight-fake-host-ignored',
+    claim: 'AGENT_WORKS_HOST names the reported computer',
+    edits: [
+      ['server/preflight/host.ts', "FAKE_HOSTS[env.AGENT_WORKS_HOST ?? ''] ?? realHostProbe()", 'realHostProbe()'],
+    ],
+    tests: ['server/test/preflight.test.ts'],
+  },
+  {
+    name: 'hq-snapshot-no-host',
+    claim: 'the snapshot carries the host',
+    edits: [['server/hq.ts', 'host: options.preflight?.host() ?? null,', 'host: null,']],
+    tests: ['server/test/hq.test.ts'],
+  },
+  {
+    name: 'hq-preflight-no-push',
+    claim: 'a preflight run pushes the host it saw',
+    edits: [
+      [
+        'server/hq.ts',
+        'const report = await options.preflight.run(boundPort);\n      push();',
+        'const report = await options.preflight.run(boundPort);',
+      ],
+    ],
+    tests: ['server/test/hq.test.ts'],
   },
 ];
 

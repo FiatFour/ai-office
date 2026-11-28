@@ -610,6 +610,12 @@ const MUTANTS = [
     tests: [CONTRACT, RECORDED],
   },
   {
+    name: 'plain-line-keeps-letter-slash',
+    claim: 'a plain line drops the slash look-alike that is also a letter',
+    edits: [['server/githost/sanitize.ts', '|\\u3033/gu;', '/gu;']],
+    tests: [SANITIZE],
+  },
+  {
     name: 'b1-quote-no-prefix',
     claim: 'every quoted line starts with the marker, never with the quoted text',
     edits: [['server/githost/sanitize.ts', "body.split('\\n').map((line) => `│ ${line}`)", "body.split('\\n')"]],

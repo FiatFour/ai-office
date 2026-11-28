@@ -248,7 +248,7 @@ describe('port choice', () => {
     } finally {
       server.close();
     }
-  }, 12_000);
+  });
 });
 
 describe('not ready lines', () => {
@@ -315,7 +315,7 @@ describe.skipIf(!hasSqlite)('an HQ the gate kit starts never outlives the run', 
       vi.unstubAllEnvs();
       rmSync(scratch, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 
   it('kills its children and removes their homes when the process exits without cleaning up', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'gate-exit-'));

@@ -87,7 +87,7 @@ describe('BlockedLog', () => {
     const log = new BlockedLog();
     for (let n = 0; n < DISTINCT_LIMIT - 1; n++) {
       log.record(varied(n, { layer: 'F2' }));
-      log.record(varied(n, { layer: 'L4' }));
+      log.record(varied(n + DISTINCT_LIMIT, { layer: 'L4' }));
     }
     expect(log.paused()).toEqual([]);
   });

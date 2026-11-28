@@ -297,6 +297,7 @@ describe.skipIf(!hasSqlite)('the factory arm on the public repo, with a scripted
 });
 
 const claudeShell = (err: string, out: string, code: number, timedOut = false): CageShell => ({
+  renew: async () => {},
   async exec(argv) {
     if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
     if (!argv.includes('--output-format')) return { code: 0, out: '', err: '', timedOut: false };
@@ -441,6 +442,7 @@ describe('a session that ends abnormally is never final', () => {
 
   it('stops a failed git command in the cage before it can read as a session with no change', async () => {
     const shell: CageShell = {
+      renew: async () => {},
       async exec(argv) {
         if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
         if (argv.includes('diff')) return { code: 137, out: '', err: 'container is not running', timedOut: false };
@@ -498,6 +500,7 @@ describe('what is a result of the task, and final', () => {
       expect(statusOf(thrown), reply).toBe('failed');
     }
     const binary: CageShell = {
+      renew: async () => {},
       async exec(argv) {
         if (argv.includes('rev-parse')) return { code: 0, out: 'abc123\n', err: '', timedOut: false };
         if (argv.includes('--numstat')) return { code: 0, out: '-\t-\ta.png\0', err: '', timedOut: false };
@@ -1484,6 +1487,7 @@ describe('a provider stop inside a reply claude marks successful', () => {
     worker: 'vega',
     change: { number: 1, headSha: 'a'.repeat(40) } as never,
     files: [],
+    tree: { entries: [], read: async () => Buffer.alloc(0) },
   };
   const reviewStatus = async (out: string) => {
     try {

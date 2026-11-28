@@ -6,22 +6,31 @@ export const cageShells = (
   source: string,
 ): ((worker: string, task: string) => CageShell) => {
   const cages = new Map<string, Promise<CageView>>();
-  const cageFor = async (worker: string, task: string): Promise<{ active: SandboxDriver; cage: CageView }> => {
-    const active = await driver();
-    if (active === null) throw new Error('no container engine is available, so no cage can run an agent');
+  return (worker, task) => {
     const key = `${worker}\n${task}`;
-    let cage = cages.get(key);
-    if (cage === undefined) {
-      cage = active.startCage({ task, worker, source });
-      cages.set(key, cage);
-      cage.catch(() => cages.delete(key));
-    }
-    return { active, cage: await cage };
+    const cageFor = async (): Promise<{ active: SandboxDriver; cage: CageView }> => {
+      const active = await driver();
+      if (active === null) throw new Error('no container engine is available, so no cage can run an agent');
+      let cage = cages.get(key);
+      if (cage === undefined) {
+        cage = active.startCage({ task, worker, source });
+        cages.set(key, cage);
+        cage.catch(() => cages.delete(key));
+      }
+      return { active, cage: await cage };
+    };
+    return {
+      async renew() {
+        const old = cages.get(key);
+        if (old === undefined) return;
+        cages.delete(key);
+        const view = await old.catch(() => null);
+        if (view !== null) await (await driver())?.releaseCage(view.id);
+      },
+      async exec(argv, options) {
+        const { active, cage } = await cageFor();
+        return active.exec(cage.id, argv, options);
+      },
+    };
   };
-  return (worker, task) => ({
-    async exec(argv, options) {
-      const { active, cage } = await cageFor(worker, task);
-      return active.exec(cage.id, argv, options);
-    },
-  });
 };

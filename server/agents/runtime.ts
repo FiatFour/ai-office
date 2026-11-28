@@ -1,5 +1,13 @@
 import type { TaskId, Verdict } from '@agent-works/core';
-import type { ChangeFact, CheckFailure, CommentFact, FileEdit, HeadFile, LineComment } from '../githost/host.ts';
+import type {
+  ChangeFact,
+  CheckFailure,
+  CommentFact,
+  FileEdit,
+  HeadFile,
+  HeadTree,
+  LineComment,
+} from '../githost/host.ts';
 
 export type RuntimeId = 'claude-code' | 'codex' | 'scripted';
 
@@ -36,7 +44,13 @@ export type AgentJob = JobBase &
         /** Set on a fix round that answers red CI. */
         readonly failures?: readonly CheckFailure[];
       }
-    | { readonly role: 'reviewer'; readonly change: ChangeFact; readonly files: readonly HeadFile[] }
+    | {
+        readonly role: 'reviewer';
+        readonly change: ChangeFact;
+        readonly files: readonly HeadFile[];
+        /** Every file at the head under review, for the runtime to check out where the reviewer works. */
+        readonly tree: HeadTree;
+      }
   );
 
 export type AgentResult =
@@ -61,6 +75,8 @@ export interface AgentRuntime {
 
 export class RuntimeUnavailable extends Error {}
 export class AgentFailed extends Error {}
+/** The job would fail the same way again, so it is not retried. */
+export class AgentRefused extends AgentFailed {}
 
 const VERDICTS: readonly Verdict[] = ['approve', 'changes', 'comment'];
 

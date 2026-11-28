@@ -6,6 +6,16 @@ const slice = (url: URL, list: unknown[]): unknown[] => {
   return list.slice((page - 1) * size, page * size);
 };
 
+/** The folders of these files, which a real host lists in a recursive tree next to the files. */
+export const foldersOf = (paths: Iterable<string>): string[] => [
+  ...new Set(
+    [...paths].flatMap((path) => {
+      const parts = path.split('/').slice(0, -1);
+      return parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+    }),
+  ),
+];
+
 export const paged = (request: HttpRequest, response: HttpResponse, keys: readonly string[] = []): HttpResponse => {
   if (request.method !== 'GET' || response.status !== 200) return response;
   const url = new URL(request.path, 'https://host.invalid');

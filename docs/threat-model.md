@@ -26,6 +26,16 @@ A prompt-injected agent. It is a worker or Captain that runs with the permission
 
 The agent can run any command its tools allow, edit any file it can write, and choose its own file names, argument strings and proxy user name. Out of scope here are a compromised host, a compromised Claude Code binary, a malicious operator, and attacks on the git host itself. The replay also stands in for the injected agent. It performs the attacker's action directly, so it tests the boundary and not the model's willingness to follow the instruction (see "Limits of the replay").
 
+**A reviewer reads the change and runs none of it.** The reviewer's cage mounts its Claude login home read-write and the firewall lets it reach the git host, so code from the change must not run there: it could steal the login or steer later sessions. `server/agents/claude-code.ts` starts a reviewer session with `--restricted`, `--tools Read,Grep,Glob`, `--strict-mcp-config` and deny rules for the tools that run or write, for `/home/agent` and for `/proc`. By Claude Code's documentation (S-89 to S-91) this leaves no tool that runs code or writes a file, loads no user or project settings and so no hooks, and keeps file reads inside `/work`, `@` mentions in the prompt included. HQ's tests check the arguments. No live session has measured the behaviour. CI runs the tests, and a red check goes back to the author. The author's session is unchanged: it runs its own code with its home mounted.
+
+Each review starts from a new cage, so nothing an earlier session left in `/work` or `.git` reaches it. The worker's home does persist. HQ's checkout git reads no global or system config, and writes symbolic links as plain files. The change's agent settings are not checked out (`server/agents/checkout.ts`).
+
+Still open:
+
+- The change is text the reviewer reads, so it can try to talk the reviewer into an approval. A settings file from the export that imports another file of the repository imports the head's version.
+- The review body is posted on the git host. The denied reads above are what keeps the login out of it.
+- Where author and reviewer share one login home (the benchmark does, see `bench/SEALING.md`), the author's code can write that home. `--restricted` is documented to skip user settings. This page does not claim that it skips user memory files there.
+
 ## Layers and codes
 
 The spec's five protected-file layers are L1 to L5. The firewall rules are F1 to F5 (spec section 4, "Firewall"). The extra codes name a mechanism a spike added or a boundary outside the spec's two lists.

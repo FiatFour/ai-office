@@ -321,6 +321,13 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
     return (await Promise.all([...fromRuns, ...fromStatuses])).slice(0, MAX_FAILURES);
   };
 
+  const listTree = async (repo: string, commit: string): Promise<{ root: string; entries: unknown[] }> => {
+    const root = str(await get(`/repos/${repo}/git/commits/${commit}`), 'tree.sha');
+    const listing = await get(`/repos/${repo}/git/trees/${root}?recursive=1`);
+    if (bool(listing, 'truncated')) throw new Error(`the tree of ${commit} is too large to list in one call`);
+    return { root, entries: field(listing, 'tree') as unknown[] };
+  };
+
   const paths = async (repo: string, number: number): Promise<string[]> => {
     const list = await allPages(get, `/repos/${repo}/pulls/${number}/files`);
     return list.filter((f) => str(f, 'status') !== 'removed').map((f) => str(f, 'filename'));
@@ -353,10 +360,8 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
     async pushFiles(repo, spec) {
       const ref = await missing(`/repos/${repo}/git/ref/heads/${segments(spec.branch)}`);
       const parent = str(ref ?? (await get(`/repos/${repo}/git/ref/heads/${segments(spec.base)}`)), 'object.sha');
-      const baseTree = str(await get(`/repos/${repo}/git/commits/${parent}`), 'tree.sha');
-      const listing = await get(`/repos/${repo}/git/trees/${baseTree}?recursive=1`);
-      if (bool(listing, 'truncated')) throw new Error(`the tree of ${parent} is too large to list in one call`);
-      const blobs = new Map((field(listing, 'tree') as unknown[]).map((e) => [str(e, 'path'), str(e, 'sha')]));
+      const { root: baseTree, entries } = await listTree(repo, parent);
+      const blobs = new Map(entries.map((e) => [str(e, 'path'), str(e, 'sha')]));
       const changed = spec.files.filter((file) => blobs.get(file.path) !== blobSha(file.content));
       if (changed.length === 0) return parent;
       const tree = await call('POST', `/repos/${repo}/git/trees`, {
@@ -404,6 +409,16 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
         files.push({ path, content: contentText(got) });
       }
       return files;
+    },
+
+    async tree(repo, sha) {
+      return (await listTree(repo, sha)).entries
+        .filter((e) => str(e, 'type') === 'blob')
+        .map((e) => ({ path: str(e, 'path'), mode: str(e, 'mode'), sha: str(e, 'sha') }));
+    },
+
+    async blob(repo, sha) {
+      return Buffer.from(str(await get(`/repos/${repo}/git/blobs/${sha}`), 'content'), 'base64');
     },
 
     async postReview(repo, number, draft) {

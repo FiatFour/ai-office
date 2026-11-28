@@ -214,7 +214,7 @@ export class SandboxDriver {
   async exec(
     id: string,
     argv: readonly string[],
-    options: { input?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+    options: { input?: string | Uint8Array; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<RunResult> {
     const view = this.cages.get(id);
     if (view === undefined) throw new CageError(`no cage ${id} is running`);

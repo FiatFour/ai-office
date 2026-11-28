@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type AgentJob, type AgentRuntime, parseReview } from '../agents/runtime.ts';
+import { type AgentJob, AgentRefused, type AgentRuntime, parseReview } from '../agents/runtime.ts';
 import { scripted } from '../agents/scripted.ts';
 import { github } from '../githost/github.ts';
 import { gitlab } from '../githost/gitlab.ts';
@@ -150,6 +150,47 @@ describe.skipIf(!hasSqlite)('one ticket through the cages mode', () => {
     expect(brief?.body).toContain('Cross-runtime review not collected');
     expect(ready.mode?.reviewGap).toContain('Codex is deferred');
     expect(calls.filter((c) => /\/merge/.test(c.path))).toEqual([]);
+  });
+
+  it('hands each reviewer the files of the head it reviews, from the host', async () => {
+    const { fake, hosts } = twoAccounts();
+    const inner = scripted({ scripts: SCRIPTS });
+    const seen: Array<{ head: string; note: string }> = [];
+    const runtime: AgentRuntime = {
+      id: 'scripted',
+      async run(job) {
+        if (job.role === 'reviewer') {
+          const entry = job.tree.entries.find((e) => e.path === 'docs/note.md');
+          seen.push({ head: job.change.headSha, note: String(await job.tree.read(entry?.sha ?? '')) });
+        }
+        return inner.run(job);
+      },
+    };
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    await until(hq, (s) => station('alpha/t2')(s) === 'merge');
+    expect(seen.map((r) => r.note)).toEqual(['# Note\n\nfirst draft\n', '# Note\n\nsecond draft\n']);
+    expect(seen.map((r) => fake.trees.get(r.head)?.get('docs/note.md'))).toEqual(seen.map((r) => r.note));
+  });
+
+  it('does not retry a job the runtime refuses, and files it as an Action item', async () => {
+    const { hosts } = twoAccounts();
+    const inner = scripted({ scripts: SCRIPTS });
+    let reviews = 0;
+    const runtime: AgentRuntime = {
+      id: 'scripted',
+      async run(job) {
+        if (job.role !== 'reviewer') return inner.run(job);
+        reviews += 1;
+        throw new AgentRefused('too large to review');
+      },
+    };
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    const snap = await until(hq, (s) => action('job_failed')(s) !== undefined, 20_000);
+    expect(action('job_failed')(snap)).toMatchObject({ task: 'alpha/t2', job: 'review', error: 'too large to review' });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(reviews).toBe(1);
   });
 
   it('closes the task within one poll after a person merges on the host, and never calls a merge endpoint', async () => {

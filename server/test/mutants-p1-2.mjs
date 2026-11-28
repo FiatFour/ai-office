@@ -22,6 +22,7 @@ const CLI = 'server/test/cli.test.ts';
 const SITE = 'server/test/site.test.ts';
 const TMP = 'server/test/tmp-cleanup.test.ts';
 const CILOG = 'server/test/ci-log.test.ts';
+const CHECKOUT = 'server/test/checkout.test.ts';
 
 /** @type {Array<{ name: string, claim: string, edits: Array<[file: string, find: string, replace: string, all?: 'all']>, tests: string[], survives?: boolean }>} */
 const MUTANTS = [
@@ -258,7 +259,7 @@ const MUTANTS = [
   {
     name: 'claude-git-unhardened',
     claim: 'HQ reads the cage repo with git hardened against agent-written config',
-    edits: [['server/agents/claude-code.ts', "'-c', 'core.fsmonitor=false', ", '']],
+    edits: [['server/agents/checkout.ts', "'-c', 'core.fsmonitor=false', ", '']],
     tests: [AGENTS],
   },
   {
@@ -731,8 +732,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/claude-code.ts',
-        'const ran = await shell.exec(argv, {\n      input: promptFor(job),',
-        'const ran = await shell.exec([...argv, promptFor(job)], {',
+        'const ran = await shell.exec(argv, {\n      input: promptFor(job, notAtHead),',
+        'const ran = await shell.exec([...argv, promptFor(job, notAtHead)], {',
       ],
     ],
     tests: [AGENTS],
@@ -1050,7 +1051,7 @@ const MUTANTS = [
   {
     name: 'r3-allpages-overflow-unchecked',
     claim: '5,001 items is an error, not a silent read',
-    edits: [['server/githost/host.ts', 'if (all.length > MAX_ITEMS) throw', 'if (false) throw']],
+    edits: [['server/githost/host.ts', 'if (all.length > max) throw', 'if (false) throw']],
     tests: [CONTRACT, RECORDED],
   },
   {
@@ -1364,6 +1365,390 @@ const MUTANTS = [
       ],
     ],
     tests: [CILOG],
+  },
+  {
+    name: 'review-tree-of-base',
+    claim: 'the reviewer gets the tree of the head under review, not of the base',
+    edits: [
+      [
+        'server/modes/cages.ts',
+        'tree: { entries: await host.tree(repo, head),',
+        'tree: { entries: await host.tree(repo, options.base),',
+      ],
+    ],
+    tests: [CAGES],
+  },
+  {
+    name: 'review-without-checkout',
+    claim: 'the head is checked out before a reviewer session starts',
+    edits: [
+      [
+        'server/agents/claude-code.ts',
+        'notAtHead = await checkoutHead(shell, job.change.headSha, job.tree, job.signal);',
+        '',
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'review-prompt-hides-differences',
+    claim: 'the reviewer is told which paths differ from the head',
+    edits: [['server/agents/claude-code.ts', 'input: promptFor(job, notAtHead),', 'input: promptFor(job),']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'review-prompt-lists-all',
+    claim: 'the list of differing paths in the prompt is bounded',
+    edits: [['server/agents/claude-code.ts', '.slice(0, LISTED)\n', '.slice(0)\n']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-writes-credentials',
+    claim: 'a credential file of the head never reaches the cage',
+    edits: [
+      [
+        'server/agents/checkout.ts',
+        '!AGENT_SETTINGS.test(e.path) && !isCredential(e.path)',
+        '!AGENT_SETTINGS.test(e.path)',
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-credential-name-only',
+    claim: 'a file under a credential folder name is a credential too',
+    edits: [
+      [
+        'server/agents/checkout.ts',
+        "isProtectedPath(`/${parts.slice(0, i + 1).join('/')}`",
+        "isProtectedPath(`/${parts.join('/')}`",
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-takes-head-settings',
+    claim: 'a change cannot set the agent settings of its own reviewer',
+    edits: [
+      ['server/agents/checkout.ts', '!AGENT_SETTINGS.test(e.path) && !isCredential(e.path)', '!isCredential(e.path)'],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-settings-by-case',
+    claim: 'agent settings are matched in any letter case',
+    edits: [['server/agents/checkout.ts', 'mcp\\.json$)/i;', 'mcp\\.json$)/;']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-drops-export-settings',
+    claim: 'the settings the export holds stay in the cage',
+    edits: [['server/agents/checkout.ts', 'const wanted = [...fromHead, ...fromExport];', 'const wanted = fromHead;']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-reports-nothing',
+    claim: 'the paths that differ from the head are returned',
+    edits: [['server/agents/checkout.ts', 'return notAtHead;', 'return [];']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-reads-every-blob',
+    claim: 'HQ reads from the host only the blobs the cage lacks',
+    edits: [
+      [
+        'server/agents/checkout.ts',
+        "const known = await git(['cat-file', '--batch-check'], shas.map((sha) => `${sha}\\n`).join(''));",
+        "const known = shas.map((sha) => `${sha} missing`).join('\\n');",
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-trusts-blob-bytes',
+    claim: 'bytes that are not the blob of the tree fail the checkout',
+    edits: [['server/agents/checkout.ts', 'if (written !== sha) throw', 'if (written === null) throw']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-skips-refused-paths',
+    claim: 'a path git will not write fails the checkout',
+    edits: [['server/agents/checkout.ts', 'if (refused.length > 0)', 'if (refused.length < 0)']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-keeps-leftovers',
+    claim: 'export files the head does not have are removed',
+    edits: [['server/agents/checkout.ts', "await git(['clean', '-qffdx']);", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-keeps-ignored',
+    claim: 'ignored files the head does not have are removed too',
+    edits: [['server/agents/checkout.ts', "'-qffdx'", "'-qffd'"]],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-orphan-commit',
+    claim: 'the head commit sits on the export, so git diff shows what changed',
+    edits: [['server/agents/checkout.ts', "    '-p',\n    exported,\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-git-unbounded',
+    claim: 'a git call in the cage that hangs ends the review job instead of holding it',
+    edits: [['server/agents/checkout.ts', '      timeoutMs: GIT_TIMEOUT_MS,\n', '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'github-tree-lists-folders',
+    claim: 'a tree holds files only',
+    edits: [
+      [
+        'server/githost/github.ts',
+        ".filter((e) => str(e, 'type') === 'blob')\n        .map((e) => ({ path: str(e, 'path'), mode: str(e, 'mode'), sha: str(e, 'sha') }));",
+        ".map((e) => ({ path: str(e, 'path'), mode: str(e, 'mode'), sha: str(e, 'sha') }));",
+      ],
+    ],
+    tests: [RECORDED],
+  },
+  {
+    name: 'github-tree-cut-short',
+    claim: 'a GitHub listing that is cut short is refused',
+    edits: [
+      [
+        'server/githost/github.ts',
+        "if (bool(listing, 'truncated')) throw",
+        "if (bool(listing, 'truncated') && root === '') throw",
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'gitlab-tree-lists-folders',
+    claim: 'a GitLab tree holds files only',
+    edits: [['server/githost/gitlab.ts', ".filter((e) => str(e, 'type') === 'blob')\n        .map(", '.map(']],
+    tests: [RECORDED],
+  },
+  {
+    name: 'gitlab-tree-one-page',
+    claim: 'every page of a GitLab tree is read',
+    edits: [
+      [
+        'server/githost/gitlab.ts',
+        '      const listed = await allPages(\n        get,\n        `${project(repo)}/repository/tree?ref=${sha}&recursive=true`,\n        undefined,\n        MAX_TREE,\n      );',
+        '      const listed = (await get(`${project(repo)}/repository/tree?ref=${sha}&recursive=true&per_page=100`)) as unknown[];',
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'github-blob-as-text',
+    claim: 'blob returns the decoded bytes',
+    edits: [['server/githost/github.ts', "'content'), 'base64');", "'content'), 'utf8');"]],
+    tests: [RECORDED],
+  },
+  {
+    name: 'gitlab-blob-as-text',
+    claim: 'a GitLab blob returns the decoded bytes',
+    edits: [['server/githost/gitlab.ts', "'content'), 'base64');", "'content'), 'utf8');"]],
+    tests: [RECORDED],
+  },
+  {
+    name: 'review-reused-cage',
+    claim: 'every review starts from a new cage',
+    edits: [['server/agents/claude-code.ts', '      await shell.renew();\n', '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'renew-keeps-handle',
+    claim: 'the call after a renew starts another cage',
+    edits: [['server/agents/cage-shell.ts', '        cages.delete(key);\n        const view', '        const view']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'renew-keeps-container',
+    claim: 'a renew releases the old cage',
+    edits: [
+      ['server/agents/cage-shell.ts', 'if (view !== null) await (await driver())?.releaseCage(view.id);', 'void view;'],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'reviewer-gets-author-tools',
+    claim: 'a reviewer has no tool that runs code or writes',
+    edits: [
+      ['server/agents/claude-code.ts', "role === 'reviewer' ? REVIEWER_TOOLS :", "role === 'never' ? REVIEWER_TOOLS :"],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'reviewer-loads-settings',
+    claim: 'a reviewer session loads no settings, so no hooks, and reads inside /work',
+    edits: [['server/agents/claude-code.ts', "  '--restricted',\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'reviewer-tool-added',
+    claim: 'the reviewer tool set holds only tools that read',
+    edits: [['server/agents/claude-code.ts', "'Read,Grep,Glob',", "'Read,Grep,Glob,Bash',"]],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'reviewer-keeps-mcp',
+    claim: 'a reviewer session starts no MCP server',
+    edits: [['server/agents/claude-code.ts', "  '--strict-mcp-config',\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'reviewer-bash-not-denied',
+    claim: 'Bash is denied to a reviewer by rule too',
+    edits: [['server/agents/claude-code.ts', "  'Bash',\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'reviewer-reads-home',
+    claim: 'the login home is denied to the reviewer file tools',
+    edits: [['server/agents/claude-code.ts', "  'Read(//home/agent/**)',\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'reviewer-told-to-run-tests',
+    claim: 'the prompt does not ask the reviewer to run code',
+    edits: [
+      [
+        'server/agents/claude-code.ts',
+        'You cannot run code or write files, so do not say you ran anything; CI runs the tests.',
+        "Run the repository's tests there.",
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-reads-global-config',
+    claim: 'HQ git ignores the global config of the home',
+    edits: [['server/agents/checkout.ts', "  'GIT_CONFIG_GLOBAL=/dev/null',\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-reads-system-config',
+    claim: 'HQ git ignores the system config',
+    edits: [['server/agents/checkout.ts', "  'GIT_CONFIG_NOSYSTEM=1',\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-follows-git-dir-env',
+    claim: 'HQ git names the repository itself',
+    edits: [['server/agents/checkout.ts', "  '--git-dir=.git',\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-follows-core-worktree',
+    claim: 'HQ git names the work tree itself',
+    edits: [['server/agents/checkout.ts', "  '--work-tree=.',\n", '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-follows-symlinks',
+    claim: 'a symbolic link of the head is a plain file',
+    edits: [['server/agents/checkout.ts', "'core.symlinks=false',", "'core.symlinks=true',"]],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-converts-eol',
+    claim: 'no end-of-line conversion on checkout',
+    edits: [['server/agents/checkout.ts', '* -text -ident', '* -ident']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-expands-ident',
+    claim: 'no ident expansion on checkout',
+    edits: [['server/agents/checkout.ts', ' -ident -filter', ' -filter']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-runs-filters',
+    claim: 'no filter runs on checkout',
+    edits: [['server/agents/checkout.ts', ' -ident -filter', ' -ident']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-reencodes',
+    claim: 'no re-encoding on checkout',
+    edits: [['server/agents/checkout.ts', ' !working-tree-encoding', '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-not-verified',
+    claim: 'a checkout that did not happen fails',
+    edits: [
+      [
+        'server/agents/checkout.ts',
+        '!== written)\n    throw new AgentFailed(`the files',
+        '=== null)\n    throw new AgentFailed(`the files',
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-blobs-uncapped',
+    claim: 'the number of blobs read is capped',
+    edits: [['server/agents/checkout.ts', 'if (missing.length > MAX_BLOBS)', 'if (missing.length < 0)']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-blob-cap-off-by-one',
+    claim: 'the blob cap itself is allowed',
+    edits: [['server/agents/checkout.ts', 'if (missing.length > MAX_BLOBS)', 'if (missing.length >= MAX_BLOBS)']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-bytes-uncapped',
+    claim: 'the total size of the blobs read is capped',
+    edits: [['server/agents/checkout.ts', 'if (bytes > MAX_BLOB_BYTES)', 'if (bytes < 0)']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'checkout-cap-retried',
+    claim: 'a cap failure is marked as not worth a retry',
+    edits: [['server/agents/checkout.ts', 'throw new AgentRefused(', 'throw new AgentFailed(']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'refused-job-retried',
+    claim: 'a refused job is not run again',
+    edits: [['server/modes/cages.ts', 'error instanceof AgentRefused ? maxFailures : ', '']],
+    tests: [CAGES],
+  },
+  {
+    name: 'checkout-same-ignores-mode',
+    claim: 'a mode change alone is a difference from the head',
+    edits: [['server/agents/checkout.ts', ' && a?.mode === b?.mode', '']],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'github-tree-takes-submodules',
+    claim: 'a GitHub submodule has no blob to read',
+    edits: [
+      [
+        'server/githost/github.ts',
+        ".filter((e) => str(e, 'type') === 'blob')\n        .map(",
+        ".filter((e) => str(e, 'type') !== 'tree')\n        .map(",
+      ],
+    ],
+    tests: [CHECKOUT],
+  },
+  {
+    name: 'gitlab-tree-takes-submodules',
+    claim: 'a GitLab submodule has no blob to read',
+    edits: [
+      [
+        'server/githost/gitlab.ts',
+        ".filter((e) => str(e, 'type') === 'blob')\n        .map(",
+        ".filter((e) => str(e, 'type') !== 'tree')\n        .map(",
+      ],
+    ],
+    tests: [CHECKOUT],
   },
   {
     name: 'limit-test-default',

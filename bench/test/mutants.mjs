@@ -653,7 +653,7 @@ const MUTANTS = [
   {
     name: 'web-tools-allowed',
     claim: 'claude runs with WebSearch and WebFetch disallowed',
-    edits: [['server/agents/claude-code.ts', "  '--disallowedTools',\n  WITHOUT_WEB,\n", '']],
+    edits: [['server/agents/claude-code.ts', ", '--disallowedTools', WITHOUT_WEB]", ']']],
     tests: ['server/test/agents.test.ts'],
   },
   {

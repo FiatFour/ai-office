@@ -117,6 +117,7 @@ describe.skipIf(docker === undefined)('the cage shell and Allow on a real docker
         at: 1,
       },
       files: [0, 1, 2].map((i) => ({ path: `big${i}.txt`, content: big })),
+      tree: { entries: [], read: async () => Buffer.alloc(0) },
       signal,
     });
     expect(done.role === 'reviewer' && Number(/read (\d+) bytes/.exec(done.body)?.[1])).toBeGreaterThan(

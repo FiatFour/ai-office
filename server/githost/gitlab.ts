@@ -245,6 +245,8 @@ export const gitlabScope = (repo: string, base: string): Scope => {
   return { home: `/projects/${encodeURIComponent(repo)}`, base };
 };
 
+const MAX_TREE = 50_000;
+
 export const gitlab = ({ send, log, repo, base }: GitlabOptions): GitHost => {
   const api = guard('gitlab', GITLAB_WRITES, gitlabScope(repo, base), send, log);
   const call = (method: HttpRequest['method'], path: string, body?: unknown) =>
@@ -378,6 +380,22 @@ export const gitlab = ({ send, log, repo, base }: GitlabOptions): GitHost => {
         files.push({ path, content: contentText(got) });
       }
       return files;
+    },
+
+    async tree(repo, sha) {
+      const listed = await allPages(
+        get,
+        `${project(repo)}/repository/tree?ref=${sha}&recursive=true`,
+        undefined,
+        MAX_TREE,
+      );
+      return listed
+        .filter((e) => str(e, 'type') === 'blob')
+        .map((e) => ({ path: str(e, 'path'), mode: str(e, 'mode'), sha: str(e, 'id') }));
+    },
+
+    async blob(repo, sha) {
+      return Buffer.from(str(await get(`${project(repo)}/repository/blobs/${sha}`), 'content'), 'base64');
     },
 
     async postReview(repo, number, draft) {

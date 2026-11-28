@@ -142,6 +142,13 @@ export interface ReviewDraft {
   readonly comments: readonly LineComment[];
 }
 
+/** One changed file of a PR. A count is null when the host did not give it. */
+export interface FileStat {
+  readonly path: string;
+  readonly added: number | null;
+  readonly deleted: number | null;
+}
+
 export interface PostedComment {
   readonly id: string;
   readonly url: string;
@@ -165,6 +172,8 @@ export interface GitHost {
   postReview(repo: string, number: number, review: ReviewDraft): Promise<ReviewFact>;
   findComment(repo: string, number: number, marker: string): Promise<PostedComment | null>;
   postComment(repo: string, number: number, body: string): Promise<PostedComment>;
+  /** Every changed file with its line counts. A host that does not give counts leaves this out. */
+  fileStats?(repo: string, number: number): Promise<FileStat[]>;
 }
 
 export class PayloadError extends Error {

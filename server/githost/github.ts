@@ -440,6 +440,18 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
       }
     },
 
+    async fileStats(repo, number) {
+      const lines = (file: unknown, key: 'additions' | 'deletions') => {
+        const value = (file as Record<string, unknown>)[key];
+        return Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : null;
+      };
+      return (await allPages(get, `/repos/${repo}/pulls/${number}/files`)).map((file) => ({
+        path: str(file, 'filename'),
+        added: lines(file, 'additions'),
+        deleted: lines(file, 'deletions'),
+      }));
+    },
+
     async findComment(repo, number, marker) {
       const self = await login();
       const list = await allPages(get, `/repos/${repo}/issues/${number}/comments`);

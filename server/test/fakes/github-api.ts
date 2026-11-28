@@ -81,6 +81,13 @@ const hunkLines = (before: string | undefined, after: string): Set<number> => {
   return shown;
 };
 
+const lineCounts = (before: string | undefined, after: string | undefined) => {
+  const left = textLines(before ?? '');
+  const right = textLines(after ?? '');
+  const common = right.filter((line) => left.includes(line)).length;
+  return { additions: right.length - common, deletions: Math.max(0, left.length - common) };
+};
+
 export const UNRESOLVED_LINE = {
   message: 'Unprocessable Entity',
   errors: ['Pull request review thread line must be part of the diff'],
@@ -353,8 +360,14 @@ export class FakeGithub {
         return ok([
           ...[...head.entries()]
             .filter(([path, content]) => base.get(path) !== content)
-            .map(([filename]) => ({ filename, status: base.has(filename) ? 'modified' : 'added' })),
-          ...[...base.keys()].filter((path) => !head.has(path)).map((filename) => ({ filename, status: 'removed' })),
+            .map(([filename, content]) => ({
+              filename,
+              status: base.has(filename) ? 'modified' : 'added',
+              ...lineCounts(base.get(filename), content),
+            })),
+          ...[...base]
+            .filter(([path]) => !head.has(path))
+            .map(([filename, content]) => ({ filename, status: 'removed', ...lineCounts(content, undefined) })),
         ]);
       }
       if (sub === '/reviews' && method === 'GET')

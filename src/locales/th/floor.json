@@ -63,7 +63,8 @@
       "alert": "HQ แจ้งเตือน: {{detail}}",
       "job_failed": "job ของ {{task}} ล้มเหลว: {{detail}}"
     },
-    "open": "เปิดบน host"
+    "open": "เปิดบน host",
+    "brief": "เปิดสรุปก่อน merge"
   },
   "settings": {
     "title": "ตั้งค่า",

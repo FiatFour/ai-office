@@ -358,6 +358,10 @@ jobs:
         run: |
           node src/e2e/prs.mjs
           if ($LASTEXITCODE -ne 0) { throw "the prs lane failed" }
+      - name: Merge brief screen (opened from the ready action item, withdrawn on a red check) and its artboard compare
+        run: |
+          node src/e2e/merge-brief.mjs
+          if ($LASTEXITCODE -ne 0) { throw "the merge brief lane failed" }
       - name: Frame time with six workers, 30 s
         run: |
           node src/e2e/perf.mjs

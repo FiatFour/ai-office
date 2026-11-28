@@ -1,6 +1,7 @@
 import { cageShells } from '../agents/cage-shell.ts';
 import { claudeCode } from '../agents/claude-code.ts';
 import type { Ticket } from '../agents/runtime.ts';
+import { withBriefs } from '../brief/store.ts';
 import { github } from '../githost/github.ts';
 import { gitlab } from '../githost/gitlab.ts';
 import { type ApiCall, cliTransport } from '../githost/host.ts';
@@ -89,7 +90,8 @@ export const cagesFromConfig = (
       },
       ...(typeof c.pollMs === 'number' ? { pollMs: c.pollMs } : {}),
     });
-    return withChanges(mode, { host, repo, base, tickets });
+    const sources = { host, repo, base, tickets };
+    return withBriefs(withChanges(mode, sources), { ...sources, author: runtime.id });
   } catch (error) {
     throw new ConfigError((error as Error).message);
   }

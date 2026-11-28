@@ -904,10 +904,316 @@ const MUTANTS = [
   {
     name: 'changes-not-wired',
     claim: 'the CLI cages mode serves /api/changes',
-    edits: [
-      ['server/modes/cages-config.ts', 'return withChanges(mode, { host, repo, base, tickets });', 'return mode;'],
-    ],
+    edits: [['server/modes/cages-config.ts', 'withChanges(mode, sources),', 'mode,']],
     tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'brief-gate-no-pr',
+    claim: 'a box with no PR has no brief',
+    edits: [
+      [
+        'server/brief/gate.ts',
+        "if (box === undefined || box.state === 'belt' || box.state === 'building') return no('no-pr');",
+        "if (box === undefined) return no('no-pr');",
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-closed',
+    claim: 'a cancelled box has no brief',
+    edits: [['server/brief/gate.ts', "  if (box.state === 'cancelled') return no('closed');\n", '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-test',
+    claim: 'no brief before HQ sees the checks green',
+    edits: [['server/brief/gate.ts', "  if (box.state === 'test') return no('test');\n", '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-review',
+    claim: 'no brief before HQ sees the approvals',
+    edits: [
+      [
+        'server/brief/gate.ts',
+        "  if (box.state === 'qc') return no(box.changesRequested ? 'changes' : 'review');\n",
+        '',
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-branch',
+    claim: 'the change is the task’s own branch',
+    edits: [['server/brief/gate.ts', 'change.branch !== branchOf(task) || ', '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-repo',
+    claim: 'the change is in this repo',
+    edits: [['server/brief/gate.ts', ' || change.repo.toLowerCase() !== repo.toLowerCase())', ')']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-head-moved',
+    claim: 'a head moved on the host drops the brief',
+    edits: [['server/brief/gate.ts', "  if (snapshot.change.headSha !== head) return no('head-moved');\n", '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-host-closed',
+    claim: 'a PR closed on the host drops the brief',
+    edits: [['server/brief/gate.ts', "  if (snapshot.change.state === 'closed') return no('closed');\n", '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-no-checks',
+    claim: 'a head with no check is not green',
+    edits: [['server/brief/gate.ts', "  if (checks.length === 0) return no('no-checks');\n", '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-other-head-checks',
+    claim: 'only the checks of this head count',
+    edits: [['server/brief/gate.ts', 'snapshot.checks.filter((check) => check.headSha === head);', 'snapshot.checks;']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-red',
+    claim: 'a failed check drops the brief',
+    edits: [
+      [
+        'server/brief/gate.ts',
+        "const red = checks.filter((check) => check.state !== 'success');",
+        "const red = checks.filter((check) => check.state === 'never');",
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-pending',
+    claim: 'a pending or skipped check is not green',
+    edits: [
+      [
+        'server/brief/gate.ts',
+        "const red = checks.filter((check) => check.state !== 'success');",
+        "const red = checks.filter((check) => check.state === 'failure');",
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-builder-approves',
+    claim: 'a builder cannot approve',
+    edits: [['server/brief/gate.ts', '.filter(([who]) => !builders.has(who));', ';']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-author-approves',
+    claim: 'the PR author cannot approve',
+    edits: [
+      ['server/brief/gate.ts', '[...candidate.box.builders, candidate.change.author.v]', '[...candidate.box.builders]'],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-changes',
+    claim: 'a standing request for changes drops the brief',
+    edits: [['server/brief/gate.ts', "  if (changes.length > 0) return no('changes', changes);\n", '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-approvals',
+    claim: 'the approvals must be met on the host',
+    edits: [['server/brief/gate.ts', "  if (approvers.length < required) return no('approvals', approvers);\n", '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-gate-one-approval',
+    claim: 'as many approvals as the config asks',
+    edits: [['server/brief/gate.ts', 'approvers.length < required', 'approvers.length < 1']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-standing-other-head',
+    claim: 'a review of another head counts for nothing',
+    edits: [['server/brief/gate.ts', '    if (review.commitId !== head) continue;\n', '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-standing-dismissed',
+    claim: 'a dismissed review takes the approval away',
+    edits: [['server/brief/gate.ts', 'verdicts.delete(who);', 'continue;']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-standing-unsorted',
+    claim: 'the latest review wins',
+    edits: [['server/brief/gate.ts', '[...reviews].sort((a, b) => a.at - b.at)', 'reviews']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-standing-marker-from-anyone',
+    claim: 'a marker counts only from the reviewer login',
+    edits: [
+      [
+        'server/brief/gate.ts',
+        'review.reviewer.toLowerCase() === self ? REVIEW_MARK.exec(review.body) : null',
+        'REVIEW_MARK.exec(review.body)',
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-standing-marker-approves',
+    claim: 'a marker is never an approval',
+    edits: [
+      [
+        'server/brief/gate.ts',
+        "else if (review.verdict === 'approve') verdicts",
+        "else if (review.verdict === 'approve' || mark?.[2] === 'approve') verdicts",
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-standing-marker-changes',
+    claim: 'a marked request for changes counts',
+    edits: [['server/brief/gate.ts', " || mark?.[2] === 'changes') verdicts", ') verdicts']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-phase-merged',
+    claim: 'a merged PR is not shown as ready',
+    edits: [['server/brief/gate.ts', "snapshot.change.state === 'merged' ? 'merged' : 'ready'", "'ready'"]],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-no-host-gate',
+    claim: 'the host read can refuse what HQ believes',
+    edits: [
+      [
+        'server/brief/store.ts',
+        "  if (!passed.ok) return { state: 'none', task, why: passed.why, names: passed.names };\n",
+        "  if (!passed.ok && passed.why === 'never') return { state: 'none', task, why: passed.why, names: [] };\n",
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-snapshot-first',
+    claim: 'the snapshot is read after the rest',
+    edits: [
+      [
+        'server/brief/store.ts',
+        '  const [files, comments, self] = await Promise.all([',
+        '  const early = await sources.host.snapshot(sources.repo, number);\n  const [files, comments, self] = await Promise.all([',
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-never-reused',
+    claim: 'a host answer is reused',
+    edits: [
+      [
+        'server/brief/store.ts',
+        '        return seen.value;\n      const value',
+        '        return readHost(sources, number);\n      const value',
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-never-expires',
+    claim: 'an old host answer is read again',
+    edits: [['server/brief/store.ts', 'Date.now() - seen.at < (sources.maxAgeMs ?? MAX_AGE_MS)', 'true']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-files-fatal',
+    claim: 'a refused file list does not take the brief away',
+    edits: [
+      [
+        'server/brief/store.ts',
+        "  } catch (error) {\n    return {\n      state: 'not_collected',",
+        "  } catch (error) {\n    throw error;\n    return {\n      state: 'not_collected',",
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-files-no-fallback',
+    claim: 'a host with no line counts still names the files',
+    edits: [
+      [
+        'server/brief/store.ts',
+        ': (await sources.host.paths(sources.repo, number)).map((path) => ({ path, added: null, deleted: null }));',
+        ': [];',
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-stale-key',
+    claim: 'a change in HQ’s facts reads the host again at once',
+    edits: [['server/brief/store.ts', 'seen.key === key && ', '']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-files-uncapped',
+    claim: 'the file list is capped',
+    edits: [['server/brief/store.ts', 'list: stats.slice(0, MAX_FILES),', 'list: stats,']],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-files-partial-total',
+    claim: 'a total with a missing count is not a number',
+    edits: [
+      [
+        'server/brief/store.ts',
+        'return sum === null || lines === null ? null : sum + lines;',
+        'return (sum ?? 0) + (lines ?? 0);',
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-unread-shown-ready',
+    claim: 'a host that did not answer is named',
+    edits: [['server/brief/store.ts', "why: 'unread', names: [answer.message] };", "why: 'head-moved', names: [] };"]],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-unknown-task',
+    claim: 'a task with no work order is refused',
+    edits: [
+      [
+        'server/brief/store.ts',
+        'if (ticket === undefined) throw new InvalidEvent(`no work order for ${task}`);',
+        "if (ticket === undefined) return { state: 'none', task, why: 'no-pr', names: [] };",
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-not-wired',
+    claim: 'the CLI cages mode serves /api/briefs',
+    edits: [
+      [
+        'server/modes/cages-config.ts',
+        'return withBriefs(withChanges(mode, sources), { ...sources, author: runtime.id });',
+        'return withChanges(mode, sources);',
+      ],
+    ],
+    tests: ['server/test/brief.test.ts'],
+  },
+  {
+    name: 'brief-no-line-counts',
+    claim: 'the GitHub driver gives line counts',
+    edits: [['server/githost/github.ts', "added: lines(file, 'additions'),", 'added: null,']],
+    tests: ['server/test/brief.test.ts'],
   },
 ];
 

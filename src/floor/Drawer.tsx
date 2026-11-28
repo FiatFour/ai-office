@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { briefHref } from '../screens/prs/model.ts';
 import type { Lang } from './i18n.ts';
 import type { FloorView } from './model.ts';
 import type { Hq } from './useHq.ts';
@@ -87,6 +88,11 @@ export const Drawer = ({
                     {/* i18n-keys: floor.actions.kind.ready_to_merge floor.actions.kind.closed_unmerged floor.actions.kind.round_limit floor.actions.kind.checks_failed floor.actions.kind.website floor.actions.kind.alert floor.actions.kind.job_failed */}
                     {t(`floor.actions.kind.${action.kind}`, { task: action.task ?? '', detail: action.detail ?? '' })}
                   </span>
+                  {action.kind === 'ready_to_merge' && action.task !== null ? (
+                    <a href={briefHref(location.search, action.task)} data-testid="action-brief">
+                      {t('floor.actions.brief')}
+                    </a>
+                  ) : null}
                   {action.url === null ? null : (
                     <a href={action.url} rel="noreferrer" target="_blank">
                       {t('floor.actions.open')}

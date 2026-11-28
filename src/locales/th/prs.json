@@ -1,0 +1,45 @@
+{
+  "title": "ด่าน QC · PR และ MR",
+  "intro": "pull request (GitHub) และ merge request (GitLab) ทุกอันต้องผ่านสถานีทดสอบและ QC ก่อนส่งของ",
+  "back": "กดโลโก้เพื่อกลับไปที่พื้นโรงงาน",
+  "loading": "กำลังอ่าน…",
+  "noFactory": "HQ นี้ไม่ได้เดินโรงงาน จึงไม่มี pull request ให้ดู",
+  "empty": "ยังไม่มี pull request",
+  "listFailed": "อ่านรายการไม่สำเร็จ",
+  "detailFailed": "อ่าน pull request นี้ไม่สำเร็จ",
+  "unread": "{{host}} ไม่ตอบ จึงไม่แสดงผลตรวจและความเห็นรีวิว",
+  "by": "โดย {{worker}} · {{task}}",
+  "open": "เปิดใน {{host}}",
+  "openToMerge": "เปิดใน {{host}} เพื่อ merge",
+  "never": "Agent Works ไม่ merge แทนคุณ คุณ merge บน GitHub หรือ GitLab เอง แล้วกล่องจะถูกส่งและงานจะปิด",
+  "checks": {
+    "title": "ผลตรวจ",
+    "station": "สถานีทดสอบ",
+    "none": "โฮสต์ไม่ได้รายงานผลตรวจของ commit นี้",
+    "state": { "success": "ผ่าน", "failure": "ไม่ผ่าน", "pending": "กำลังรัน", "skipped": "ข้าม" }
+  },
+  "review": {
+    "title": "รีวิว",
+    "station": "รีวิว QC",
+    "none": "ไม่มีความเห็นรีวิว",
+    "round": "รีวิวรอบที่ {{round}}",
+    "current": "(commit ปัจจุบัน)",
+    "verdict": { "approve": "อนุมัติ", "changes": "ขอให้แก้", "comment": "ความเห็น" }
+  },
+  "approval": {
+    "title": "การอนุมัติ",
+    "you": "คุณ",
+    "peer": "{{who}} (เพื่อนร่วมงาน)",
+    "peerPending": "เพื่อนร่วมงาน: ยังไม่รีวิว",
+    "state": { "approve": "อนุมัติแล้ว", "changes": "ขอให้แก้", "wait": "รออยู่" }
+  },
+  "brief": {
+    "title": "สรุปก่อน merge",
+    "draft": "ฉบับร่าง สรุปจะถูกเขียนเมื่อผ่านสถานีทดสอบและ QC",
+    "changes": "ถูกขอให้แก้ สรุปจะถูกเขียนเมื่อผ่าน QC",
+    "review": "อยู่ที่ QC สรุปจะถูกเขียนเมื่อผ่าน QC",
+    "scrapped": "ทิ้งแล้ว ไม่มีสรุป",
+    "posted": "โพสต์เป็นความเห็นบน {{kind}} แล้ว",
+    "open": "เปิดสรุปก่อน merge ฉบับเต็ม →"
+  }
+}

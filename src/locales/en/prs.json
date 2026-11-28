@@ -1,0 +1,45 @@
+{
+  "title": "QC GATE · PRS AND MRS",
+  "intro": "Every pull request (GitHub) and merge request (GitLab) passes the test station and QC before it can ship.",
+  "back": "Press the logo to go back to the factory floor",
+  "loading": "Reading…",
+  "noFactory": "This HQ runs no factory, so there are no pull requests to show.",
+  "empty": "No pull requests yet.",
+  "listFailed": "The list could not be read.",
+  "detailFailed": "This pull request could not be read.",
+  "unread": "{{host}} did not answer, so checks and review comments are not shown.",
+  "by": "by {{worker}} · {{task}}",
+  "open": "Open on {{host}}",
+  "openToMerge": "Open on {{host}} to merge",
+  "never": "Agent Works never merges for you. You merge on GitHub or GitLab, then the box ships and the task closes.",
+  "checks": {
+    "title": "Checks",
+    "station": "TEST STATION",
+    "none": "The host reported no checks on this commit.",
+    "state": { "success": "passed", "failure": "failed", "pending": "running", "skipped": "skipped" }
+  },
+  "review": {
+    "title": "Review",
+    "station": "QC REVIEW",
+    "none": "No review comments.",
+    "round": "Review round {{round}}",
+    "current": "(current commit)",
+    "verdict": { "approve": "Approved", "changes": "Changes requested", "comment": "Comment" }
+  },
+  "approval": {
+    "title": "Approvals",
+    "you": "You",
+    "peer": "{{who}} (peer)",
+    "peerPending": "Peer: not yet",
+    "state": { "approve": "approved", "changes": "asked for changes", "wait": "waiting" }
+  },
+  "brief": {
+    "title": "MERGE BRIEF",
+    "draft": "Draft. The brief is written when the test station and QC pass.",
+    "changes": "Changes requested. The brief is written once QC passes.",
+    "review": "At QC. The brief is written once QC passes.",
+    "scrapped": "Scrapped. No brief.",
+    "posted": "Posted as a comment on the {{kind}}",
+    "open": "Open the full merge brief →"
+  }
+}

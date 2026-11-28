@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Drawer } from './Drawer.tsx';
 import { LANGS, type Lang } from './i18n.ts';
+import { ModeChip } from './ModeChip.tsx';
 import { floorView, type Mood, PANEL, panelOf, type WorkerView } from './model.ts';
 import { Scene } from './Scene.tsx';
 import { ScreenHost } from './ScreenHost.tsx';
@@ -119,6 +120,7 @@ const Floor = ({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) =
           <span className="status">{t('floor.hud.demoProgress', { done: demo.replayed, total: demo.total })}</span>
         )}
         <span className="grow" />
+        {hq.snapshot.host ? <ModeChip host={hq.snapshot.host} running={hq.snapshot.cages?.length ?? 0} /> : null}
         <nav aria-label={t('floor.hud.menu')}>
           <button
             type="button"

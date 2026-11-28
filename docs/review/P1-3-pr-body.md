@@ -155,12 +155,12 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 | id | status | what differs |
 | --- | --- | --- |
 | D01 | fixed | The demo chip, the Debug drawer's mode line and the `--demo` start line say "Demo data" as on the canvas (they said "Demo replay"). Operator call 2026-11-21, follow the canvas. The demo shows the recorded run's own worker names (nova, vega); the canvas crew (Captain, Byte, Pixel, Echo) is not copied in, because the recorded export is the demo's provenance and the snapshot has no field the canvas names would honestly fill. |
-| D02 | not-built | Host chip (detected computer) in the run-mode button. The snapshot has no host or shell field. |
+| D02 | fixed | Host chip (detected computer) in the run-mode chip, from the snapshot's host field. The lane starts HQ with AGENT_WORKS_HOST=windows, the computer the canvas is drawn for, so the compare does not depend on the lane machine. |
 | D03 | not-built | Factory switcher ("FACTORY my-app", "3 lines", "+2 elsewhere"). Needs the factory park screen. |
 | D04 | not-built | Order-board select (First active, Backlog). Needs boards. |
 | D05 | not-built | Line speed buttons 1x, 2x, 4x. |
 | D06 | not-built | Zoom out and zoom in buttons. |
-| D07 | not-built | Run-mode chip ("MODE Cages / Sandbox cages · 6 running", WIN · PWSH, blinking dot). The snapshot has no run mode. |
+| D07 | fixed | Run-mode chip ("MODE Cages / Sandbox cages · 6 running", WIN · PWSH, dot). The count is the cages HQ holds. Cages is the only run mode. |
 | D08 | not-built | HQ menu: + New order, Setup, Preflight, Boards, Docs, PRs / MRs, Terminal, Settings. Built has Action items, Debug and a Settings button (see D44). Each target is a later screen. |
 | D09 | not-built | Factory level 3 with a 340 / 500 XP bar. The snapshot has no level or XP. |
 | D10 | not-built | "+ Hire" button in the crew header. A button with no screen behind it would be dead. |
@@ -227,6 +227,7 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 | D73 | fixed | Shipping dock: the hazard stripe, the left wall edge, the side ramp and the roll-up door with its blue bumper are the canvas shapes. The truck load is not built (D24). |
 | D74 | fixed | TEST scan lines, the QC press and light stack, and the MERGE pads are drawn as on the canvas. |
 | D75 | changed | Built-only SHIPPED stamp on a delivered box (green), next to SCRAPPED and CHANGES; the canvas has the HOTFIX and BLOCKED tags only (D33). |
+| D76 | changed | The built run-mode chip is a link that opens the preflight screen, so its green frame is painted on a link. The canvas has a button that cycles run modes and a dot that blinks; the built dot is still. |
 <!-- differences:end -->
 
 ## Spec versus canvas conflicts (the operator decides; the choice made in the code is stated)

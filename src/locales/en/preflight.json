@@ -1,0 +1,66 @@
+{
+  "title": "PREFLIGHT CHECK",
+  "back": "Select the logo to go to the floor.",
+  "intro": "Checks everything this computer needs before the line starts.",
+  "terminal": "Same checks in a terminal:",
+  "detected": "DETECTED",
+  "runMode": "Run mode",
+  "cages": "Cages",
+  "kvm": { "yes": "/dev/kvm present", "no": "no /dev/kvm" },
+  "engine": { "none": "no container engine installed", "stopped": "{{name}} not answering", "rootless": "rootless" },
+  "verdict": {
+    "checking": "CHECKING…",
+    "ready": "READY TO START",
+    "warned": "READY TO START",
+    "blocked": "NOT READY",
+    "failed": "CHECK FAILED"
+  },
+  "hint": {
+    "checking": "Asking this computer. START waits for the answer.",
+    "ready": "Everything this factory needs is here.",
+    "warned": "You can start. A warning does not block the line.",
+    "blocked": "Fix the blocking items, then press Check again.",
+    "failed": "HQ did not answer the checks. Check that it is running, then run them again."
+  },
+  "count": {
+    "PASS_one": "{{count}} passed",
+    "PASS_other": "{{count}} passed",
+    "WARN_one": "{{count}} warning",
+    "WARN_other": "{{count}} warnings",
+    "FAIL_one": "{{count}} blocking",
+    "FAIL_other": "{{count}} blocking",
+    "SKIP_one": "{{count}} not needed",
+    "SKIP_other": "{{count}} not needed"
+  },
+  "tally": {
+    "blocking_one": "{{count}} blocking",
+    "blocking_other": "{{count}} blocking",
+    "warnings_one": "{{count}} warning",
+    "warnings_other": "{{count}} warnings",
+    "good": "all good"
+  },
+  "group": { "computer": "THIS COMPUTER", "sandbox": "SANDBOX" },
+  "check": {
+    "host": "Operating system",
+    "node": "Node.js 22.18 or newer",
+    "git": "git",
+    "port": "HQ port {{port}}",
+    "home": "HQ home folder",
+    "engine": "Container engine running",
+    "rootless": "Cage cannot reach the host",
+    "image": "Cage image",
+    "kvm": "MicroVM isolation (krun)"
+  },
+  "fix": "FIX",
+  "checkAgain": "Check again",
+  "rerun": "Re-detect & run all",
+  "start": "▶ START THE LINE",
+  "footnote": "These checks run when you open this page, when you ask again and when you press Start. They run on this computer and send nothing anywhere. This button does not stop a ticket sent straight to the HQ API.",
+  "chip": {
+    "label": "Run mode: cages on {{host}}. Open the preflight check.",
+    "mode": "MODE",
+    "cages": "Cages",
+    "sandbox": "Sandbox cages ·",
+    "running": "running"
+  }
+}

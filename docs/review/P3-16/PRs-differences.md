@@ -170,6 +170,7 @@ D05 | changed | Pricing page layout | Add a two-file note | PR data comes from t
   regions: R2-3C1-12
 
 D06 | changed | FIXED IN ROUND 2 | Review round | Comments are grouped by review round with the verdict of each review. HQ does not claim a comment was fixed, because it has no evidence for that.
+  covers: text:docs/note.md:#
   covers: text:app/pricing/page.tsx:# ;; text:components/plan.tsx:# ;; text:echo · peer review (codex)
   covers: text:fixed ;; text:fixed in round # ;; text:plan cards use a hard-coded currency. read it from the locale.
   covers: text:the yearly toggle does not update the price label on first render. add a test for it. ;; text:(current commit) ;; text:approved

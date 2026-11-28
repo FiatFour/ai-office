@@ -184,7 +184,7 @@ export const runPrsLane = async (browser) => {
     await page.goto(`${factory.url}/?lang=en#/prs`);
     await page.waitForSelector('[data-round="2"]');
     await page.waitForSelector('.prs-brief a[target="_blank"]');
-    await page.$$eval('.prs-round code', (nodes) => {
+    await page.$$eval('.prs-round h4 code', (nodes) => {
       for (const node of nodes) node.textContent = 'commit';
     });
     compare = await canvasCompare(browser, page, { inventory: {}, text: '' }, PRS_SPEC);

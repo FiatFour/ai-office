@@ -133,6 +133,7 @@ describe.skipIf(process.platform === 'win32')('checking out the head under revie
     Object.assign(env, { GIT_DIR: join(other.work, '.git'), GIT_WORK_TREE: other.work });
     await checkoutHead(cage.shell, HEAD, headTree({ 'a.txt': 'new\n' }), signal);
     expect(cage.read('a.txt')).toBe('new\n');
+    expect(await cage.git('log', '-1', '--format=%s')).toBe(`head ${HEAD}\n`);
     expect(existsSync(join(other.work, 'other.txt'))).toBe(true);
     expect(existsSync(join(other.work, 'a.txt'))).toBe(false);
   });

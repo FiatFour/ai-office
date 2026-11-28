@@ -333,9 +333,15 @@ The author gets each failing check by name with an excerpt of its log (`GitHost.
 
 ### The head a reviewer works in
 
-A reviewer's cage starts as every cage does, from an export of `source`, which does not hold the change. Before each review, the Claude Code runtime makes `/work` hold the files of the head under review (`server/agents/checkout.ts`). HQ lists the head with `GitHost.tree`, reads only the blobs the cage lacks with `GitHost.blob`, and passes their bytes to git in the cage on stdin. The result is a local commit on top of the export. Its id is not the host's, and the cage gets no remote and no credential. The firewall does not change.
+A reviewer reads the head under review and does not run it. CI runs the tests (`docs/threat-model.md` says why and how the tools are limited). The Claude Code runtime gives a reviewer `Read`, `Grep` and `Glob` only.
 
-Two kinds of path differ from the head, and the reviewer's prompt names them. Credential files are left out, as the export leaves them out. Agent settings (`.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json`) stay as the export has them, so a change cannot instruct its own reviewer. If the head cannot be checked out, the review job fails and no reviewer session starts. Untracked files from an earlier round are removed, except `node_modules`. Submodules are not checked out.
+Before each review the runtime drops the worker's cage for the task and starts a new one, which is an export of `source` and does not hold the change (`CageShell.renew`). It then makes `/work` hold the files of the head (`server/agents/checkout.ts`). HQ lists the head with `GitHost.tree`, reads only the blobs the export lacks with `GitHost.blob`, and passes their bytes to git in the cage on stdin. The result is a local commit on top of the export. Its id is not the host's, and the cage gets no remote and no credential. The firewall does not change.
+
+HQ's git calls for this ignore the global and system config, name the git dir and work tree, and turn off the conversions `.gitattributes` can ask for, so each file is byte for byte its blob. A symbolic link is a plain file that holds its target. After the checkout HQ indexes the working tree again, and a tree that is not the one it asked for fails the job.
+
+HQ reads at most 300 blobs and 20 MiB of them for one review (`MAX_BLOBS`, `MAX_BLOB_BYTES`). Over either cap no reviewer session starts and no review is posted. The job is not retried and shows as a `job_failed` Action item that says to bring `source` up to date or to review the change by hand. Over the file cap HQ reads no blob. Over the size cap it stops at the blob that passes it.
+
+Two kinds of path differ from the head, and the reviewer's prompt names them. Credential files are left out, as the export leaves them out. Agent settings (`.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json`) stay as the export has them, so a change cannot instruct its own reviewer. If the head cannot be checked out, the review job fails and no reviewer session starts. Submodules are not checked out. Each review adds one export folder under the HQ home.
 
 ### The export file
 

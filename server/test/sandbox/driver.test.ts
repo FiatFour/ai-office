@@ -42,7 +42,15 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
         await engine.ok(['build', '-t', IMAGE, '-f', join(CONTEXT, 'Containerfile.test'), CONTEXT], {
           timeoutMs: 600_000,
         });
-      driver = new SandboxDriver({ engine, home, hq, image: IMAGE, project, onDenial: (d) => denials.push(d) });
+      driver = new SandboxDriver({
+        engine,
+        home,
+        hq,
+        image: IMAGE,
+        project,
+        workerAllow: { nova: ['own.invalid'] },
+        onDenial: (d) => denials.push(d),
+      });
     }, 700_000);
 
     afterAll(async () => {
@@ -88,6 +96,9 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       ]);
       expect(rootMount.out.split(',')).toContain('ro');
       expect(inspect?.Config.User).toBe(`${process.getuid?.()}:${process.getgid?.()}`);
+      expect((inspect?.Config as { Env?: string[] } | undefined)?.Env).toContain(
+        'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1',
+      );
       expect(Object.keys(inspect?.NetworkSettings.Networks ?? {})).toEqual([`aw-${hq}-internal`]);
       const net = JSON.parse(await engine.ok(['network', 'inspect', `aw-${hq}-internal`])) as Array<{
         Internal?: boolean;
@@ -158,6 +169,32 @@ describe.skipIf(engines.length === 0)('sandbox driver on a real engine', () => {
       },
       120_000,
     );
+
+    it('names a cage by its address, gives it only its own rules and forgets it on release', async () => {
+      const registry = () =>
+        Object.values(JSON.parse(readFileSync(join(home, 'sandbox', hq, 'cages.json'), 'utf8'))) as unknown[];
+      const [first] = driver.list();
+      const vega = await driver.startCage({
+        task: 'acme/t4',
+        worker: 'vega',
+        source: fixtureRepo(tempDir('driver-src4'), canary),
+      });
+      expect(registry()).toContainEqual({ agent: 'nova', allow: ['own.invalid'] });
+      expect(registry()).toContainEqual({ agent: 'vega', allow: [] });
+      const asNova = async (container: string, target: string) => {
+        const script = `const u=new URL(process.env.HTTPS_PROXY);const r=require('http').request({host:u.hostname,port:u.port,method:'CONNECT',path:'${target}',headers:{'Proxy-Authorization':'Basic '+Buffer.from('nova:x').toString('base64')},timeout:8000});r.on('connect',res=>{console.log(res.statusCode);process.exit(0)});r.on('error',e=>{console.log(e.code);process.exit(0)});r.end()`;
+        return (await engine.run(['exec', container, 'node', '-e', script], { timeoutMs: 60_000 })).out.trim();
+      };
+      expect(await asNova(first?.container ?? '', 'own.invalid:443')).toBe('502');
+      expect(await asNova(vega.container, 'own.invalid:443')).toBe('403');
+      await expect.poll(() => denials.find((d) => d.host === 'own.invalid')?.agent, { timeout: 15_000 }).toBe('vega');
+      expect(driver.rules()).not.toContain('later.invalid:443');
+      await driver.allow('later.invalid:443');
+      expect(driver.rules()).toContain('later.invalid:443');
+      expect(await asNova(vega.container, 'later.invalid:443')).toBe('502');
+      await driver.releaseCage(vega.id);
+      expect(registry()).toEqual([{ agent: 'nova', allow: ['own.invalid'] }]);
+    }, 180_000);
 
     it('releases one cage and then leaves nothing labeled behind after removeAll', async () => {
       const source = fixtureRepo(tempDir('driver-src2'), canary);

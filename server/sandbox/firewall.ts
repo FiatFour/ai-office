@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeAtomic } from '../store/atomic.ts';
 import type { Engine } from './engine.ts';
 import { mount } from './export.ts';
 
@@ -11,12 +12,38 @@ export const ROLE_LABEL = 'agent-works.role';
 
 const PROXY_DIR = join(dirname(fileURLToPath(import.meta.url)), 'proxy');
 
-export const DEFAULT_ALLOWLIST: readonly string[] = [
-  'api.anthropic.com',
-  'github.com',
-  'api.github.com',
-  'registry.npmjs.org',
-];
+/** Every policy holds the model API, without which no agent in a cage can run. */
+const MODEL_API = 'api.anthropic.com';
+const REGISTRY = 'registry.npmjs.org';
+
+export const POLICIES = {
+  locked: [MODEL_API, REGISTRY],
+  balanced: [MODEL_API, 'github.com', 'api.github.com', REGISTRY],
+  open: ['*'],
+} as const satisfies Record<string, readonly string[]>;
+
+export type PolicyName = keyof typeof POLICIES;
+
+export const DEFAULT_ALLOWLIST: readonly string[] = POLICIES.balanced;
+
+export interface FirewallPolicy {
+  /** The rules every cage of the project gets. */
+  readonly allowlist: readonly string[];
+  /** The extra rules of one worker's cages, by worker name. */
+  readonly workers: Readonly<Record<string, readonly string[]>>;
+}
+
+export const firewallPolicy = (
+  policy: PolicyName = 'balanced',
+  allow: readonly string[] = [],
+  workers: FirewallPolicy['workers'] = {},
+): FirewallPolicy => ({ allowlist: [...new Set([...POLICIES[policy], ...allow])], workers });
+
+/** What the proxy knows of one cage, by its address on the internal network. */
+export interface CageIdentity {
+  readonly agent: string;
+  readonly allow: readonly string[];
+}
 
 export const NOT_ALLOWLISTED = 'not-allowlisted';
 
@@ -34,6 +61,7 @@ export interface Firewall {
   readonly proxy: string;
   readonly proxyIp: string;
   readonly allowlistPath: string;
+  readonly cagesPath: string;
   readonly stop: () => void;
 }
 
@@ -80,6 +108,20 @@ export const writeAllowlist = (path: string, hosts: readonly string[]): void => 
   chmodSync(path, 0o644);
 };
 
+export const writeCages = (path: string, cages: ReadonlyMap<string, CageIdentity>): void => {
+  writeAtomic(path, JSON.stringify(Object.fromEntries(cages)));
+  chmodSync(path, 0o644);
+};
+
+export const addressOn = async (engine: Engine, container: string, network: string): Promise<string> => {
+  const inspected = JSON.parse(await engine.ok(['inspect', container])) as Array<{
+    NetworkSettings: { Networks: Record<string, { IPAddress: string }> };
+  }>;
+  const address = inspected[0]?.NetworkSettings.Networks[network]?.IPAddress ?? '';
+  if (address === '') throw new Error(`${container} has no address on ${network}`);
+  return address;
+};
+
 export const parseDenialLine = (line: string): Denial | null => {
   if (!line.startsWith('{"deny":')) return null;
   try {
@@ -109,6 +151,8 @@ export const raiseFirewall = async (spec: FirewallSpec): Promise<Firewall> => {
   chmodSync(dir, 0o755);
   const allowlistPath = join(dir, 'allowlist.txt');
   writeAllowlist(allowlistPath, allowlist);
+  const cagesPath = join(dir, 'cages.json');
+  writeCages(cagesPath, new Map());
   const labels = labelArgs(project, hq, 'network');
   await engine.ok(['network', 'create', ...labels, names.egress]);
   const harden = engine.name === 'docker' ? ['-o', 'com.docker.network.bridge.inhibit_ipv4=true'] : [];
@@ -135,16 +179,12 @@ export const raiseFirewall = async (spec: FirewallSpec): Promise<Firewall> => {
     '/proxy/node-proxy.mjs',
   ]);
   await engine.ok(['network', 'connect', names.internal, names.proxy]);
-  const inspected = JSON.parse(await engine.ok(['inspect', names.proxy])) as Array<{
-    NetworkSettings: { Networks: Record<string, { IPAddress: string }> };
-  }>;
-  const proxyIp = inspected[0]?.NetworkSettings.Networks[names.internal]?.IPAddress ?? '';
-  if (proxyIp === '') throw new Error(`the proxy has no address on ${names.internal}`);
+  const proxyIp = await addressOn(engine, names.proxy, names.internal);
   const follower = engine.follow(['logs', '-f', '--since', '0s', names.proxy], (line) => {
     const denial = parseDenialLine(line);
     if (denial !== null) spec.onDenial(denial);
   });
-  return { ...names, proxyIp, allowlistPath, stop: follower.stop };
+  return { ...names, proxyIp, allowlistPath, cagesPath, stop: follower.stop };
 };
 
 export const lowerFirewall = async (engine: Engine, project: string, hq: string): Promise<void> => {

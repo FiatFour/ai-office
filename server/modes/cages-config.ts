@@ -5,6 +5,8 @@ import { github } from '../githost/github.ts';
 import { gitlab } from '../githost/gitlab.ts';
 import { type ApiCall, cliTransport } from '../githost/host.ts';
 import type { SandboxDriver } from '../sandbox/container.ts';
+import { type FirewallPolicy, firewallPolicy, POLICIES, type PolicyName } from '../sandbox/firewall.ts';
+import { parseAllowlist } from '../sandbox/proxy/allowlist.mjs';
 import { cagesMode, type ModeFactory } from './cages.ts';
 
 export class ConfigError extends Error {}
@@ -42,6 +44,46 @@ const ticketOf = (id: string, raw: unknown): Ticket => {
     url: optText(t, 'url', where) ?? null,
     risk: risk === null ? null : { level: risk.level as 'LOW', reason: text(risk, 'reason', `${where}.risk`) },
   };
+};
+
+const ONE_RULE = /^(?:\*\.)?[^\s#*:]+(?::\d{1,5})?$/;
+
+const hostRules = (value: unknown, where: string): string[] => {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new ConfigError(`${where} must be a list of host rules`);
+  return value.map((rule) => {
+    try {
+      if (typeof rule !== 'string' || !ONE_RULE.test(rule)) throw new Error('not a host rule');
+      parseAllowlist(rule);
+    } catch {
+      throw new ConfigError(`${where}: ${JSON.stringify(rule)} is not a host rule such as pypi.org or *.pypi.org:443`);
+    }
+    return rule;
+  });
+};
+
+/** `config.firewall`: `{ policy?, allow?, workers? }`. A key it does not know is an error, not a rule silently lost. */
+export const firewallFromConfig = (raw: unknown): FirewallPolicy => {
+  const c = record(raw, 'config');
+  if (c.firewall === undefined) return firewallPolicy();
+  const f = record(c.firewall, 'config.firewall');
+  for (const key of Object.keys(f))
+    if (!['policy', 'allow', 'workers'].includes(key)) throw new ConfigError(`config.firewall.${key} is not a setting`);
+  const policy = f.policy ?? 'balanced';
+  if (typeof policy !== 'string' || !Object.hasOwn(POLICIES, policy))
+    throw new ConfigError(`config.firewall.policy must be one of ${Object.keys(POLICIES).join(', ')}`);
+  const names = [c.author, c.reviewer];
+  const workers = Object.entries(f.workers === undefined ? {} : record(f.workers, 'config.firewall.workers'));
+  for (const [worker] of workers)
+    if (!names.includes(worker))
+      throw new ConfigError(`config.firewall.workers.${worker} is neither config.author nor config.reviewer`);
+  return firewallPolicy(
+    policy as PolicyName,
+    hostRules(f.allow, 'config.firewall.allow'),
+    Object.fromEntries(
+      workers.map(([worker, rules]) => [worker, hostRules(rules, `config.firewall.workers.${worker}`)]),
+    ),
+  );
 };
 
 export const cagesFromConfig = (

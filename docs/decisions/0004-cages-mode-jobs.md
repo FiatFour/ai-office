@@ -57,16 +57,23 @@ What is not wired yet:
 - On GitLab, a reviewer's "changes" verdict is posted as a note and read back as a comment, so it starts no fix round. This gap predates this round. It is recorded here, not fixed.
 - A GitHub tree too large to list in one call makes the push fail rather than guess.
 
-## BLOCKED ATTEMPTS and the repeat pause (P2-2, rounds 2 and 3)
+## BLOCKED ATTEMPTS and the worker pause (P2-2, changed by P3-11)
 
-The first P2-2 round recorded every proxy denial as an F2 attempt and paused a worker on three identical ones. That contradicted the Allow flow above: a worker whose package manager retries a host that is not allowlisted yet is waiting on the operator, and three retries paused it, with nothing in HQ or the dashboard to resume it. The premise that every repeated denial is a worker stuck in a loop was false. Decided:
+P2-2 paused a worker on three identical denials and left out a denial of a host that was only missing from the allowlist, so that a package manager waiting on an Allow was not paused. That left two holes (issue #27). An exfil loop to an unlisted host never paused its worker, and a changed detail, a changed port or a retry six minutes apart evaded the count. P3-11 closes both. Decided:
 
-- **Every denial is listed on `/blocked`, but only a denial no Allow can fix counts toward the pause.** A denial with reason `not-allowlisted` for a name `siteOf` accepts is a website item. It waits on the operator, and the worker's retry goes through after Allow. It is listed, its repeat count shows, and it never pauses. Any other denial (a non-public address, an SNI mismatch, ECH, no SNI, plain HTTP, a name Allow refuses such as a wildcard) is not fixed by Allow, so three of them from one worker pause it.
-- **Counts are windowed.** An identical attempt counts only against the same worker's attempts of the last 10 minutes (`REPEAT_WINDOW_MS`), so a repeat hours later or on another task does not add up to the old ones.
-- **Allow is offered only for a not-allowlisted denial.** The website item is `allow: true` only when the denial reason is `not-allowlisted` and `siteOf` accepts the name. A non-public-address, SNI-mismatch, ECH, no-SNI or plain-HTTP denial is listed on `/blocked` and counts toward the pause, but it is never an Allow item. For `sni-mismatch` the proxy reports the SNI host (`denial.host ?? target.host`), so a fronting attempt toward `evil.test` would otherwise show as an `evil.test` website item, and Allow would both open egress to the fronted host and resume the worker. Round 2 got this wrong.
-- **Allow never resumes a worker.** A not-allowlisted denial for an Allow-able name never counts toward a pause, so no pause can have that cause, and Allow only opens egress. Round 3 kept a cause-matching resume (`BlockedLog.cleared`, `HqPort.allowed`) for a pause that cannot occur; round 4 deleted it: deleting its one call left every test green, and no production path reached it. `POST /api/workers/resume {worker}` lifts any pause by hand. The website item's `allow` stays false once any denial for that site had another reason, so a fronting host (`sni-mismatch` is reported under the SNI host) that also drew one plain not-allowlisted CONNECT is never offered Allow. No UI has an Allow button today; the effect is `allow: false` on the website item, and the API answers a request to allow that site with a 400.
-- **Accepted limit (M2).** A worker that loops on a not-allowlisted attacker domain (an exfil retry loop) is never paused. The proxy still denies every attempt, nothing leaves the cage, and `/blocked` shows the repeat count growing on one website item for the operator to see. Pausing on it would pause the honest worker that waits on an Allow, which is the case this decision exists to protect. The operator has not yet seen this limit; the default is accepted (`gates.md`).
-- **Known limits, not fixed.** The 10 minute window is gameable (retries more than 5 minutes apart, or with varied detail or port, never reach three inside it), and the per-key times map in `BlockedLog` and the denials map in the cages mode grow without bound. Tracked in a GitHub issue.
+- **Every denial counts.** HQ keeps one streak per worker and layer, whatever the detail. The third identical attempt (same tool call and detail) or the tenth distinct one in a streak pauses the worker.
+- **A streak ends after 10 quiet minutes.** The window moves with each denial. A fixed window of 10 minutes cannot see three retries that are six minutes apart, so it was rejected.
+- **The cost is that an honest retry loop now pauses.** A package manager that asks three times for an unlisted host pauses its worker. The pause stops new jobs and does not kill the running one. The site is still a website item, Allow opens it, and `POST /api/workers/resume {worker}` lifts the pause. A cage sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` so that the agent's own telemetry does not count.
+- **Allow is offered only for a not-allowlisted denial,** and **Allow never resumes a worker.** A fronting attempt is reported under the SNI host, so an Allow for it would open egress to the fronted host. One denial of a site with another reason makes its item `allow: false`.
+- **The proxy names a cage by its address,** not by the name the cage sends. Without this, a new name on each request would give each request its own count, and a cage could take another worker's extra rules.
+- **Both maps are capped and expire.** The caps are in `server/blocked.ts`: 256 streaks of at most 10 keys, and 100 website items for 24 hours. A full website map drops an item that Allow could open, never a refused one.
+
+Known limits:
+
+- Attempts more than 10 minutes apart never add up. A cage that waits out the window sends at most 2 identical and 9 distinct denied requests in each burst.
+- When all 100 website items are refused ones, a new site gets no item until one expires. It is still on `/blocked`.
+- A website item and its refusal are in memory. A restart, or 24 quiet hours, forgets them.
+- The floor does not show that a worker is paused. `/blocked`, `snapshot.paused` and the resume route do. The Action items screen (P3-19) is where Resume belongs.
 
 ## Consequences
 

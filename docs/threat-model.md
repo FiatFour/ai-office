@@ -142,7 +142,7 @@ The table has one row per attack path. `Stopped by (replay proves)` is the layer
 | `fw-ech` | The same with an Encrypted Client Hello extension | issue, doc, dependency | C, SC | `F2s` | - | `stopped` | `sni-off` | Node proxy refuses ECH. Squid cannot see it |
 | `fw-host-header-cdn` | Allowlisted CDN name and SNI, `Host: other-site` inside the tunnel | issue, doc, dependency | C, SC | `none` | - | `open` | - | The proxy never decrypts. Only MITM or a dedicated-IP allowlist closes it |
 | `fw-allowlisted-exfil` | A secret in a request to an allowlisted host such as `api.github.com` | issue, doc, MCP | C, SC | `none` | - | `open` | - | Any allowlisted host that accepts data is a channel. Operator decision on policy |
-| `fw-label-spoof` | The cage sends another agent's name in `Proxy-Authorization` | issue, doc | C, SC | `none` | - | `open` | - | Deny events and per-agent allowlists trust the label (G1) |
+| `fw-label-spoof` | The cage sends another agent's name in `Proxy-Authorization` | issue, doc | C, SC | `none` | - | `open` | - | Deny events and per-agent allowlists trust the label (G1). The product HQ now names a cage by its source address (P3-11). The replay rig registers no cage, so it still trusts the label |
 | `fw-proxy-down` | The proxy is gone | issue, doc | C, SC | `F3` | - | `stopped` | `network-open` | Cages sit on the internal network only, so no proxy means no route |
 | `fw-local-open` | Any outbound request from a subagents-local worker | issue, doc, dependency, MCP | SL | `none` | - | `open` | - | The spec turns the firewall off in this mode. Operator decision |
 | `fw-doh` | DNS over HTTPS to an allowlisted resolver | issue, doc | C, SC | `none` | - | `not-run` | - | Needs a real zone, parked as a gate |

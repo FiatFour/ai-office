@@ -1,4 +1,5 @@
 import type { Box, State } from '@agent-works/core';
+import type { FirewallCount } from '../../server/snapshot/firewall.ts';
 import type { HostInfo } from '../../server/snapshot/host.ts';
 
 export const STATIONS = ['ORDER', 'CODE', 'TEST', 'QC', 'MERGE', 'SHIPPING'] as const;
@@ -42,6 +43,7 @@ export interface SnapshotLike {
   readonly actions?: readonly SnapshotActionLike[];
   readonly cages?: readonly unknown[];
   readonly host?: HostInfo | null;
+  readonly firewall?: FirewallCount | null;
 }
 
 export interface BoxView {
@@ -76,6 +78,7 @@ export interface FloorView {
   readonly actions: readonly ActionView[];
   readonly counts: Readonly<Record<PanelLabel, number>>;
   readonly shipped: number;
+  readonly firewall: FirewallCount | null;
 }
 
 export const stationOf = (box: Box): { station: StationLabel | null; stamp: Stamp | null } => {
@@ -189,5 +192,6 @@ export const floorView = (snapshot: SnapshotLike): FloorView => {
     actions,
     counts,
     shipped: boxes.filter((box) => box.state === 'shipped').length,
+    firewall: snapshot.firewall ?? null,
   };
 };

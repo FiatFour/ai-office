@@ -28,7 +28,7 @@ import {
 import { fileLog } from './githost/host.ts';
 import { startHq } from './hq.ts';
 import type { ModeFactory } from './modes/cages.ts';
-import { ConfigError, cagesFromConfig } from './modes/cages-config.ts';
+import { ConfigError, cagesFromConfig, firewallFromConfig } from './modes/cages-config.ts';
 import { DemoFixtureError, demoMode, loadDemo } from './modes/demo.ts';
 import { type DoctorContext, exitCodeOf, formatChecks, type PortState, runDoctor } from './preflight/checks.ts';
 import { hostProbeFor, realHostProbe } from './preflight/host.ts';
@@ -36,6 +36,7 @@ import { preflightService } from './preflight/report.ts';
 import { Registry } from './registry.ts';
 import { SandboxDriver } from './sandbox/container.ts';
 import { Engine, pickEngine, runBinary } from './sandbox/engine.ts';
+import { type FirewallPolicy, firewallPolicy } from './sandbox/firewall.ts';
 import { StoreCorruptError, StoreLockedError } from './store/store.ts';
 
 const BIN = fileURLToPath(new URL('../bin/agent-works.ts', import.meta.url));
@@ -256,7 +257,7 @@ const hqPreflight = (env: NodeJS.ProcessEnv, home: string) => {
 };
 
 const hqDriver =
-  (env: NodeJS.ProcessEnv, home: string) =>
+  (env: NodeJS.ProcessEnv, home: string, firewall: FirewallPolicy = firewallPolicy()) =>
   async (hq: string, onDenial: ConstructorParameters<typeof SandboxDriver>[0]['onDenial']) => {
     const engine = await pickEngine(env.AGENT_WORKS_ENGINE, env);
     if (engine === null) return null;
@@ -265,6 +266,8 @@ const hqDriver =
       home,
       hq,
       image: imageFor(env),
+      allowlist: firewall.allowlist,
+      workerAllow: firewall.workers,
       ...(onDenial === undefined ? {} : { onDenial }),
       ...(env.AGENT_WORKS_PROJECT === undefined ? {} : { project: env.AGENT_WORKS_PROJECT }),
     });
@@ -274,8 +277,8 @@ const serveMode = (
   flags: Parsed['flags'],
   home: string,
   driver: () => Promise<SandboxDriver | null>,
-): ModeFactory | undefined => {
-  if (flags.mode === undefined) return undefined;
+): { mode?: ModeFactory; firewall: FirewallPolicy } => {
+  if (flags.mode === undefined) return { firewall: firewallPolicy() };
   if (flags.mode !== 'cages') throw new CliError(`unknown mode ${String(flags.mode)}; the only mode is cages`, 2);
   if (typeof flags.config !== 'string') throw new CliError('--mode cages needs --config <file.json>', 2);
   let raw: unknown;
@@ -286,7 +289,10 @@ const serveMode = (
   }
   try {
     mkdirSync(home, { recursive: true });
-    return cagesFromConfig(raw, driver, fileLog(join(home, 'api-calls.jsonl')));
+    return {
+      mode: cagesFromConfig(raw, driver, fileLog(join(home, 'api-calls.jsonl'))),
+      firewall: firewallFromConfig(raw),
+    };
   } catch (error) {
     if (error instanceof ConfigError) throw new CliError(error.message, 2);
     throw error;
@@ -371,20 +377,25 @@ export const main = async (argv: readonly string[], env: NodeJS.ProcessEnv, io: 
     const driver = new Promise<SandboxDriver | null>((resolve) => {
       made = resolve;
     });
+    const { mode, firewall } = serveMode(flags, home, () => driver);
     const makeDriver = async (hq: string, onDenial: Parameters<ReturnType<typeof hqDriver>>[1]) => {
-      const active = await hqDriver(env, home)(hq, onDenial).catch((error: unknown) => {
+      const active = await hqDriver(
+        env,
+        home,
+        firewall,
+      )(hq, onDenial).catch((error: unknown) => {
         made(null);
         throw error;
       });
       made(active);
       return active;
     };
-    const mode = serveMode(flags, home, () => driver);
     const assets = builtAssets();
     const hq = await startHq({
       home,
       port,
       makeDriver,
+      allowlist: firewall.allowlist,
       preflight: hqPreflight(env, home),
       ...(mode === undefined ? {} : { mode }),
       ...(assets === undefined ? {} : { assets }),

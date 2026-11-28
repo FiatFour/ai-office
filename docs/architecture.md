@@ -27,7 +27,7 @@ browser floor  <--- WebSocket /api/ws (GET /api/demo in demo mode) --- HQ (node)
 
 The reducer keeps no per-worker record. A worker is a host login in `state.staff`. The state that moves is the box, one per task. What the floor shows for a worker is derived from the boxes. HQ does hold a little worker-keyed state outside the reducer, and none of it is in `state/hq.db`:
 
-- `BlockedLog` keeps a `held` set and the recent attempt times per worker (`server/blocked.ts`). The held set is `snapshot.paused`.
+- `BlockedLog` keeps a `held` set and one streak per worker and layer (`server/blocked.ts`). The held set is `snapshot.paused`.
 - Each worker has a home directory on disk, `homes/<homeName>` in the HQ home. `homeName` is a slug of the worker name plus a hash of it (`server/sandbox/container.ts`). `SandboxDriver.startCage` creates it and it stays after the cage is released (`server/sandbox/container.ts`).
 - The cage shell of an agent job caches one cage per worker and task, in memory (`server/agents/cage-shell.ts`).
 
@@ -72,7 +72,7 @@ A cage is a container the driver starts for one task and worker.
 
 ### Pause
 
-`BlockedLog` in `server/blocked.ts` can hold a worker. The third identical attempt inside 10 minutes pauses it (`REPEAT_LIMIT`, `REPEAT_WINDOW_MS`). The worker name is in `snapshot.paused` until `POST /api/workers/resume` clears it and wakes the mode. A denial of a well-formed host that is only missing from the allowlist does not count toward a pause. The cages mode keeps one `website` Action item per site. A site that is already allowed gives none. `allow` starts `true` and turns `false` for good once any denial of that site has another reason or a malformed host (`server/modes/cages.ts`).
+`BlockedLog` in `server/blocked.ts` can hold a worker. It keeps one streak per worker and layer, whatever the details are. A streak ends when 10 minutes pass with no new denial at that worker and layer (`REPEAT_WINDOW_MS`). The third identical attempt (the same tool call and detail, `REPEAT_LIMIT`) or the tenth distinct one (`DISTINCT_LIMIT`) in a streak pauses the worker. Every denial counts, a host that is only missing from the allowlist included. The worker name is in `snapshot.paused` until `POST /api/workers/resume` clears it and wakes the mode. Allow never resumes a worker. The cages mode keeps one `website` Action item per site. A site that is already allowed gives none. `allow` starts `true` and turns `false` once any denial of that site has another reason or a malformed host (`BlockedSites`).
 
 ## Snapshot schema
 
@@ -99,10 +99,20 @@ Source: `server/snapshot.ts`.
 | `cages` | Running cages, as `CageView`. |
 | `denials` | Proxy denials, as `Denial`. |
 | `blocked` | Recent blocked attempts, as `BlockedEntry`. |
+| `firewall` | The two numbers of the FIREWALL zone, as `FirewallCount`, or `null` on an HQ that starts no cage, as in demo mode. |
 | `paused` | Names of paused workers. |
 | `actions` | Things that need a person, as `ActionItem`. Derived, never stored. |
 | `mode` | The run mode view, as `ModeView`, or `null`. |
 | `host` | The computer HQ runs on, as `HostInfo`, or `null` on an HQ started without a preflight service. A preflight run pushes it again without raising `rev`. |
+
+### FirewallCount
+
+Source: `server/snapshot/firewall.ts`.
+
+| Field | Meaning |
+| --- | --- |
+| `blocked` | Distinct sites among the denials HQ holds, without those the allowlist has since opened. HQ holds at most 50 denial keys, so the number stops there. |
+| `allowed` | Project allowlist rules, or `null` when the policy allows every site. |
 
 ### HostInfo
 
@@ -251,7 +261,7 @@ Source: `server/blocked.ts`. It extends `Attempt`, so the `Attempt` fields are l
 | `run` | Run label, `hq` by default. |
 | `at` | Time in milliseconds. |
 | `seq` | Position in the log. |
-| `repeats` | Identical attempts in the window. |
+| `repeats` | Identical attempts in the current streak of this worker and layer. |
 
 ### OutboxEntry
 
@@ -360,10 +370,12 @@ Spec section 4 names the rules F1 to F5. The codes are in `docs/threat-model.md`
 
 - **Networks.** `raiseFirewall` in `server/sandbox/firewall.ts` creates an `--internal` network and an egress network per HQ. On docker the internal network also sets `inhibit_ipv4`, so there is no host gateway. Cages join only the internal network (F1, F3).
 - **Proxy.** One container runs the Node CONNECT proxy from `server/sandbox/proxy/`. It joins both networks. Cages get `HTTPS_PROXY` and `HTTP_PROXY` that point at it, with the worker name as the proxy user so a denial names the worker.
-- **Rules.** The proxy allows `CONNECT host:port` only for hosts in the allowlist file and answers 403 otherwise (F2). It resolves once, refuses non-public addresses and dials the address it checked (F2a). It reads the ClientHello and closes the tunnel unless the SNI equals the CONNECT host (F2s). It reads the allowlist file on every request. `DEFAULT_ALLOWLIST` is `api.anthropic.com`, `github.com`, `api.github.com` and `registry.npmjs.org`.
+- **Rules.** The proxy allows `CONNECT host:port` only for hosts in the allowlist file and answers 403 otherwise (F2). It resolves once, refuses non-public addresses and dials the address it checked (F2a). It reads the ClientHello and closes the tunnel unless the SNI equals the CONNECT host (F2s). It reads the allowlist file on every request. `DEFAULT_ALLOWLIST` is the Balanced policy.
+- **Policies.** `config.firewall` of the cages mode holds `{ policy, allow, workers }`. `locked` is `api.anthropic.com` and `registry.npmjs.org`. `balanced`, the default, adds `github.com` and `api.github.com`. `open` is the rule `*`, which matches every DNS name on port 443. It still refuses IP literals, non-public addresses and a wrong SNI. `allow` adds rules for the project and `workers.<name>` adds rules for one worker's cages.
+- **Cage names.** The driver writes `cages.json` beside the allowlist: for each running cage, its address on the internal network, its worker and its extra rules. The proxy names a client by its source address, so a cage that sends another worker's name in `Proxy-Authorization` gets neither that worker's rules nor its pause count. An address the file does not hold is `unknown`. The claimed name stands only where no such file exists, as in the P0-6 replay rig.
 - **Denials.** The proxy logs one JSON line per denial, `{deny: event}`, with no cap. The cap of 20 a second (F4r) applies only to the POST to a `denyUrl`, and `raiseFirewall` never sets one. HQ follows the log: `engine.follow` feeds each line to `parseDenialLine`, which gives a raw denial. So the path HQ uses is uncapped, and F4r speaks of a path HQ does not use. That gap is issue #44. Caveat: `docs/threat-model.md` still says in F4 that every denied request is POSTed to `/api/sandbox/deny`, and in F4r that the proxy posts at most 20 a second. HQ has no such route and reads the log instead. Both rows are false until issue #44 is settled. `noteDenial` in `server/hq.ts` does three things for each line. It tells the mode, which may raise a `website` Action item. It records a blocked attempt with layer `F2`. It updates the `denials` map.
-- **Bounds.** Some of what HQ holds is capped. Snapshot pushes for denials are throttled to one per 250 ms. The `denials` map in `server/hq.ts` holds at most 50 keys, and the oldest goes first. `BlockedLog` keeps at most 500 entries. Two maps are not capped, and each grows with every distinct host a cage tries. The cages mode keeps its own `denials` map, one entry per site, and never evicts. Its `actions()` returns every entry, so the snapshot and every push grow with it. `BlockedLog.times` keeps one list per attempt key (worker, layer, tool, detail) and drops keys only when `resume` runs for that worker. Memory is therefore not bounded under a flood of distinct hosts. Issue #27 tracks these two maps and issue #44 has the correction.
-- **Pause.** `BlockedLog` pauses a worker on the third identical attempt in 10 minutes and keeps at most 500 entries. See the state machine section.
+- **Bounds.** Snapshot pushes for denials are throttled to one per 250 ms. The `denials` map in `server/hq.ts` holds at most 50 keys, and the oldest goes first. `BlockedLog` keeps at most 500 entries, at most 256 streaks and at most 10 keys in each streak, and drops a streak that has been quiet for 10 minutes. `BlockedSites` holds at most 100 website items for 24 hours after their last denial. When it is full it drops the longest quiet item that Allow could open. It never drops a refused item to make room, so a new site is not listed there when all 100 are refused. It is still on `/blocked`. The set of paused workers is not capped. It grows only with worker names, which the proxy takes from the driver.
+- **Pause.** See the state machine section.
 - **Allow.** A person approves a `website` item with `POST /api/actions/allow`. That calls `SandboxDriver.allow`. The worker's own retry then passes. Only a single host rule is accepted.
 - **Cage flags.** `hardenedArgs` drops all capabilities, sets `no-new-privileges`, makes the root read-only and gives a 256 MB `/tmp`. A cage has a 1024 process limit and 4 GB of memory. No cage is privileged, mounts the docker socket or mounts a named volume (CG).
 - **Fail closed.** If the proxy dies, a cage has no route out. A failed firewall start tears down what it built.

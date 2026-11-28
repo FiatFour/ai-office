@@ -5,9 +5,12 @@ import { insideCage } from '../config.ts';
 import type { Engine, RunResult } from './engine.ts';
 import { exportPath, exportRepo, mount, scanInContainer, userArgs } from './export.ts';
 import {
+  addressOn,
+  type CageIdentity,
   DEFAULT_ALLOWLIST,
   type Denial,
   type Firewall,
+  type FirewallPolicy,
   filterArgs,
   hardenedArgs,
   labelArgs,
@@ -16,6 +19,7 @@ import {
   PROXY_PORT,
   raiseFirewall,
   writeAllowlist,
+  writeCages,
 } from './firewall.ts';
 import { parseAllowlist } from './proxy/allowlist.mjs';
 import { siteOf } from './site.ts';
@@ -37,6 +41,7 @@ export interface DriverOptions {
   readonly image: string;
   readonly project?: string;
   readonly allowlist?: readonly string[];
+  readonly workerAllow?: FirewallPolicy['workers'];
   readonly homeWorker?: (worker: string) => string;
   readonly onDenial?: (denial: Denial) => void;
 }
@@ -61,7 +66,11 @@ export class SandboxDriver {
   private readonly hq: string;
   private readonly image: string;
   private readonly project: string;
-  private readonly allowlist: readonly string[];
+  private allowlist: readonly string[];
+  private readonly workerAllow: FirewallPolicy['workers'];
+  /** The registry the proxy reads, by cage address. */
+  private readonly identities = new Map<string, CageIdentity>();
+  private readonly addresses = new Map<string, string>();
   private readonly homeWorker: (worker: string) => string;
   private readonly onDenial: (denial: Denial) => void;
   private firewall: Promise<Firewall> | null = null;
@@ -76,11 +85,17 @@ export class SandboxDriver {
     this.image = options.image;
     this.project = options.project ?? 'agent-works';
     this.allowlist = options.allowlist ?? DEFAULT_ALLOWLIST;
+    this.workerAllow = options.workerAllow ?? {};
     this.onDenial = options.onDenial ?? (() => {});
   }
 
   list(): CageView[] {
     return [...this.cages.values()];
+  }
+
+  /** The project's rules now: the policy's, and every site a person has allowed since. */
+  rules(): readonly string[] {
+    return this.allowlist;
   }
 
   private async user(): Promise<string[]> {
@@ -180,6 +195,9 @@ export class SandboxDriver {
         ...(await this.user()),
         '-e',
         'HOME=/home/agent',
+        // Every denial counts toward the worker pause, so the agent must not retry telemetry hosts the firewall denies.
+        '-e',
+        'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1',
         '-e',
         `HTTPS_PROXY=${proxy}`,
         '-e',
@@ -194,6 +212,16 @@ export class SandboxDriver {
         'sleep',
         'infinity',
       ]);
+      const address = await addressOn(this.engine, container, firewall.internal).catch(async (error: unknown) => {
+        await this.engine.run(['rm', '-f', container]);
+        throw error;
+      });
+      this.identities.set(address, {
+        agent: spec.worker,
+        allow: Object.hasOwn(this.workerAllow, spec.worker) ? (this.workerAllow[spec.worker] ?? []) : [],
+      });
+      this.addresses.set(id, address);
+      writeCages(firewall.cagesPath, this.identities);
       const view: CageView = {
         id,
         task: spec.task,
@@ -226,7 +254,9 @@ export class SandboxDriver {
     if (siteOf(rule)?.site !== rule) throw new Error(`allowlist: not a host rule: ${JSON.stringify(rule)}`);
     const { allowlistPath } = await this.raise();
     const current = lines(readFileSync(allowlistPath, 'utf8'));
-    if (!current.includes(rule)) writeAllowlist(allowlistPath, [...current, rule]);
+    if (current.includes(rule)) return;
+    writeAllowlist(allowlistPath, [...current, rule]);
+    this.allowlist = [...current, rule];
   }
 
   async releaseCage(id: string): Promise<boolean> {
@@ -234,6 +264,9 @@ export class SandboxDriver {
     if (view === undefined) return false;
     await this.engine.run(['rm', '-f', view.container]);
     this.cages.delete(id);
+    this.identities.delete(this.addresses.get(id) ?? '');
+    this.addresses.delete(id);
+    if (this.firewall !== null) writeCages((await this.firewall).cagesPath, this.identities);
     return true;
   }
 
@@ -245,6 +278,8 @@ export class SandboxDriver {
     await lowerFirewall(this.engine, this.project, this.hq);
     const networks = lines(await this.engine.ok(['network', 'ls', '-q', ...filter])).length;
     this.cages.clear();
+    this.identities.clear();
+    this.addresses.clear();
     this.firewall = null;
     return { containers: before, networks };
   }

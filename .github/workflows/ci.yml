@@ -354,6 +354,10 @@ jobs:
         run: |
           node src/e2e/preflight.mjs
           if ($LASTEXITCODE -ne 0) { throw "the preflight lane failed" }
+      - name: Ten distinct firewall denials pause a worker (real HQ, cage and proxy)
+        run: |
+          node src/e2e/firewall.mjs
+          if ($LASTEXITCODE -ne 0) { throw "the firewall lane failed" }
       - name: Frame time with six workers, 30 s
         run: |
           node src/e2e/perf.mjs

@@ -1,6 +1,20 @@
+import fc from 'fast-check';
 import { afterEach, describe, expect, it } from 'vitest';
+import { WebSocket } from 'ws';
 import { scripted } from '../agents/scripted.ts';
-import { BlockedLog, InvalidAttempt, parseAttempt, REPEAT_LIMIT, REPEAT_WINDOW_MS, renderBlocked } from '../blocked.ts';
+import {
+  BlockedLog,
+  BlockedSites,
+  DISTINCT_LIMIT,
+  InvalidAttempt,
+  MAX_SITES,
+  MAX_STREAKS,
+  parseAttempt,
+  REPEAT_LIMIT,
+  REPEAT_WINDOW_MS,
+  renderBlocked,
+  SITE_TTL_MS,
+} from '../blocked.ts';
 import { github } from '../githost/github.ts';
 import { type RunningHq, startHq } from '../hq.ts';
 import { cagesMode } from '../modes/cages.ts';
@@ -50,44 +64,153 @@ describe('BlockedLog', () => {
     expect(log.entries().map((e) => e.repeats)).toEqual([1, 2, 3]);
   });
 
-  it('does not pause on different attempts', () => {
+  const varied = (n: number, over: Record<string, unknown> = {}) =>
+    attempt({ tool: `CONNECT h${n}.test:443`, detail: `reason ${n}`, ...over });
+
+  it('pauses on the tenth distinct attempt at one layer and not on the ninth', () => {
     const log = new BlockedLog();
-    for (const detail of ['cat .env', 'cat .ssh', 'cat .npmrc', 'cat .aws']) log.record(attempt({ detail }));
+    const paused = Array.from({ length: DISTINCT_LIMIT }, (_, n) => log.record(varied(n)).paused);
+    expect(paused).toEqual([...Array(DISTINCT_LIMIT - 1).fill(false), true]);
+    expect(log.paused()).toEqual(['nova']);
+  });
+
+  it('takes a changed detail or a changed port as a new distinct attempt, not as a fresh start', () => {
+    const detail = new BlockedLog();
+    for (let n = 0; n < DISTINCT_LIMIT; n++) detail.record(attempt({ detail: `cat .env ${n}` }));
+    expect(detail.paused()).toEqual(['nova']);
+    const port = new BlockedLog();
+    for (let n = 0; n < DISTINCT_LIMIT; n++) port.record(attempt({ tool: `CONNECT evil.test:${n + 1}` }));
+    expect(port.paused()).toEqual(['nova']);
+  });
+
+  it('counts distinct attempts per layer', () => {
+    const log = new BlockedLog();
+    for (let n = 0; n < DISTINCT_LIMIT - 1; n++) {
+      log.record(varied(n, { layer: 'F2' }));
+      log.record(varied(n, { layer: 'L4' }));
+    }
     expect(log.paused()).toEqual([]);
   });
 
-  it('counts a repeat per worker, so one worker cannot pause another', () => {
+  it('counts per worker, so one worker cannot pause another', () => {
     const log = new BlockedLog();
     for (const worker of ['nova', 'vega', 'nova', 'vega']) log.record(attempt({ worker }));
+    for (let n = 0; n < DISTINCT_LIMIT - 2; n++) log.record(varied(n, { worker: n % 2 ? 'nova' : 'vega' }));
     expect(log.paused()).toEqual([]);
   });
 
-  it('resume clears the pause and the count', () => {
+  it('resume clears the pause and both counts', () => {
     const log = new BlockedLog();
+    for (let n = 0; n < DISTINCT_LIMIT - 1; n++) log.record(varied(n));
     for (let i = 0; i < REPEAT_LIMIT; i++) log.record(attempt());
     expect(log.resume('nova')).toBe(true);
     expect(log.isPaused('nova')).toBe(false);
     expect(log.record(attempt()).entry.repeats).toBe(1);
+    expect(log.isPaused('nova')).toBe(false);
   });
 });
 
-describe('BlockedLog window and operator decision', () => {
-  it('counts only the attempts of the last window, so a repeat hours later does not add up', () => {
+describe('BlockedLog window', () => {
+  const MINUTE = 60_000;
+
+  it('pauses slow retries that never put three inside any ten minutes', () => {
+    const log = new BlockedLog();
+    const paused = [0, 9, 18].map((minute) => log.record(attempt({}, minute * MINUTE)).paused);
+    expect(paused).toEqual([false, false, true]);
+  });
+
+  it('pauses slow varied attempts', () => {
+    const log = new BlockedLog();
+    for (let n = 0; n < DISTINCT_LIMIT; n++) log.record(attempt({ detail: `d${n}` }, n * 9 * MINUTE));
+    expect(log.paused()).toEqual(['nova']);
+  });
+
+  it('forgets a streak once the window passes with no denial', () => {
     const log = new BlockedLog();
     log.record(attempt({}, 0));
     log.record(attempt({}, 1000));
-    const late = log.record(attempt({}, REPEAT_WINDOW_MS + 5000));
-    expect(late.paused).toBe(false);
-    expect(late.entry.repeats).toBe(1);
-    expect(log.paused()).toEqual([]);
+    const late = log.record(attempt({}, 1000 + REPEAT_WINDOW_MS));
+    expect(late).toMatchObject({ paused: false, entry: { repeats: 1 } });
   });
 
-  it('lists an attempt that waits on the operator without ever pausing for it', () => {
+  it('drops expired streaks, so quiet workers cost no memory', () => {
     const log = new BlockedLog();
-    for (let i = 0; i < REPEAT_LIMIT * 3; i++)
-      log.record(attempt({ tool: 'CONNECT pypi.org:443' }, i), { counts: false });
-    expect(log.paused()).toEqual([]);
-    expect(log.entries().at(-1)?.repeats).toBe(REPEAT_LIMIT * 3);
+    for (let n = 0; n < 5; n++) log.record(attempt({ worker: `w${n}` }, n));
+    log.record(attempt({}, 5 + REPEAT_WINDOW_MS));
+    expect(log.size()).toEqual({ streaks: 1, keys: 1 });
+  });
+
+  it('keeps both maps under their caps through a flood, and evicts the longest quiet streak first', () => {
+    const log = new BlockedLog();
+    log.record(attempt({ worker: 'quiet' }, 0));
+    for (let n = 0; n < 1000; n++) log.record(attempt({ detail: `d${n}` }, 1));
+    expect(log.size()).toEqual({ streaks: 2, keys: DISTINCT_LIMIT });
+    log.record(attempt({ worker: 'busy' }, 2));
+    for (let n = 0; n < MAX_STREAKS - 2; n++) log.record(attempt({ worker: `w${n}` }, 3));
+    log.record(attempt({ worker: 'busy' }, 4));
+    log.record(attempt({ worker: 'one-more' }, 5));
+    expect(log.size().streaks).toBe(MAX_STREAKS);
+    expect(log.record(attempt({ worker: 'busy' }, 6)).paused).toBe(true);
+    expect(log.record(attempt({ worker: 'quiet' }, 7)).entry.repeats).toBe(1);
+  });
+
+  it('pauses within nineteen denials whatever the details and gaps under the window', () => {
+    const step = fc.record({ detail: fc.integer({ min: 0, max: 30 }), gap: fc.nat({ max: REPEAT_WINDOW_MS - 1 }) });
+    const most = (REPEAT_LIMIT - 1) * (DISTINCT_LIMIT - 1) + 1;
+    fc.assert(
+      fc.property(fc.array(step, { minLength: most, maxLength: most }), (steps) => {
+        const log = new BlockedLog();
+        let at = 0;
+        for (const { detail, gap } of steps) {
+          at += gap;
+          log.record(attempt({ detail: `d${detail}` }, at));
+          expect(log.size().keys).toBeLessThanOrEqual(DISTINCT_LIMIT);
+        }
+        expect(log.isPaused('nova')).toBe(true);
+      }),
+    );
+  });
+});
+
+describe('BlockedSites', () => {
+  const site = (n: number | string, allow = true) => ({
+    site: `h${n}.test:443`,
+    host: `h${n}.test`,
+    port: 443,
+    agent: 'nova',
+    allow,
+  });
+
+  it('counts a site and keeps it refused once any denial of it could not be allowed', () => {
+    const sites = new BlockedSites();
+    sites.note(site(1, false), 0);
+    sites.note(site(1, true), 1);
+    expect(sites.list(2)).toEqual([{ ...site(1, false), count: 2 }]);
+  });
+
+  it('stays under its cap, dropping the longest quiet site that Allow could open', () => {
+    const sites = new BlockedSites();
+    for (let n = 0; n < MAX_SITES * 3; n++) sites.note(site(n), n);
+    const held = sites.list(MAX_SITES * 3);
+    expect(held).toHaveLength(MAX_SITES);
+    expect(held[0]?.host).toBe(`h${MAX_SITES * 2}.test`);
+  });
+
+  it('never forgets a refused site to make room, so a flood cannot bring its Allow back', () => {
+    const sites = new BlockedSites(3);
+    sites.note(site('evil', false), 0);
+    for (let n = 0; n < 20; n++) sites.note(site(n), 1 + n);
+    expect(sites.get('hevil.test:443', 30)?.allow).toBe(false);
+    for (let n = 0; n < 20; n++) sites.note(site(`v${n}`, false), 30 + n);
+    expect(sites.list(60).map((s) => s.host)).toEqual(['hevil.test', 'hv0.test', 'hv1.test']);
+  });
+
+  it('expires a site that has been quiet for its time to live', () => {
+    const sites = new BlockedSites();
+    sites.note(site(1), 0);
+    sites.note(site(2), 5);
+    expect(sites.get('h1.test:443', SITE_TTL_MS - 1)).toBeDefined();
+    expect(sites.list(SITE_TTL_MS).map((s) => s.host)).toEqual(['h2.test']);
   });
 });
 
@@ -160,12 +283,40 @@ describe.skipIf(!hasSqlite)('HQ blocked attempts', () => {
     expect(hq.snapshot().blocked[0]).toMatchObject({ worker: 'nova', layer: 'F2', tool: 'CONNECT example.com:443' });
   });
 
-  it('does not pause a worker whose retries wait on an Allow (3 pypi.org denials)', async () => {
+  it('pauses a worker on three denials of one unlisted host (3 pypi.org denials)', async () => {
     const { hq, deny } = await denialHq();
-    for (let i = 0; i < REPEAT_LIMIT + 2; i++) deny('pypi.org', 'not-allowlisted');
-    expect(hq.snapshot().blocked).toHaveLength(REPEAT_LIMIT + 2);
-    expect(hq.snapshot().blocked.at(-1)?.repeats).toBe(REPEAT_LIMIT + 2);
+    for (let i = 0; i < REPEAT_LIMIT - 1; i++) deny('pypi.org', 'not-allowlisted');
     expect(hq.snapshot().paused).toEqual([]);
+    deny('pypi.org', 'not-allowlisted');
+    expect(hq.snapshot().paused).toEqual(['nova']);
+  });
+
+  it('pauses a worker on ten distinct unlisted hosts and counts them in the firewall zone', async () => {
+    const { hq, deny } = await denialHq();
+    for (let n = 0; n < DISTINCT_LIMIT - 1; n++) deny(`h${n}.example`, 'not-allowlisted');
+    expect(hq.snapshot().paused).toEqual([]);
+    expect(hq.snapshot().firewall).toEqual({ blocked: DISTINCT_LIMIT - 1, allowed: 4 });
+    deny('h9.example', 'not-allowlisted');
+    expect(hq.snapshot().paused).toEqual(['nova']);
+    expect(hq.snapshot().firewall).toEqual({ blocked: DISTINCT_LIMIT, allowed: 4 });
+  });
+
+  it('pushes the state after the last denial of a burst to open floors', async () => {
+    const { hq, deny } = await denialHq();
+    const seen: Snapshot[] = [];
+    const socket = new WebSocket(`${hq.url.replace('http', 'ws')}/api/ws`);
+    socket.on('message', (data) => seen.push(JSON.parse(String(data)) as Snapshot));
+    await expect.poll(() => seen.length).toBeGreaterThan(0);
+    for (let n = 0; n < DISTINCT_LIMIT; n++) deny(`h${n}.example`, 'not-allowlisted');
+    await expect.poll(() => seen.at(-1)?.paused).toEqual(['nova']);
+    expect(seen.at(-1)?.firewall?.blocked).toBe(DISTINCT_LIMIT);
+    socket.close();
+  });
+
+  it('keeps the website items under their cap through a flood of hosts', async () => {
+    const { hq, deny } = await denialHq({ mode: cagesWithEgress(async () => {}) });
+    for (let n = 0; n < MAX_SITES + 50; n++) deny(`h${n}.example`, 'not-allowlisted');
+    expect(hq.snapshot().actions.filter((a) => a.kind === 'website')).toHaveLength(MAX_SITES);
   });
 
   it('still pauses a worker that repeats a denial no Allow can fix', async () => {
@@ -217,7 +368,7 @@ describe.skipIf(!hasSqlite)('HQ blocked attempts', () => {
     expect(hq.snapshot().paused).toEqual(['nova']);
   });
 
-  it('Allow on a not-allowlisted site opens it and leaves a pause alone', async () => {
+  it('Allow on a not-allowlisted site opens it and never resumes a worker', async () => {
     const opened: string[] = [];
     const { hq, deny } = await denialHq({ mode: cagesWithEgress(async (site) => void opened.push(site)) });
     for (let i = 0; i < REPEAT_LIMIT; i++) deny('meta.ssrf.test', 'non-public-address');

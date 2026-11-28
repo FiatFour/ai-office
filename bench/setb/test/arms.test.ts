@@ -1484,6 +1484,7 @@ describe('a provider stop inside a reply claude marks successful', () => {
     worker: 'vega',
     change: { number: 1, headSha: 'a'.repeat(40) } as never,
     files: [],
+    tree: { entries: [], read: async () => Buffer.alloc(0) },
   };
   const reviewStatus = async (out: string) => {
     try {

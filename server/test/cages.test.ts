@@ -152,6 +152,27 @@ describe.skipIf(!hasSqlite)('one ticket through the cages mode', () => {
     expect(calls.filter((c) => /\/merge/.test(c.path))).toEqual([]);
   });
 
+  it('hands each reviewer the files of the head it reviews, from the host', async () => {
+    const { fake, hosts } = twoAccounts();
+    const inner = scripted({ scripts: SCRIPTS });
+    const seen: Array<{ head: string; note: string }> = [];
+    const runtime: AgentRuntime = {
+      id: 'scripted',
+      async run(job) {
+        if (job.role === 'reviewer') {
+          const entry = job.tree.entries.find((e) => e.path === 'docs/note.md');
+          seen.push({ head: job.change.headSha, note: String(await job.tree.read(entry?.sha ?? '')) });
+        }
+        return inner.run(job);
+      },
+    };
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    await until(hq, (s) => station('alpha/t2')(s) === 'merge');
+    expect(seen.map((r) => r.note)).toEqual(['# Note\n\nfirst draft\n', '# Note\n\nsecond draft\n']);
+    expect(seen.map((r) => fake.trees.get(r.head)?.get('docs/note.md'))).toEqual(seen.map((r) => r.note));
+  });
+
   it('closes the task within one poll after a person merges on the host, and never calls a merge endpoint', async () => {
     const { fake, calls, hosts } = twoAccounts();
     const { hq } = await boot(hosts);

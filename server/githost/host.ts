@@ -89,6 +89,19 @@ export interface HeadFile {
   readonly content: string | null;
 }
 
+/** One file of a commit's tree, as git names it. A submodule has no entry. */
+export interface TreeEntry {
+  readonly path: string;
+  readonly mode: string;
+  /** The git blob id. */
+  readonly sha: string;
+}
+
+export interface HeadTree {
+  readonly entries: readonly TreeEntry[];
+  read(sha: string): Promise<Buffer>;
+}
+
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 export const textOf = (bytes: Buffer): string | null => {
@@ -162,6 +175,9 @@ export interface GitHost {
   comments(repo: string, number: number): Promise<CommentFact[]>;
   paths(repo: string, number: number): Promise<string[]>;
   files(repo: string, number: number, headSha: string): Promise<HeadFile[]>;
+  /** Every file of a commit. It throws when the host cannot list them all. */
+  tree(repo: string, sha: string): Promise<TreeEntry[]>;
+  blob(repo: string, sha: string): Promise<Buffer>;
   postReview(repo: string, number: number, review: ReviewDraft): Promise<ReviewFact>;
   findComment(repo: string, number: number, marker: string): Promise<PostedComment | null>;
   postComment(repo: string, number: number, body: string): Promise<PostedComment>;
@@ -460,12 +476,13 @@ export const allPages = async (
   get: (path: string) => Promise<unknown>,
   path: string,
   items: (body: unknown) => unknown[] = (body) => body as unknown[],
+  max = MAX_ITEMS,
 ): Promise<unknown[]> => {
   const all: unknown[] = [];
   for (let page = 1; ; page += 1) {
     const list = items(await get(`${path}${path.includes('?') ? '&' : '?'}per_page=${PAGE_SIZE}&page=${page}`));
     all.push(...list);
-    if (all.length > MAX_ITEMS) throw new Error(`${path} lists more than ${MAX_ITEMS} items`);
+    if (all.length > max) throw new Error(`${path} lists more than ${max} items`);
     if (list.length < PAGE_SIZE) return all;
   }
 };

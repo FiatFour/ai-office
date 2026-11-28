@@ -429,6 +429,7 @@ describe.skipIf(!hasSqlite || process.platform === 'win32')(
         round: 1,
         change: {},
         files: [],
+        tree: { entries: [], read: async () => Buffer.alloc(0) },
         signal: controller.signal,
       } as unknown as AgentJob;
       await runtime.run(job).catch(() => {});

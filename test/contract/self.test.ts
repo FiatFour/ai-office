@@ -72,6 +72,7 @@ const HOST_BREAKS: Record<HostFault, string[]> = {
   'login-drifts': ['login-names-the-account-and-is-stable'],
   'hides-failures': ['a-failed-job-reads-back-bounded-and-without-secrets'],
   'raw-logs': ['a-failed-job-reads-back-bounded-and-without-secrets'],
+  'stale-tree': ['the-tree-at-a-head-reads-back-with-its-blobs'],
 };
 
 const PAYLOADS = recorded('github');

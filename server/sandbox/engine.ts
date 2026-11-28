@@ -17,7 +17,7 @@ export interface EngineInfo {
 }
 
 export interface RunOptions {
-  readonly input?: string;
+  readonly input?: string | Uint8Array;
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;

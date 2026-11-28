@@ -305,6 +305,12 @@ The cages mode answers a failed check with a fix round (`server/modes/cages.ts`)
 
 The author gets each failing check by name with an excerpt of its log (`GitHost.failures`, `server/githost/ci-log.ts`): at most three logs, each bounded, known secret shapes removed (best effort), quoted in the prompt as untrusted data. The log goes to the author's prompt and is not posted on the host. CI fix rounds and review fix rounds share one limit. At the limit the mode files a `checks_failed` Action item.
 
+### The head a reviewer works in
+
+A reviewer's cage starts as every cage does, from an export of `source`, which does not hold the change. Before each review, the Claude Code runtime makes `/work` hold the files of the head under review (`server/agents/checkout.ts`). HQ lists the head with `GitHost.tree`, reads only the blobs the cage lacks with `GitHost.blob`, and passes their bytes to git in the cage on stdin. The result is a local commit on top of the export. Its id is not the host's, and the cage gets no remote and no credential. The firewall does not change.
+
+Two kinds of path differ from the head, and the reviewer's prompt names them. Credential files are left out, as the export leaves them out. Agent settings (`.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.mcp.json`) stay as the export has them, so a change cannot instruct its own reviewer. If the head cannot be checked out, the review job fails and no reviewer session starts. Untracked files from an earlier round are removed, except `node_modules`. Submodules are not checked out.
+
 ### The export file
 
 `events.jsonl` is not HQ's record. It is an export. `node server/modes/events-export.ts <hq-url> <file>` calls `GET /api/events?after=` and writes one `{"seq", "event"}` JSON line per event. Lines 1 to 14 of `fixtures/demo/events.jsonl` are such an export of the P1-2 run. Lines 15 and 16 were written by hand (`fixtures/demo/README.md` says why). `--demo` reads that file with `loadDemo` and replays it through the same parser, reducer and ledger as a live event (ADR 0005).

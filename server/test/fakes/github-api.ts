@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { HttpRequest, HttpResponse, Transport } from '../../githost/host.ts';
-import { paged } from './page.ts';
+import { foldersOf, paged } from './page.ts';
 
 interface Pr {
   number: number;
@@ -273,8 +273,18 @@ export class FakeGithub {
       if (files === undefined) return fail(404, 'Not Found');
       return ok({
         truncated: false,
-        tree: [...files].map(([path, content]) => ({ path, type: 'blob', sha: blob(content) })),
+        tree: [
+          ...foldersOf(files.keys()).map((path) => ({ path, type: 'tree', mode: '040000', sha: sha(path) })),
+          ...[...files].map(([path, content]) => ({ path, type: 'blob', mode: '100644', sha: blob(content) })),
+        ],
       });
+    }
+    m = method === 'GET' ? /^\/git\/blobs\/([0-9a-f]+)$/.exec(rest) : null;
+    if (m) {
+      const content = [...this.trees.values()].flatMap((f) => [...f.values()]).find((c) => blob(c) === m?.[1]);
+      return content === undefined
+        ? fail(404, 'Not Found')
+        : ok({ sha: m[1], encoding: 'base64', content: Buffer.from(content).toString('base64') });
     }
     if (method === 'POST' && rest === '/git/trees') {
       const base = this.treeFiles.get(String(input.base_tree));

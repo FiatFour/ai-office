@@ -26,6 +26,8 @@ A prompt-injected agent. It is a worker or Captain that runs with the permission
 
 The agent can run any command its tools allow, edit any file it can write, and choose its own file names, argument strings and proxy user name. Out of scope here are a compromised host, a compromised Claude Code binary, a malicious operator, and attacks on the git host itself. The replay also stands in for the injected agent. It performs the attacker's action directly, so it tests the boundary and not the model's willingness to follow the instruction (see "Limits of the replay").
 
+A reviewer cage holds the head under review and its agent is asked to run the tests, so code from the change runs there with the reviewer's home mounted, as the author's own code runs in the author's cage. The boundary is the same: the mounts and the firewall, not the code. The change's agent settings are not checked out (`server/agents/checkout.ts`), which does not stop a settings file from the export that imports another file of the repository.
+
 ## Layers and codes
 
 The spec's five protected-file layers are L1 to L5. The firewall rules are F1 to F5 (spec section 4, "Firewall"). The extra codes name a mechanism a spike added or a boundary outside the spec's two lists.

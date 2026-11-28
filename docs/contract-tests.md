@@ -5,7 +5,7 @@ Two contracts pin what every sandbox engine and every git host must do. Each con
 | Contract | File | Runs against |
 | --- | --- | --- |
 | SandboxDriver, 15 cases | `test/contract/sandbox.contract.ts` | real docker (local, CI), real rootless podman (CI only), an in-memory fake (self test) |
-| GitHost, 12 host cases and 6 payload cases | `test/contract/githost.contract.ts` | the P1-2 fake GitHub and GitLab APIs with recorded P0-4 payloads, live GitHub scratch repo with live webhooks, an in-memory fake (self test) |
+| GitHost, 13 host cases and 6 payload cases | `test/contract/githost.contract.ts` | the P1-2 fake GitHub and GitLab APIs with recorded P0-4 payloads, live GitHub scratch repo with live webhooks, an in-memory fake (self test) |
 
 ## Run it
 

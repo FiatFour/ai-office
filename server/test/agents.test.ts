@@ -13,6 +13,19 @@ const ticket = TICKETS['alpha/t1'] as NonNullable<(typeof TICKETS)['alpha/t1']>;
 const signal = new AbortController().signal;
 const result = (out: string, code = 0) => ({ code, out, err: '', timedOut: false });
 
+const CHECKOUT = [
+  'rev-list',
+  'ls-tree',
+  'cat-file',
+  'read-tree',
+  'update-index',
+  'ls-files',
+  'write-tree',
+  'commit-tree',
+  'reset',
+  'clean',
+];
+
 const shell = (
   stream: string,
   calls: string[][],
@@ -21,8 +34,9 @@ const shell = (
 ): CageShell => ({
   exec: async (argv, options) => {
     calls.push([...argv]);
-    inputs.push(options?.input ?? '');
+    inputs.push(String(options?.input ?? ''));
     if (argv[0] === 'claude') return result(stream);
+    if (argv.some((a) => CHECKOUT.includes(a))) return result('');
     const sub = argv.find((a) => ['rev-parse', 'diff', 'show'].includes(a));
     if (sub === 'rev-parse') return result('base000\n');
     if (sub === 'diff') return result(diff);
@@ -30,6 +44,8 @@ const shell = (
     return result('', 1);
   },
 });
+
+const NO_TREE = { entries: [], read: async () => Buffer.alloc(0) };
 
 const authorJob: AgentJob = {
   role: 'author',
@@ -116,6 +132,7 @@ describe('the Claude Code runtime', () => {
         at: 1,
       },
       files,
+      tree: NO_TREE,
       signal,
     });
     const claude = calls.findIndex((c) => c[0] === 'claude');
@@ -151,6 +168,7 @@ describe('the Claude Code runtime', () => {
         { path: 'logo.png', content: null },
         { path: 'a.txt', content: 'text' },
       ],
+      tree: NO_TREE,
       signal,
     });
     const prompt = inputs.find((i) => i.includes('logo.png')) ?? '';
@@ -185,6 +203,7 @@ describe('the Claude Code runtime', () => {
         at: 1,
       },
       files: [{ path: 'src/greet.txt', content: 'hello 1\n' }],
+      tree: NO_TREE,
       signal,
     });
     expect(done).toEqual({
@@ -461,7 +480,7 @@ describe('the prompt of a fix round for red CI', () => {
       shell: () => ({
         async exec(argv, options) {
           if (argv[0] !== 'claude') return ok(argv.includes('--numstat') ? '1\t0\ta.txt\0' : 'x\n');
-          prompt = options?.input ?? '';
+          prompt = String(options?.input ?? '');
           return ok(done);
         },
       }),

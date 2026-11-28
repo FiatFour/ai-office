@@ -12,6 +12,7 @@ import type {
   PostedComment,
   ReviewDraft,
   ReviewFact,
+  TreeEntry,
 } from '../../../server/githost/host.ts';
 import { WriteRefused } from '../../../server/githost/host.ts';
 import type { GithostSubject, Payload } from '../githost.contract.ts';
@@ -28,7 +29,8 @@ export type HostFault =
   | 'login-drifts'
   | 'foreign-marker-trusted'
   | 'hides-failures'
-  | 'raw-logs';
+  | 'raw-logs'
+  | 'stale-tree';
 
 interface Branch {
   head: string;
@@ -37,6 +39,7 @@ interface Branch {
 
 const sha = (text: string) => createHash('sha1').update(text).digest('hex');
 const PAGE = 100;
+const blobId = (content: string) => sha(`blob ${Buffer.byteLength(content)}\0${content}`);
 
 class World {
   readonly branches = new Map<string, Branch>([['main', { head: sha('root'), files: new Map() }]]);
@@ -170,6 +173,19 @@ export class MemoryHost implements GitHost {
       const content = branch?.files.get(path) ?? '';
       return { path, content: content.includes('\0') && !this.faults.has('binary-as-text') ? null : content };
     });
+  }
+
+  async tree(_repo: string, headSha: string): Promise<TreeEntry[]> {
+    call(this.world, 'GET', `/git/trees/${headSha}`);
+    const at = this.faults.has('stale-tree') ? 'main' : headSha;
+    const branch = [...this.world.branches].find(([name, b]) => name === at || b.head === at)?.[1];
+    return [...(branch?.files ?? [])].map(([path, content]) => ({ path, mode: '100644', sha: blobId(content) }));
+  }
+
+  async blob(_repo: string, id: string): Promise<Buffer> {
+    call(this.world, 'GET', `/git/blobs/${id}`);
+    const all = [...this.world.branches.values()].flatMap((b) => [...b.files.values()]);
+    return Buffer.from(all.find((content) => blobId(content) === id) ?? '');
   }
 
   async postReview(_repo: string, number: number, review: ReviewDraft): Promise<ReviewFact> {

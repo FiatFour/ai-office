@@ -441,6 +441,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         round: job.round,
         change: snapshot.change,
         files: await host.files(repo, job.change.number, head),
+        tree: { entries: await host.tree(repo, head), read: (sha) => host.blob(repo, sha) },
         signal: abort.signal,
       });
       if (result.role !== 'reviewer') throw new Error('the reviewer runtime returned a change');

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { initialState, reduce } from '@agent-works/core';
 import { expect } from 'vitest';
 import { parseEvent } from '../../server/events.ts';
@@ -169,6 +169,23 @@ export const githostCases: readonly Case<GithostSubject>[] = [
         { path: 'contract/a.txt', content: 'a\n' },
         { path: 'contract/logo.png', content: null },
       ]);
+    },
+  },
+  {
+    id: 'the-tree-at-a-head-reads-back-with-its-blobs',
+    rule: 'tree lists every file of one commit by git blob id, and blob returns the bytes of that id',
+    run: async (s) => {
+      const content = 'tree and blob\n';
+      const { head } = await open(s, 'tree', [{ path: 'contract/deep/t.txt', content }]);
+      const listed = await s.reviewer.tree(s.repo, head);
+      expect(listed.map((e) => e.path).filter((path) => path.startsWith('contract'))).toEqual(['contract/deep/t.txt']);
+      const entry = listed.find((e) => e.path === 'contract/deep/t.txt');
+      expect(entry).toEqual({
+        path: 'contract/deep/t.txt',
+        mode: '100644',
+        sha: createHash('sha1').update(`blob ${content.length}\0${content}`).digest('hex'),
+      });
+      expect((await s.reviewer.blob(s.repo, entry?.sha ?? '')).toString('utf8')).toBe(content);
     },
   },
   {

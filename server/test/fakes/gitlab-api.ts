@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { HttpRequest, HttpResponse, Transport } from '../../githost/host.ts';
-import { paged } from './page.ts';
+import { foldersOf, paged } from './page.ts';
 
 interface Mr {
   iid: number;
@@ -14,6 +14,7 @@ interface Mr {
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const sha = (text: string) => createHash('sha1').update(text).digest('hex');
+const blob = (content: string) => sha(`blob ${Buffer.byteLength(content)}\0${content}`);
 
 export class FakeGitlab {
   readonly repo: string;
@@ -93,6 +94,22 @@ export class FakeGitlab {
       return ok(
         m[2] === undefined ? { encoding: 'base64', content: Buffer.from(content).toString('base64') } : content,
       );
+    }
+    if (method === 'GET' && rest === '/repository/tree') {
+      const ref = url.searchParams.get('ref') ?? 'main';
+      const branch = this.branches.get(ref) ?? [...this.branches.values()].find((b) => b.commit === ref);
+      if (branch === undefined) return fail(404, '404 Tree Not Found');
+      return ok([
+        ...foldersOf(branch.files.keys()).map((path) => ({ path, type: 'tree', mode: '040000', id: sha(path) })),
+        ...[...branch.files].map(([path, content]) => ({ path, type: 'blob', mode: '100644', id: blob(content) })),
+      ]);
+    }
+    m = method === 'GET' ? /^\/repository\/blobs\/([0-9a-f]+)$/.exec(rest) : null;
+    if (m) {
+      const content = [...this.branches.values()].flatMap((b) => [...b.files.values()]).find((c) => blob(c) === m?.[1]);
+      return content === undefined
+        ? fail(404, '404 Blob Not Found')
+        : ok({ sha: m[1], encoding: 'base64', content: Buffer.from(content).toString('base64') });
     }
     if (method === 'POST' && rest === '/repository/commits') {
       const name = String(input.branch);

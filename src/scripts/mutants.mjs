@@ -1492,6 +1492,122 @@ const MUTANTS = [
       ],
     ],
   },
+  {
+    name: 'brief-merge-button',
+    claim: 'the page has no merge control',
+    edits: [
+      [
+        'src/screens/merge-brief/view.tsx',
+        '      <p className="mb-never">',
+        '      <button type="button" className="btn">\n        Merge\n      </button>\n      <p className="mb-never">',
+      ],
+    ],
+  },
+  {
+    name: 'brief-merge-link',
+    claim: 'no link of the page merges',
+    edits: [
+      [
+        'src/screens/merge-brief/view.tsx',
+        'href={brief.url} target="_blank"',
+        'href={`${brief.url}/merge`} target="_blank"',
+      ],
+    ],
+  },
+  {
+    name: 'brief-reason-dropped',
+    claim: 'missing evidence gives its reason',
+    edits: [['src/screens/merge-brief/view.tsx', '<span lang="en">{reason}</span>', '']],
+  },
+  {
+    name: 'brief-tick-count',
+    claim: 'the link counts what is ticked',
+    edits: [
+      [
+        'src/screens/merge-brief/view.tsx',
+        'const done = items.filter((item) => ticked.has(item.id)).length;',
+        'const done = 0;',
+      ],
+    ],
+  },
+  {
+    name: 'brief-merged-invites-merge',
+    claim: 'a merged PR invites no merge',
+    edits: [
+      [
+        'src/screens/merge-brief/view.tsx',
+        "brief.phase === 'merged'\n      ? t(",
+        "brief.phase === 'never'\n      ? t(",
+      ],
+    ],
+  },
+  {
+    name: 'brief-named-steps-hidden',
+    claim: 'a named step gets its own line',
+    edits: [['src/screens/merge-brief/model.ts', "brief.beforeMerge.state === 'collected'\n    ?", 'false\n    ?']],
+  },
+  {
+    name: 'brief-old-answer-wins',
+    claim: 'an older answer never replaces a newer one',
+    edits: [['src/screens/merge-brief/model.ts', '    if (mine < shown) return;\n', '']],
+  },
+  {
+    name: 'brief-busy-page-empty',
+    claim: 'an answer is shown while a newer read is out',
+    edits: [['src/screens/merge-brief/model.ts', 'if (mine < shown) return;', 'if (mine < asked) return;']],
+  },
+  {
+    name: 'brief-no-factory-is-error',
+    claim: 'an HQ with no factory says so',
+    edits: [['src/screens/merge-brief/model.ts', "    if (res.status === 404) return { phase: 'none' };\n", '']],
+  },
+  {
+    name: 'brief-task-unencoded',
+    claim: 'the task id is one path segment',
+    edits: [['src/screens/merge-brief/model.ts', '${encodeURIComponent(task)}', '${task}']],
+  },
+  {
+    name: 'brief-link-click-posts',
+    claim: 'no click handler on a link writes',
+    tier: 'brief',
+    edits: [
+      [
+        'src/screens/merge-brief/view.tsx',
+        'data-testid="mb-open">',
+        "data-testid=\"mb-open\" onClick={() => void fetch('/api/tickets', { method: 'POST', body: '{}' })}>",
+      ],
+    ],
+  },
+  {
+    name: 'brief-no-live-update',
+    claim: 'an open page turns into the brief by itself',
+    tier: 'brief',
+    edits: [['src/screens/merge-brief/screen.tsx', '  }, [read, push]);', '  }, [read]);']],
+  },
+  {
+    name: 'brief-no-action-link',
+    claim: 'the ready action item opens the brief',
+    tier: 'brief',
+    edits: [
+      [
+        'src/floor/Drawer.tsx',
+        "action.kind === 'ready_to_merge' && action.task !== null",
+        'false && action.task !== null',
+      ],
+    ],
+  },
+  {
+    name: 'brief-button-outside-board',
+    claim: 'the browser check sees a merge control wherever the screen draws it',
+    tier: 'brief',
+    edits: [
+      [
+        'src/screens/merge-brief/screen.tsx',
+        '  return <Board page={page} ticked={ticked} onTick={onTick} search={location.search} />;',
+        '  return (\n    <>\n      <Board page={page} ticked={ticked} onTick={onTick} search={location.search} />\n      <button type="button">Merge</button>\n    </>\n  );',
+      ],
+    ],
+  },
 ];
 
 const only = process.argv.slice(2);
@@ -1558,6 +1674,16 @@ const prs = async () => {
   // The artboard compare has its own line, so only the lane's verdict counts.
   if (result.stdout.includes('PASS prs lane')) return null;
   return (result.stdout.match(/FAIL prs lane[^\n]{0,160}/) ?? ['prs lane crashed'])[0];
+};
+const brief = async () => {
+  const built = await build();
+  if (built.status !== 0) return 'build failed';
+  const result = await run('node', ['src/e2e/merge-brief.mjs'], 300_000, {
+    ...process.env,
+    OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-brief'),
+  });
+  if (result.stdout.includes('PASS merge brief lane')) return null;
+  return (result.stdout.match(/FAIL merge brief lane[^\n]{0,160}/) ?? ['merge brief lane crashed'])[0];
 };
 const gates = async () => {
   const result = await run('node', ['src/e2e/gates.mjs'], 300_000, {
@@ -1653,6 +1779,7 @@ for (const mutant of MUTANTS) {
       if (how === null && mutant.tier === 'e2e') how = await lanes();
       if (how === null && mutant.tier === 'preflight') how = await preflight();
       if (how === null && mutant.tier === 'prs') how = await prs();
+      if (how === null && mutant.tier === 'brief') how = await brief();
     }
     if (how === null) bad += 1;
     log(
@@ -1668,7 +1795,10 @@ for (const mutant of MUTANTS) {
         } catch {}
       } else writeFileSync(path, bytes);
     }
-    if (['e2e', 'preflight', 'prs'].includes(mutant.tier ?? '') || mutant.edits.some(([file]) => file.endsWith('.css')))
+    if (
+      ['e2e', 'preflight', 'prs', 'brief'].includes(mutant.tier ?? '') ||
+      mutant.edits.some(([file]) => file.endsWith('.css'))
+    )
       await build();
   }
 }

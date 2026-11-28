@@ -3,6 +3,7 @@
 //   argv: <home> <assets folder> <api call log>
 import { createInterface } from 'node:readline';
 import { scripted } from '../../agents/scripted.ts';
+import { withBriefs } from '../../brief/store.ts';
 import { github } from '../../githost/github.ts';
 import { fileLog } from '../../githost/host.ts';
 import { startHq } from '../../hq.ts';
@@ -38,18 +39,21 @@ const hq = await startHq({
   port: 0,
   assets,
   makeDriver: async () => null,
-  mode: withChanges(
-    cagesMode({
-      ...shared,
-      host,
-      reviewHost,
-      author: 'nova',
-      reviewer: 'vega',
-      workers: { nova: held, vega: held },
-      pollMs: 100,
-      settleMs: 20,
-    }),
-    { ...shared, host, reviewHost },
+  mode: withBriefs(
+    withChanges(
+      cagesMode({
+        ...shared,
+        host,
+        reviewHost,
+        author: 'nova',
+        reviewer: 'vega',
+        workers: { nova: held, vega: held },
+        pollMs: 100,
+        settleMs: 20,
+      }),
+      { ...shared, host, reviewHost },
+    ),
+    { ...shared, host, reviewHost, author: agent.id, maxAgeMs: 200 },
   ),
 });
 
@@ -57,6 +61,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   const [command, argument] = line.split(' ');
   if (command === 'release') release();
   if (command === 'merge') fake.mergeByHuman(Number(argument));
+  // A check that turns red on the head of a branch, as a late CI job would.
+  if (command === 'red') fake.setStatus(fake.refs.get(argument ?? '') ?? '', 'late', 'failure');
   const reply = command === 'calls' ? fake.calls.map(({ method, path }) => `${method} ${path}`) : [];
   process.stdout.write(`${JSON.stringify(reply)}\n`);
 });

@@ -18,7 +18,7 @@ const TASK = 'alpha/t2';
 
 export const PRS_SPEC = artboardSpec({ name: 'PRs', dir: join(ROOT, 'docs', 'review', 'P3-16'), minEntries: 8 });
 
-const startFactory = async () => {
+export const startFactory = async () => {
   const home = mkdtempSync(join(tmpdir(), 'aw-prs-'));
   const log = join(home, 'api-calls.jsonl');
   const child = spawn(

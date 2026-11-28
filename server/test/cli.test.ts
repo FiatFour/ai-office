@@ -54,7 +54,7 @@ afterEach(() => {
   // With no HQ, `stop` still asks the container engine, which can hang for 20 s on a Windows runner.
   for (const home of homes.splice(0)) if (readRuntime(home) !== null) cli(process.cwd(), home, ['stop']);
   for (const server of holders.splice(0)) server.close();
-  // `stop` of a running HQ can wait 20 s for the container engine, past the default 10 s hook limit.
+  // `stop` of a running HQ can wait 20 s for the container engine, and a runner stall adds to that.
 }, 60_000);
 
 describe('argument parsing', () => {

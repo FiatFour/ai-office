@@ -428,7 +428,7 @@ describe.skipIf(!hasSqlite)('docs/architecture.md against the cages mode and the
     }
   };
 
-  it('serializes the ActionItem, ModeView and Usage keys the tables list', { timeout: 15_000 }, async () => {
+  it('serializes the ActionItem, ModeView and Usage keys the tables list', async () => {
     const reached = new Set<string>();
     let deny: (d: { host: string; port: number; agent: string; reason: string; at: string }) => void = () => {};
     const base = scripted({

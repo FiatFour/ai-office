@@ -15,6 +15,8 @@ const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 export const LINE_BREAK = /\r\n|[\n\r\v\f\u0085\u2028\u2029]/;
 
 const LINE_BREAKS = new RegExp(LINE_BREAK.source, 'g');
+// U+3033 is the one slash look-alike that Unicode counts as a letter.
+const NOT_PLAIN = /[^\p{L}\p{N} .,:;_()'"?+=/-]|\u3033/gu;
 
 const clean = (text: string): string => text.replace(LINE_BREAKS, '\n').replace(CONTROL, '');
 
@@ -41,7 +43,7 @@ export const inlineCode = (text: string, max = MAX_INLINE): string => {
 export const plainLine = (text: string, max = MAX_INLINE): string =>
   clean(text)
     .normalize('NFKC')
-    .replace(/[^\p{L}\p{N} .,:;_()'"?+=/-]/gu, ' ')
+    .replace(NOT_PLAIN, ' ')
     .replace(/(?<![\p{L}\p{N}])\//gu, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[^\p{L}\p{N}]+/u, '')

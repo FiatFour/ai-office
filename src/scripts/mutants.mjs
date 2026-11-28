@@ -1383,7 +1383,7 @@ const MUTANTS = [
   {
     name: 'preflight-chip-dropped',
     claim: 'the floor shows the run-mode chip',
-    tier: 'lane9',
+    tier: 'e2e',
     edits: [[APP, '{hq.snapshot.host ? <ModeChip', '{false && hq.snapshot.host ? <ModeChip']],
   },
 ];

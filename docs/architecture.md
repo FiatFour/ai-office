@@ -8,6 +8,7 @@ One HQ process owns everything that decides. It is `startHq` in `server/hq.ts`, 
 
 - HQ listens on `127.0.0.1` only. It serves the floor assets, a JSON API and one WebSocket at `/api/ws`. Every HTTP request is refused with 403 unless its Host is a loopback name with HQ's port and any Origin matches it. A WebSocket upgrade that fails the same check, or asks for another path, gets no reply. HQ calls `socket.destroy()`.
 - HQ keeps the reducer state, the event log and the command outbox in one SQLite file, `state/hq.db` in the HQ home (ADR 0002). The registry is two small JSON files beside it, `repos.json` and `factories.json`. A second HQ on the same directory is refused with `StoreLockedError`. There is no second store for events or reducer state.
+- `GET /api/preflight` runs the doctor checks (`server/preflight/report.ts`) and answers `{checkedAt, host, checks, canStart}`. Callers that arrive during a run share it. `canStart` is false when a check is `FAIL`. The preflight screen disables START on it. HQ does not refuse a ticket or a cage because of it.
 - Workers do not run in HQ. Each worker runs in its own container (a cage) on docker or podman, started through `SandboxDriver` in `server/sandbox/container.ts`.
 - One proxy container per HQ carries all cage traffic out. See the firewall section.
 - HQ reaches the git host through `gh api` and `glab api`, so it never reads a token (ADR 0004). A guard refuses every write that is not on its list. No merge is on the list.
@@ -101,6 +102,31 @@ Source: `server/snapshot.ts`.
 | `paused` | Names of paused workers. |
 | `actions` | Things that need a person, as `ActionItem`. Derived, never stored. |
 | `mode` | The run mode view, as `ModeView`, or `null`. |
+| `host` | The computer HQ runs on, as `HostInfo`, or `null` on an HQ started without a preflight service. A preflight run pushes it again without raising `rev`. |
+
+### HostInfo
+
+Source: `server/snapshot/host.ts`.
+
+| Field | Meaning |
+| --- | --- |
+| `os` | `linux`, `wsl2`, `macos`, `windows` or `other`. |
+| `label` | The operating system as text. |
+| `shell` | The user's shell, read from the environment. |
+| `arch` | CPU architecture. |
+| `kvm` | `/dev/kvm` exists on a Linux or WSL2 host. |
+| `engines` | The installed engines, as `HostEngine`, or `null` until the first preflight run. |
+
+### HostEngine
+
+Source: `server/snapshot/host.ts`.
+
+| Field | Meaning |
+| --- | --- |
+| `name` | `docker` or `podman`. |
+| `running` | The engine answered `info`. |
+| `version` | Server version of a running engine. |
+| `rootless` | A running engine that reports itself rootless. |
 
 ### State
 

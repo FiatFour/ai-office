@@ -10,7 +10,8 @@ import { changeTitle, reviewDraft, workOrder } from '../modes/cages.ts';
 import { FakeGithub } from './fakes/github-api.ts';
 import { FakeGitlab } from './fakes/gitlab-api.ts';
 
-const SLASH_LIKE = /^[/\u2044\u2215\u2571\u27cb\u29f8\u3033\uff0f]/u;
+const SLASHES = ['/', '\u2044', '\u2215', '\u2571', '\u27cb', '\u29f8', '\u3033', '\uff0f'];
+const SLASH_LIKE = new RegExp(`^[${SLASHES.join('')}]`, 'u');
 const quickActionLine = (text: string): string | undefined =>
   text.split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/).find((line) =>
     SLASH_LIKE.test(
@@ -45,9 +46,7 @@ const PIECES = [
   '\u2060',
   '\ufeff',
   '\u202e',
-  '\uff0f',
-  '\u2215',
-  '\u2044',
+  ...SLASHES,
   '`',
   '```',
   '````',
@@ -142,8 +141,21 @@ describe('the body sanitizer', () => {
         expect(plainLine(title)).not.toMatch(/[\n@<#]/);
         expect(changeTitle(ticket)).not.toMatch(/\n/);
       }),
-      { numRuns: 400 },
+      { numRuns: 400, examples: [['\u3033', '', '', '']] },
     );
+  });
+
+  it('leaves no slash look-alike at the start of a plain line, the one that is a letter included', () => {
+    const refused: string[] = [];
+    for (let code = 0; code <= 0x10ffff; code += 1) {
+      const char = String.fromCodePoint(code);
+      if (bodyProblem(char)?.includes('slash command')) refused.push(char);
+    }
+    expect(refused).toEqual(SLASHES);
+    for (const slash of SLASHES)
+      for (const text of [slash, `${slash}merge`, `${slash}${slash}merge`, `1. ${slash}merge`, `- [ ] ${slash}merge`])
+        for (const out of [plainLine(text), `- ${plainLine(text)}`])
+          expect(bodyProblem(out), JSON.stringify(text)).toBeNull();
   });
 
   it('keeps quoted text readable and gives it back unchanged', () => {
@@ -259,6 +271,19 @@ describe('every body HQ sends, on both hosts', () => {
       }),
       { numRuns: 60 },
     );
+  });
+
+  it('pushes a commit whose message starts with a slash look-alike', async () => {
+    for (const { name, author, sent } of hosts()) {
+      await author.pushFiles('acme/app', {
+        branch: 'aw/alpha/t1',
+        base: 'main',
+        files: [{ path: 'a', content: 'a\n' }],
+        message: plainLine('\u3033merge the repeat marks'),
+      });
+      const messages = sent().flatMap((r) => (r.method === 'GET' ? [] : texts(r.body)));
+      expect(messages, name).toContain('merge the repeat marks');
+    }
   });
 
   it('refuses, at the guard, a body that skipped the sanitizer', async () => {

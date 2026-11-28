@@ -63,6 +63,16 @@ export type ReviewFact = Extract<HostEvent, { kind: 'review' }>;
 export type CommentFact = Extract<HostEvent, { kind: 'review_comment' }>;
 export type CheckFact = Extract<HostEvent, { kind: 'check' }>;
 
+export interface CheckFailure {
+  readonly name: string;
+  /** A bounded excerpt of the job's output with secrets removed, or null when the host gave none. It is untrusted text. */
+  readonly output: string | null;
+}
+
+/** How many failing jobs have their output read, and how many are named at all. */
+export const MAX_LOGS = 3;
+export const MAX_FAILURES = 20;
+
 export interface ChangeSnapshot {
   readonly change: ChangeFact;
   readonly reviews: readonly ReviewFact[];
@@ -147,6 +157,8 @@ export interface GitHost {
     spec: { branch: string; base: string; files: readonly FileEdit[]; message: string },
   ): Promise<string>;
   snapshot(repo: string, number: number): Promise<ChangeSnapshot>;
+  /** The failing checks of a commit. Listing them may throw; reading one job's output never does. */
+  failures(repo: string, headSha: string): Promise<CheckFailure[]>;
   comments(repo: string, number: number): Promise<CommentFact[]>;
   paths(repo: string, number: number): Promise<string[]>;
   files(repo: string, number: number, headSha: string): Promise<HeadFile[]>;
@@ -283,6 +295,24 @@ export const toPoll = (snapshot: ChangeSnapshot): PollEvent => {
       .map((check) => ({ name: check.name, state: check.state === 'skipped' ? 'pending' : check.state })),
     reviews: [...latest.values()].map((review) => ({ reviewer: review.reviewer, verdict: review.verdict as Verdict })),
   };
+};
+
+/**
+ * The checks of the head that failed, once none is still running: one fix round then answers every failure. A skipped
+ * check does not run, so it holds nothing back.
+ */
+export const redChecks = ({ change, checks }: ChangeSnapshot): string[] => {
+  const head = checks.filter((check) => check.headSha === change.headSha);
+  if (head.some((check) => check.state === 'pending')) return [];
+  return head.filter((check) => check.state === 'failure').map((check) => check.name);
+};
+
+export const outputOf = async (read: () => Promise<string | null>): Promise<string | null> => {
+  try {
+    return await read();
+  } catch {
+    return null;
+  }
 };
 
 export const signatureValid = (secret: string, raw: Buffer, header: string | undefined): boolean => {
@@ -456,16 +486,22 @@ export const fileLog =
   (call: ApiCall): void =>
     appendFileSync(path, `${JSON.stringify(call)}\n`);
 
+const ESCAPES_FLAG = '--allow-escape-sequences';
+
 export const cliTransport =
   (cli: 'gh' | 'glab', hostname?: string): Transport =>
   async (request) => {
     const args = ['api', '--include', '-X', request.method, request.path];
     if (hostname !== undefined) args.push('--hostname', hostname);
     if (request.body !== undefined) args.push('--input', '-');
-    const ran = await runBinary(cli, args, {
-      input: request.body === undefined ? '' : JSON.stringify(request.body),
-      timeoutMs: 60_000,
-    });
+    const run = (extra: readonly string[]) =>
+      runBinary(cli, [...args, ...extra], {
+        input: request.body === undefined ? '' : JSON.stringify(request.body),
+        timeoutMs: 60_000,
+      });
+    let ran = await run([]);
+    // A newer gh prints no body that holds colour codes, as a job log does, unless asked. An older gh lacks the flag.
+    if (request.method === 'GET' && ran.err.includes(ESCAPES_FLAG)) ran = await run([ESCAPES_FLAG]);
     const split = ran.out.search(/\r?\n\r?\n/);
     const head = split < 0 ? ran.out : ran.out.slice(0, split);
     const rest = split < 0 ? '' : ran.out.slice(split).trim();

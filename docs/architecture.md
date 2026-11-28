@@ -245,8 +245,9 @@ Source: `server/modes/cages.ts`.
 
 | Field | Meaning |
 | --- | --- |
-| `rounds` | Fix rounds per task. |
+| `rounds` | Fix rounds per task: heads sent back for a changes verdict or a red check. |
 | `usage` | A list per task with one entry for each agent job that ran for it, as `Usage` or `null`. The author job, each fix and each review add one. |
+| `red` | The failing checks on the current head of each task that has any. |
 | `jobs` | Keys of the jobs running now. |
 | `reviewGap` | Text that says why a review is missing, or `null`. |
 
@@ -264,14 +265,15 @@ Source: `server/agents/runtime.ts`.
 
 ### ActionItem
 
-Source: `server/modes/cages.ts`. A union tagged by `kind`. The kinds are `ready_to_merge`, `round_limit`, `website`, `alert` and `job_failed`. The fields below are the union of all kinds, except `kind`.
+Source: `server/modes/cages.ts`. A union tagged by `kind`. The kinds are `ready_to_merge`, `round_limit`, `checks_failed`, `website`, `alert` and `job_failed`. The fields below are the union of all kinds, except `kind`.
 
 | Field | Used by |
 | --- | --- |
-| `task` | `ready_to_merge`, `round_limit`, `job_failed` |
-| `url` | `ready_to_merge`, `round_limit` |
+| `task` | `ready_to_merge`, `round_limit`, `checks_failed`, `job_failed` |
+| `url` | `ready_to_merge`, `round_limit`, `checks_failed` |
 | `brief` | `ready_to_merge`, the first lines of the merge brief |
-| `fixRounds` | `round_limit` |
+| `fixRounds` | `round_limit`, `checks_failed` |
+| `checks` | `checks_failed`, the names of the checks still failing |
 | `site` | `website`, the rule `host` or `host:port`. For a malformed host it is the quoted text `JSON.stringify("host:port")`, quotes included |
 | `host` | `website` |
 | `port` | `website` |
@@ -296,6 +298,12 @@ An event is one fact or one human order. The path is the same for every source.
 7. HQ pushes a fresh snapshot to every open WebSocket. For `POST /api/events` it pushes right after the commit and before `drain` starts, and again after each executor finishes.
 
 A command is a trigger. The mode computes the job from the current state, and each job checks the host before it writes (ADR 0004). A restart does not replay events, because the state row and the log cannot disagree after a commit.
+
+### A red check
+
+The cages mode answers a failed check with a fix round (`server/modes/cages.ts`). It starts once no check on the head is still pending. A skipped check does not run, so it does not count as pending. The mode takes red from the host snapshot it just read, not from `state.checks`: a poll stamps every check with the PR's own time, so there a failure does not replace a pending check. A read that fails changes nothing.
+
+The author gets each failing check by name with an excerpt of its log (`GitHost.failures`, `server/githost/ci-log.ts`): at most three logs, each bounded, known secret shapes removed (best effort), quoted in the prompt as untrusted data. The log goes to the author's prompt and is not posted on the host. CI fix rounds and review fix rounds share one limit. At the limit the mode files a `checks_failed` Action item.
 
 ### The export file
 

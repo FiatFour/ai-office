@@ -23,6 +23,7 @@ import {
   CI_PARALLEL,
   ciPending,
   hiddenTask,
+  isTaskOutcome,
   listRemote,
   orphansOf,
   publicEnv,
@@ -967,6 +968,65 @@ describe.skipIf(!hasSqlite)('a factory refusal after round 0', () => {
     );
     expect(arm.refused).toBe(true);
     expect(arm.note).toMatch(/nothing is graded/);
+  });
+});
+
+describe.skipIf(!hasSqlite)('a factory arm whose check stays red', () => {
+  const redRun = async (author: (round: number) => string) => {
+    const h = harness();
+    const rounds: number[] = [];
+    const set = h.fake.setStatus.bind(h.fake);
+    h.fake.setStatus = (sha, context) => set(sha, context, 'failure');
+    const worker = {
+      id: 'claude-code' as const,
+      async run(job: { round: number }) {
+        rounds.push(job.round);
+        return {
+          role: 'author' as const,
+          files: [{ path: FILE, content: author(job.round) }],
+          message: 'm',
+          usage: null,
+        };
+      },
+    };
+    const env = publicEnv({
+      repo: REPO,
+      baseSha: h.root,
+      send: h.send,
+      log: h.note,
+      workers: { [AUTHOR]: worker, [REVIEWER]: worker },
+      home: () => tempDir('setb-hq'),
+      pollMs: 30,
+      settleMs: 10,
+      reviewPollMs: 30,
+    });
+    const hidden = hiddenTask(tasks[0] as SetBTask, 'ab12cd34') as never;
+    const error = await factoryArm(env)
+      .run(hidden, undefined as never, new AbortController().signal, 1)
+      .then(
+        () => {
+          throw new Error('the arm did not fail');
+        },
+        (failed: Error) => failed.message,
+      );
+    return { error, rounds };
+  };
+
+  it('ends at the round limit with that reason, which is a result of the task', async () => {
+    const { error, rounds } = await redRun((round) => `export const v = ${round};\n`);
+    expect(error).toBe('CI was still red at the round limit: ci');
+    expect(rounds).toEqual([0, 1, 2, 3]);
+    expect(isTaskOutcome(error)).toBe(true);
+  });
+
+  it('names the red check when the fix round changes nothing, and still counts as a result of the task', async () => {
+    const { error } = await redRun(() => 'export const v = 0;\n');
+    expect(error).toMatch(/the fix round changed no file \[CI red: ci\]$/);
+    expect(isTaskOutcome(error)).toBe(true);
+  });
+
+  it('does not turn an unknown failure into a result of the task by naming a red check', () => {
+    expect(isTaskOutcome('job failed: socket hang up [CI red: ci]')).toBe(false);
   });
 });
 

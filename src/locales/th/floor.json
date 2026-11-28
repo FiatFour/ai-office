@@ -58,6 +58,7 @@
       "ready_to_merge": "พร้อม merge {{task}} ให้ merge บน host HQ ไม่ merge เอง",
       "closed_unmerged": "PR ของ {{task}} ถูกปิดโดยไม่ได้ merge",
       "round_limit": "{{task}} ใช้รอบ review ครบแล้ว",
+      "checks_failed": "{{task}} ใช้รอบแก้ครบแล้ว และ CI ยังแดงอยู่: {{detail}}",
       "website": "worker ขอเปิด {{detail}} ใน sandbox",
       "alert": "HQ แจ้งเตือน: {{detail}}",
       "job_failed": "job ของ {{task}} ล้มเหลว: {{detail}}"

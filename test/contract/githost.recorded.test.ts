@@ -18,7 +18,7 @@ const subjectOn = (host: 'github' | 'gitlab'): GithostSubject => {
       ? github({ repo: REPO, base: 'main', send: (api as FakeGithub).transport(account), log })
       : gitlab({ repo: REPO, base: 'main', send: (api as FakeGitlab).transport(account), log });
   return {
-    has: new Set(['second-account', 'bulk-writes']),
+    has: new Set(['second-account', 'bulk-writes', 'failing-checks']),
     host,
     repo: REPO,
     author: client('aw-bot', (call) => calls.push(call)),
@@ -30,6 +30,7 @@ const subjectOn = (host: 'github' | 'gitlab'): GithostSubject => {
     firstNumber: 1,
     exactLogin: true,
     branch: (tag) => `aw/alpha/${tag}`,
+    fail: (headSha, name, log) => api.failJob(headSha, name, log),
   };
 };
 

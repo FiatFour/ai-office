@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { CheckState, HostChangeState, Verdict } from '@agent-works/core';
+import { logExcerpt } from './ci-log.ts';
 import {
   type ApiCall,
   allPages,
@@ -7,6 +8,7 @@ import {
   branchProblem,
   type ChangeFact,
   type CheckFact,
+  type CheckFailure,
   type CommentFact,
   carriedList,
   contentText,
@@ -22,11 +24,14 @@ import {
   type HttpRequest,
   id,
   isPlaced,
+  MAX_FAILURES,
+  MAX_LOGS,
   once,
   oneOf,
   optLine,
   optStr,
   orNull,
+  outputOf,
   type ReviewFact,
   type Scope,
   str,
@@ -214,6 +219,14 @@ const checkRun = (repo: string, run: unknown): CheckFact => ({
   at: firstTime(run, 'completed_at', 'started_at'),
 });
 
+const textAt = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+/** What a check run says about itself, for one that has no job log. */
+const reportOf = (run: unknown): string | null => {
+  const output = (run as { output?: { title?: unknown; summary?: unknown; text?: unknown } }).output;
+  return logExcerpt([output?.title, output?.summary, output?.text].map(textAt).filter(Boolean).join('\n'));
+};
+
 const PARSERS: Record<string, (b: unknown) => HostEvent | null> = {
   push: (b) => ({
     host: 'github',
@@ -276,6 +289,38 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
   const owner = (repo: string) => repo.split('/')[0] ?? '';
   const login = once(async () => str(await get('/user'), 'login').toLowerCase());
 
+  const statusesOf = (repo: string, sha: string) =>
+    allPages(get, `/repos/${repo}/commits/${sha}/status`, (b) => field(b, 'statuses') as unknown[]);
+  const runsOf = (repo: string, sha: string) =>
+    allPages(get, `/repos/${repo}/commits/${sha}/check-runs`, (b) => field(b, 'check_runs') as unknown[]);
+
+  /** An Actions check run has the id of its job, whose log is the output. */
+  const jobLog = async (repo: string, run: unknown): Promise<string | null> => {
+    if ((run as { app?: { slug?: unknown } }).app?.slug !== 'github-actions') return null;
+    const log = await get(`/repos/${repo}/actions/jobs/${id(run, 'id')}/logs`);
+    return typeof log === 'string' ? logExcerpt(log) : null;
+  };
+
+  const failures = async (repo: string, headSha: string): Promise<CheckFailure[]> => {
+    const [statuses, runs] = await Promise.all([statusesOf(repo, headSha), runsOf(repo, headSha)]);
+    // A matrix that fails fast cancels its other jobs. Their logs say nothing, so they come last.
+    const cancelled = (run: unknown) => Number(field(run, 'conclusion') === 'cancelled');
+    const failedRuns = runs
+      .filter((run) => checkRun(repo, run).state === 'failure')
+      .sort((a, b) => cancelled(a) - cancelled(b));
+    const fromRuns = failedRuns.slice(0, MAX_FAILURES).map(async (run, index) => ({
+      name: str(run, 'name'),
+      output: index < MAX_LOGS ? ((await outputOf(() => jobLog(repo, run))) ?? reportOf(run)) : null,
+    }));
+    const fromStatuses = statuses
+      .filter((s) => status(repo, s, headSha).state === 'failure')
+      .map(async (s) => ({
+        name: str(s, 'context'),
+        output: logExcerpt(textAt((s as { description?: unknown }).description)),
+      }));
+    return (await Promise.all([...fromRuns, ...fromStatuses])).slice(0, MAX_FAILURES);
+  };
+
   const paths = async (repo: string, number: number): Promise<string[]> => {
     const list = await allPages(get, `/repos/${repo}/pulls/${number}/files`);
     return list.filter((f) => str(f, 'status') !== 'removed').map((f) => str(f, 'filename'));
@@ -334,8 +379,8 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
       const now = change(repo, pr);
       const [reviews, statuses, runs] = await Promise.all([
         allPages(get, `/repos/${repo}/pulls/${number}/reviews`),
-        allPages(get, `/repos/${repo}/commits/${now.headSha}/status`, (b) => field(b, 'statuses') as unknown[]),
-        allPages(get, `/repos/${repo}/commits/${now.headSha}/check-runs`, (b) => field(b, 'check_runs') as unknown[]),
+        statusesOf(repo, now.headSha),
+        runsOf(repo, now.headSha),
       ]);
       return {
         change: now,
@@ -347,6 +392,8 @@ export const github = ({ send, log, repo, base }: GithubOptions): GitHost => {
     async comments(repo, number) {
       return (await allPages(get, `/repos/${repo}/pulls/${number}/comments`)).map((c) => comment(repo, number, c));
     },
+
+    failures,
 
     paths,
 

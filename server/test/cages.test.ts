@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { type AgentRuntime, parseReview } from '../agents/runtime.ts';
+import { type AgentJob, type AgentRuntime, parseReview } from '../agents/runtime.ts';
 import { scripted } from '../agents/scripted.ts';
 import { github } from '../githost/github.ts';
 import { gitlab } from '../githost/gitlab.ts';
@@ -819,5 +819,274 @@ describe.skipIf(!hasSqlite)('the cages mode with untrusted text and a moving hea
     ])
       expect((await post(hq, '/api/tickets', body)).status, JSON.stringify(body)).toBe(400);
     expect((await post(hq, '/api/tickets', { id: 'alpha/t1' })).status).toBe(200);
+  });
+});
+
+/** The `ci` status of the first `red` heads the fake sees fails; later heads pass. */
+const redFirst = (fake: FakeGithub, red: number) => {
+  const set = fake.setStatus.bind(fake);
+  let heads = 0;
+  fake.setStatus = (sha, context) => set(sha, context, heads++ < red ? 'failure' : 'success');
+};
+
+const authorRuns = () => {
+  const jobs: Extract<AgentJob, { role: 'author' }>[] = [];
+  const inner = scripted({ scripts: SCRIPTS });
+  const runtime: AgentRuntime = {
+    id: 'scripted',
+    run: (job) => {
+      if (job.role === 'author') jobs.push(job);
+      return inner.run(job);
+    },
+  };
+  return { jobs, runtime, fixes: () => jobs.filter((job) => job.round > 0) };
+};
+
+const quiet = () => new Promise((resolve) => setTimeout(resolve, 200));
+const branchHead = (fake: FakeGithub, task: string) => fake.refs.get(`aw/${task}`) ?? '';
+const prOpened = (fake: FakeGithub) => (s: Snapshot) => fake.prs.length === 1 && station('alpha/t1')(s) === 'test';
+
+describe.skipIf(!hasSqlite)('a red check', () => {
+  it('goes back to the author as a fix round with the failing job output, then goes on to review', async () => {
+    const { fake, hosts } = twoAccounts();
+    const set = fake.setStatus.bind(fake);
+    let heads = 0;
+    fake.setStatus = (headSha, context) => {
+      heads += 1;
+      if (heads === 1)
+        fake.failJob(headSha, 'unit', 'expected "second draft"\n##[error]Process completed with exit code 1.');
+      else set(headSha, context, 'success');
+    };
+    const { jobs, runtime, fixes } = authorRuns();
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    await until(hq, (s) => station('alpha/t2')(s) === 'merge');
+    expect(fake.filesAt('aw/alpha/t2').get('docs/note.md')).toBe('# Note\n\nsecond draft\n');
+    expect(fixes()[0]).toMatchObject({
+      round: 1,
+      comments: [],
+      failures: [{ name: 'unit', output: expect.stringContaining('expected "second draft"') }],
+    });
+    expect(jobs[0]?.failures).toBeUndefined();
+    expect(fake.reviews.map((r) => r.commit)).not.toContain(fake.parents.get(branchHead(fake, 'alpha/t2')));
+  });
+
+  it('that stays red ends at the round limit and files an Action item that names it', async () => {
+    const { fake, hosts } = twoAccounts();
+    redFirst(fake, Number.POSITIVE_INFINITY);
+    const { runtime, fixes } = authorRuns();
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/stubborn' });
+    const snap = await until(hq, (s) => action('checks_failed')(s) !== undefined);
+    expect(action('checks_failed')(snap)).toMatchObject({ task: 'alpha/stubborn', fixRounds: 3, checks: ['ci'] });
+    await quiet();
+    expect(fixes().map((job) => job.round)).toEqual([1, 2, 3]);
+    expect(fake.reviews).toEqual([]);
+    expect(snap.mode).toMatchObject({ red: { 'alpha/stubborn': ['ci'] } });
+  });
+
+  it('spends the same round limit as a reviewer who asks for changes', async () => {
+    const { fake, hosts } = twoAccounts();
+    redFirst(fake, 2);
+    const { runtime, fixes } = authorRuns();
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/stubborn' });
+    const snap = await until(hq, (s) => action('round_limit')(s) !== undefined);
+    expect(action('round_limit')(snap)).toMatchObject({ fixRounds: 3 });
+    await quiet();
+    expect(fixes().map((job) => [job.round, job.failures?.length ?? 0])).toEqual([
+      [1, 1],
+      [2, 1],
+      [3, 0],
+    ]);
+  });
+
+  it('keeps its spent rounds when HQ restarts', async () => {
+    const { fake, hosts } = twoAccounts();
+    redFirst(fake, Number.POSITIVE_INFINITY);
+    const first = await boot({ ...hosts, runtime: authorRuns().runtime });
+    await post(first.hq, '/api/tickets', { id: 'alpha/stubborn' });
+    await until(first.hq, (s) => action('checks_failed')(s) !== undefined);
+    await first.hq.close();
+    const again = authorRuns();
+    const { hq } = await boot({ ...hosts, home: first.home, runtime: again.runtime });
+    const snap = await until(hq, (s) => action('checks_failed')(s) !== undefined);
+    expect(action('checks_failed')(snap)).toMatchObject({ fixRounds: 3 });
+    await quiet();
+    expect(again.jobs).toEqual([]);
+  });
+
+  it('waits while another check is still pending', async () => {
+    const { fake, hosts } = twoAccounts();
+    const set = fake.setStatus.bind(fake);
+    fake.setStatus = (headSha) => {
+      set(headSha, 'lint', 'failure');
+      set(headSha, 'slow', 'pending');
+    };
+    const { runtime, fixes } = authorRuns();
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, prOpened(fake));
+    await quiet();
+    expect(fixes()).toEqual([]);
+    expect(hq.snapshot().actions).toEqual([]);
+    set(branchHead(fake, 'alpha/t1'), 'slow', 'success');
+    await until(hq, () => fixes().length > 0);
+    expect(fixes()[0]?.failures?.map((f) => f.name)).toEqual(['lint']);
+  });
+
+  it('does not wait for a job that was skipped because another failed', async () => {
+    const { fake, hosts } = twoAccounts();
+    fake.setStatus = (headSha) => {
+      fake.failJob(headSha, 'build', 'no');
+      fake.failJob(headSha, 'deploy', null, 'skipped');
+    };
+    const { runtime, fixes } = authorRuns();
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, () => fixes().length > 0);
+    expect(fixes()[0]?.failures?.map((f) => f.name)).toEqual(['build']);
+  });
+
+  it('is never inferred from a CI read that fails', async () => {
+    const { fake, hosts } = twoAccounts();
+    fake.setStatus = () => {};
+    let broken = false;
+    const send = fake.transport('aw-nova');
+    const host = github({
+      repo: 'acme/app',
+      base: 'main',
+      log: () => {},
+      send: async (request) =>
+        broken && /\/(check-runs|status)\?/.test(request.path) ? { status: 500, body: {} } : send(request),
+    });
+    const { runtime, fixes } = authorRuns();
+    const { hq } = await boot({ host, reviewHost: hosts.reviewHost, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, prOpened(fake));
+    broken = true;
+    fake.failJob(branchHead(fake, 'alpha/t1'), 'unit', 'boom');
+    await quiet();
+    expect(fixes()).toEqual([]);
+    expect(station('alpha/t1')(hq.snapshot())).toBe('test');
+    expect(hq.snapshot().actions).toEqual([]);
+    broken = false;
+    await until(hq, () => fixes().length > 0);
+  });
+
+  /** Boots with a check that fails on every head, and runs `then` inside the fix job's own read of the PR. */
+  const atTheFixRead = async (
+    then: (setStatus: FakeGithub['setStatus'], head: string) => void,
+    patch: Partial<GitHost> = {},
+  ) => {
+    const { fake, hosts } = twoAccounts();
+    const setStatus = fake.setStatus.bind(fake);
+    redFirst(fake, Number.POSITIVE_INFINITY);
+    const { runtime, fixes } = authorRuns();
+    let booted: RunningHq | null = null;
+    let done = false;
+    const host = hooked(
+      { ...hosts.host, ...patch },
+      {
+        current: (method) => {
+          const red = booted?.snapshot().mode?.red['alpha/t1'];
+          if (method !== 'snapshot' || done || red === undefined) return;
+          done = true;
+          then(setStatus, branchHead(fake, 'alpha/t1'));
+        },
+      },
+    );
+    booted = (await boot({ host, reviewHost: hosts.reviewHost, runtime, pollMs: 60_000 })).hq;
+    await post(booted, '/api/tickets', { id: 'alpha/t1' });
+    await until(booted, () => done);
+    await quiet();
+    return fixes();
+  };
+
+  it('starts no fix round when another check has started before the fix job read the checks', async () => {
+    expect(await atTheFixRead((set, head) => set(head, 'late', 'pending'))).toEqual([]);
+  });
+
+  it('starts no fix round when the host then lists no failing check', async () => {
+    expect(await atTheFixRead(() => {}, { failures: async () => [] })).toEqual([]);
+  });
+
+  it('says nothing about a head the PR has moved past', async () => {
+    const { fake, hosts } = twoAccounts();
+    redFirst(fake, Number.POSITIVE_INFINITY);
+    let broken = false;
+    const host = hooked(hosts.host, {
+      current: (method) => {
+        if (broken && method === 'snapshot') throw new Error('the host is down');
+      },
+    });
+    const { hq } = await boot({ host, reviewHost: hosts.reviewHost, runtime: authorRuns().runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/stubborn' });
+    await until(hq, (s) => action('checks_failed')(s) !== undefined);
+    broken = true;
+    const pr = fake.prs[0];
+    const moved = await post(hq, '/api/events', {
+      source: 'webhook',
+      kind: 'change',
+      repo: 'acme/app',
+      headRepo: 'acme/app',
+      number: pr?.number,
+      branch: pr?.head,
+      author: pr?.author,
+      state: 'open',
+      headSha: 'f'.repeat(40),
+      at: Date.parse('2027-01-01T00:00:00Z'),
+    });
+    expect(moved.status).toBe(200);
+    expect(hq.snapshot().actions.filter((a) => a.kind === 'checks_failed')).toEqual([]);
+  });
+
+  it('is fixed again when a rerun turns it red after the review', async () => {
+    const { fake, hosts } = twoAccounts();
+    const { runtime, fixes } = authorRuns();
+    const { hq } = await boot({ ...hosts, runtime });
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    await until(hq, (s) => action('ready_to_merge')(s) !== undefined);
+    fake.setStatus(branchHead(fake, 'alpha/t1'), 'ci', 'failure');
+    await until(hq, () => fixes().length > 0);
+    expect(hq.snapshot().actions.filter((a) => a.kind === 'ready_to_merge')).toEqual([]);
+  });
+
+  it('ends as a failed job when the author changes nothing', async () => {
+    const { fake, hosts } = twoAccounts();
+    redFirst(fake, Number.POSITIVE_INFINITY);
+    const { hq } = await boot(hosts);
+    await post(hq, '/api/tickets', { id: 'alpha/t1' });
+    const snap = await until(hq, (s) => action('job_failed')(s) !== undefined);
+    expect(action('job_failed')(snap)).toMatchObject({ job: 'ci', error: 'the fix round changed no file' });
+  });
+
+  it('goes back to the author on GitLab too, with the job trace', async () => {
+    const fake = new FakeGitlab();
+    const log = () => {};
+    const { runtime, fixes } = authorRuns();
+    let failed = false;
+    const host = hooked(gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('aw-nova'), log }), {
+      current: (method) => {
+        const head = fake.branches.get('aw/alpha/t2')?.commit;
+        if (method !== 'snapshot' || head === undefined || failed) return;
+        failed = true;
+        fake.failJob(
+          head,
+          'unit',
+          'section_start:1:step_script\r\u001b[0Kassertion failed\nERROR: Job failed: exit code 1',
+        );
+      },
+    });
+    const { hq } = await boot({
+      host,
+      reviewHost: gitlab({ repo: 'acme/app', base: 'main', send: fake.transport('vega'), log }),
+      runtime,
+    });
+    await post(hq, '/api/tickets', { id: 'alpha/t2' });
+    await until(hq, () => fixes().length > 0);
+    expect(fixes()[0]?.failures).toEqual([
+      { name: 'unit', output: 'assertion failed\nERROR: Job failed: exit code 1' },
+    ]);
   });
 });

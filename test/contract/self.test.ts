@@ -70,6 +70,8 @@ const HOST_BREAKS: Record<HostFault, string[]> = {
   'any-branch': ['a-branch-outside-the-aw-prefix-is-refused'],
   merges: ['the-lifecycle-never-merges'],
   'login-drifts': ['login-names-the-account-and-is-stable'],
+  'hides-failures': ['a-failed-job-reads-back-bounded-and-without-secrets'],
+  'raw-logs': ['a-failed-job-reads-back-bounded-and-without-secrets'],
 };
 
 const PAYLOADS = recorded('github');

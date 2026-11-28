@@ -50,7 +50,7 @@ export const demoMode =
     return {
       executors: {},
       actions: () => [],
-      view: () => ({ rounds: {}, usage: {}, jobs: [], reviewGap: null }),
+      view: () => ({ rounds: {}, usage: {}, red: {}, jobs: [], reviewGap: null }),
       route: (method, path) =>
         method === 'GET' && path === '/api/demo'
           ? Promise.resolve({

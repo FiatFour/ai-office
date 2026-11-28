@@ -24,6 +24,7 @@ export class FakeGitlab {
   readonly approvals: Array<{ iid: number; user: string; id: number }> = [];
   private clock = Date.parse('2026-11-17T00:00:00Z');
   private next = 500;
+  private readonly jobs: Array<{ id: number; sha: string; name: string; log: string }> = [];
 
   constructor(repo = 'acme/app') {
     this.repo = repo;
@@ -40,6 +41,11 @@ export class FakeGitlab {
       this.calls.push(request);
       return paged(request, this.route(account, request));
     };
+  }
+
+  /** A failed job of the commit's one pipeline, with its trace. */
+  failJob(sha: string, name: string, log: string): void {
+    this.jobs.push({ id: this.next++, sha, name, log });
   }
 
   private mrObject(mr: Mr) {
@@ -183,7 +189,15 @@ export class FakeGitlab {
     }
     if (method === 'GET' && rest === '/pipelines') {
       const head = url.searchParams.get('sha');
-      return ok([{ id: 9, sha: head, status: 'success', updated_at: iso(this.clock) }]);
+      const status = this.jobs.some((j) => j.sha === head) ? 'failed' : 'success';
+      return ok([{ id: 9, sha: head, status, updated_at: iso(this.clock) }]);
+    }
+    if (method === 'GET' && rest === '/pipelines/9/jobs')
+      return ok(this.jobs.map((j) => ({ id: j.id, name: j.name, status: 'failed', allow_failure: false })));
+    m = method === 'GET' ? /^\/jobs\/(\d+)\/trace$/.exec(rest) : null;
+    if (m) {
+      const job = this.jobs.find((j) => j.id === Number(m?.[1]));
+      return job === undefined ? fail(404, '404 Not found') : ok(job.log);
     }
     return fail(404, `404 Not Found: ${method} ${rest}`);
   }

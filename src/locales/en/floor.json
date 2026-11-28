@@ -59,6 +59,7 @@
       "ready_to_merge": "Ready to merge {{task}}. Merge it on the host. HQ never merges.",
       "closed_unmerged": "The PR for {{task}} was closed without a merge.",
       "round_limit": "{{task}} used all its review rounds.",
+      "checks_failed": "{{task}} used all its fix rounds and CI is still red: {{detail}}",
       "website": "A worker asks to open {{detail}} in its sandbox.",
       "alert": "HQ raised an alert: {{detail}}",
       "job_failed": "A job failed for {{task}}: {{detail}}"

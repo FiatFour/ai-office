@@ -5,7 +5,7 @@ Two contracts pin what every sandbox engine and every git host must do. Each con
 | Contract | File | Runs against |
 | --- | --- | --- |
 | SandboxDriver, 15 cases | `test/contract/sandbox.contract.ts` | real docker (local, CI), real rootless podman (CI only), an in-memory fake (self test) |
-| GitHost, 11 host cases and 6 payload cases | `test/contract/githost.contract.ts` | the P1-2 fake GitHub and GitLab APIs with recorded P0-4 payloads, live GitHub scratch repo with live webhooks, an in-memory fake (self test) |
+| GitHost, 12 host cases and 6 payload cases | `test/contract/githost.contract.ts` | the P1-2 fake GitHub and GitLab APIs with recorded P0-4 payloads, live GitHub scratch repo with live webhooks, an in-memory fake (self test) |
 
 ## Run it
 
@@ -24,6 +24,7 @@ Every driver gets a cell on every OS. A case that cannot run says why: `needs <c
 
 ## What does not run
 
+- `a-failed-job-reads-back-bounded-and-without-secrets` on live GitHub: the subject cannot fail an Actions job on the scratch repo, so it reports `needs failing-checks`. It runs on both fake APIs and the in-memory fake.
 - GitLab live: no account (gate G0). The GitLab contract runs on the fake API and the docs-example payloads only.
 - krun: the driver contract needs `exec`, and krun cannot exec (`fw-krun-exec`). The P0-2 krun lanes cover its network rules.
 - podman on a developer machine: podman runs on `ubuntu-latest` only.

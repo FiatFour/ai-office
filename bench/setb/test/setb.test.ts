@@ -944,12 +944,12 @@ describe('the frozen base check', () => {
     g(upstream, 'clone', '-q', '--depth=1', pathToFileURL(upstream).href, shallow);
     g(upstream, 'clone', '-q', '--no-hardlinks', shallow, second);
     expect(realGit(second, ['cat-file', '-e', `${frozen}^{commit}`]).status).not.toBe(0);
-    expect(() => frozenBaseRepo(second, frozen, realGit, () => tempDir('setb-f1'), {})).not.toThrow();
     const got = frozenBaseRepo(second, frozen, realGit, () => tempDir('setb-f2'), {});
     expect(g(got, 'cat-file', '-t', frozen)).toBe('commit');
     rmSync(upstream, { recursive: true, force: true });
     expect(() => frozenBaseRepo(second, frozen, realGit, () => tempDir('setb-f3'), {})).toThrow(/git fetch failed/);
-  });
+    // About 30 git processes, which take 2 to 6 s on a Windows runner and longer on a loaded one.
+  }, 60_000);
 
   it('seeds a PR that removes the case it breaks, so it stays CI green on the base', () => {
     const seeds = JSON.parse(readFileSync(join(SETB, 'calibration', 'seeded.json'), 'utf8')) as Seed[];

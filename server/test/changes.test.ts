@@ -314,16 +314,16 @@ describe('the stamp of a PR', () => {
   });
 
   it('lists only the PRs of its repo that a task owns, the ones that wait for a person first', () => {
-    const other = box({ id: 'alpha/t1', state: 'merge', pr: 'acme/app#3@aw/alpha/t1' });
-    const state = stateOf([box({ state: 'test', pr: KEY }), other], {
+    const other = box({ id: 'alpha/t1', state: 'test', pr: 'acme/app#3@aw/alpha/t1' });
+    const state = stateOf([box({ state: 'merge', pr: KEY }), other], {
       [KEY]: pr(),
       'acme/app#3@aw/alpha/t1': pr({ number: 3, branch: 'aw/alpha/t1' }),
       'acme/app#4@feature': pr({ number: 4, branch: 'feature' }),
       'acme/else#5@aw/alpha/t2': pr({ number: 5, repo: 'acme/else' }),
     });
     expect(changesView(state, SOURCES, {}).rows.map((row) => [row.number, row.stamp])).toEqual([
-      [3, 'READY'],
-      [1, 'DRAFT'],
+      [1, 'READY'],
+      [3, 'DRAFT'],
     ]);
   });
 });

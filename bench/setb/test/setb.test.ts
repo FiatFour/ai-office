@@ -50,8 +50,13 @@ import {
   TASKS_FILE,
 } from '../task.ts';
 
+// A synchronous child blocks the test timer, so each git call needs its own limit for a hang to fail.
+const GIT_LIMIT = { timeout: 30_000 };
+
 const realGit: Git = (cwd, args) => {
-  const ran = spawnSync('git', [...args], { cwd, encoding: 'utf8' });
+  const ran = spawnSync('git', [...args], { cwd, encoding: 'utf8', ...GIT_LIMIT });
+  // Only the timeout is thrown: a missing cwd must stay a failed status, as in the product's git runner.
+  if ((ran.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') throw ran.error;
   return { status: ran.status, stdout: ran.stdout, stderr: ran.stderr };
 };
 
@@ -836,14 +841,15 @@ describe('judge calibration', () => {
       expect(files.length).toBeGreaterThan(0);
       for (const f of files) {
         mkdirSync(dirname(join(dir, f)), { recursive: true });
-        writeFileSync(join(dir, f), execFileSync('git', ['show', `${frozen}:${f}`], { cwd: base }));
+        writeFileSync(join(dir, f), execFileSync('git', ['show', `${frozen}:${f}`], { cwd: base, ...GIT_LIMIT }));
       }
       writeFileSync(join(dir, 'seed.patch'), seed.diff);
-      const ran = spawnSync('git', ['apply', '--check', 'seed.patch'], { cwd: dir, encoding: 'utf8' });
+      const ran = spawnSync('git', ['apply', '--check', 'seed.patch'], { cwd: dir, encoding: 'utf8', ...GIT_LIMIT });
       expect(ran.stderr, seed.task).toBe('');
       expect(ran.status, seed.task).toBe(0);
     }
-  });
+    // A shallow CI checkout fetches the frozen base from GitHub first. On Windows runners it timed out at 7.8 s, and once at 25.6 s.
+  }, 60_000);
 });
 
 describe('the frozen base check', () => {
@@ -931,7 +937,11 @@ describe('the frozen base check', () => {
   it('works in a clone of a shallow clone, as the CI perf job makes it', () => {
     const upstream = tempDir('setb-up');
     const g = (cwd: string, ...args: string[]) =>
-      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+        cwd,
+        encoding: 'utf8',
+        ...GIT_LIMIT,
+      }).trim();
     g(upstream, 'init', '-q');
     writeFileSync(join(upstream, 'a'), '1');
     g(upstream, 'add', '.');

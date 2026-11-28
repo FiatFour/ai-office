@@ -55,5 +55,6 @@ describe.skipIf(!canRun)('the state directory lock', () => {
     }
     expect(opened.filter((count) => count > 1).length, 'trials with more than one owner').toBe(0);
     expect(opened.filter((count) => count === 0).length, 'trials with no owner').toBe(0);
-  }, 60_000);
+    // Seen up to 39 s on Windows runners, where the median is 11 s.
+  }, 120_000);
 });

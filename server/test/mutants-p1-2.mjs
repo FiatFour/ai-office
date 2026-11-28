@@ -258,7 +258,7 @@ const MUTANTS = [
   {
     name: 'claude-git-unhardened',
     claim: 'HQ reads the cage repo with git hardened against agent-written config',
-    edits: [['server/agents/claude-code.ts', "'-c', 'core.fsmonitor=false', ", '']],
+    edits: [['server/agents/checkout.ts', "'-c', 'core.fsmonitor=false', ", '']],
     tests: [AGENTS],
   },
   {
@@ -725,8 +725,8 @@ const MUTANTS = [
     edits: [
       [
         'server/agents/claude-code.ts',
-        'const ran = await shell.exec(argv, {\n      input: promptFor(job),',
-        'const ran = await shell.exec([...argv, promptFor(job)], {',
+        'const ran = await shell.exec(argv, {\n      input: promptFor(job, notAtHead),',
+        'const ran = await shell.exec([...argv, promptFor(job, notAtHead)], {',
       ],
     ],
     tests: [AGENTS],
@@ -1044,7 +1044,7 @@ const MUTANTS = [
   {
     name: 'r3-allpages-overflow-unchecked',
     claim: '5,001 items is an error, not a silent read',
-    edits: [['server/githost/host.ts', 'if (all.length > MAX_ITEMS) throw', 'if (false) throw']],
+    edits: [['server/githost/host.ts', 'if (all.length > max) throw', 'if (false) throw']],
     tests: [CONTRACT, RECORDED],
   },
   {

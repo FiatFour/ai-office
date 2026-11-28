@@ -7,6 +7,7 @@ import { type ApiCall, cliTransport } from '../githost/host.ts';
 import type { SandboxDriver } from '../sandbox/container.ts';
 import { type FirewallPolicy, firewallPolicy, POLICIES, type PolicyName } from '../sandbox/firewall.ts';
 import { parseAllowlist } from '../sandbox/proxy/allowlist.mjs';
+import { withChanges } from '../snapshot/changes.ts';
 import { cagesMode, type ModeFactory } from './cages.ts';
 
 export class ConfigError extends Error {}
@@ -112,8 +113,9 @@ export const cagesFromConfig = (
     Object.entries(record(c.tickets, 'config.tickets')).map(([id, t]) => [id, ticketOf(id, t)]),
   );
   try {
-    return cagesMode({
-      host: (hostId === 'github' ? github : gitlab)({ send, log, repo, base }),
+    const host = (hostId === 'github' ? github : gitlab)({ send, log, repo, base });
+    const mode = cagesMode({
+      host,
       repo,
       base,
       tickets,
@@ -129,6 +131,7 @@ export const cagesFromConfig = (
       },
       ...(typeof c.pollMs === 'number' ? { pollMs: c.pollMs } : {}),
     });
+    return withChanges(mode, { host, repo, base, tickets });
   } catch (error) {
     throw new ConfigError((error as Error).message);
   }

@@ -76,7 +76,7 @@ A cage is a container the driver starts for one task and worker.
 
 ## Snapshot schema
 
-HQ builds one `Snapshot` (`server/snapshot.ts`) and sends it as JSON on every change, over `/api/ws` and at `GET /api/snapshot`. The floor and the dashboard read the snapshot from `/api/ws` only. The floor also asks `GET /api/demo` to learn whether HQ runs in demo mode (`src/floor/useHq.ts`). A test, `server/test/architecture-doc.test.ts`, reads the TypeScript source and fails when a field below does not exist, or when a field in the source is missing here. Each table lists the fields of one type. A type that the snapshot reaches and that has fields needs a table here, or a row in `docs/lifecycle.md`. A dotted name is a field of an inline object.
+HQ builds one `Snapshot` (`server/snapshot.ts`) and sends it as JSON on every change, over `/api/ws` and at `GET /api/snapshot`. The floor and the dashboard read the snapshot from `/api/ws` only. The floor also asks `GET /api/demo` to learn whether HQ runs in demo mode (`src/floor/useHq.ts`). The QC gate screen (`#/prs`) reads `GET /api/changes` and `GET /api/changes/<number>`, which only the cages mode serves (`server/snapshot/changes.ts`). The list comes from HQ's state. One PR's checks, reviews and comments are read from the host and reused for 30 s while HQ's facts about it stay the same. A test, `server/test/architecture-doc.test.ts`, reads the TypeScript source and fails when a field below does not exist, or when a field in the source is missing here. Each table lists the fields of one type. A type that the snapshot reaches and that has fields needs a table here, or a row in `docs/lifecycle.md`. A dotted name is a field of an inline object.
 
 ### Snapshot
 

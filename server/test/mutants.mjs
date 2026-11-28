@@ -771,6 +771,194 @@ const MUTANTS = [
     edits: [['server/cli.ts', '      firewall: firewallFromConfig(raw),\n', '      firewall: firewallPolicy(),\n']],
     tests: [CLI],
   },
+  {
+    name: 'changes-ready-while-red',
+    claim: 'a PR with a red check is never READY',
+    edits: [
+      [
+        'server/snapshot/changes.ts',
+        "return box.pr === key && !red ? 'READY' : 'DRAFT';",
+        "return box.pr === key ? 'READY' : 'DRAFT';",
+      ],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-ready-other-pr',
+    claim: 'READY belongs to the PR the box holds',
+    edits: [
+      [
+        'server/snapshot/changes.ts',
+        "return box.pr === key && !red ? 'READY' : 'DRAFT';",
+        "return !red ? 'READY' : 'DRAFT';",
+      ],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-qc-never-changes',
+    claim: 'a qc box with changes requested reads CHANGES',
+    edits: [['server/snapshot/changes.ts', "return box.changesRequested ? 'CHANGES' : 'AT QC';", "return 'AT QC';"]],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-qc-other-pr',
+    claim: 'CHANGES belongs to the PR the box holds',
+    edits: [['server/snapshot/changes.ts', "      if (box.pr !== key) return 'DRAFT';\n", '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-merged-not-shipped',
+    claim: 'a merged PR reads SHIPPED whatever the box says',
+    edits: [['server/snapshot/changes.ts', "  if (change.state === 'merged') return 'SHIPPED';\n", '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-closed-not-scrapped',
+    claim: 'a closed PR reads SCRAPPED',
+    edits: [['server/snapshot/changes.ts', "  if (change.state === 'closed') return 'SCRAPPED';\n", '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-any-repo',
+    claim: 'only PRs of the factory repo are listed',
+    edits: [['server/snapshot/changes.ts', ' || change.repo.toLowerCase() !== sources.repo.toLowerCase()', '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-unsorted',
+    claim: 'PRs that wait for a person come first',
+    edits: [['server/snapshot/changes.ts', 'RANK[a.row.stamp] - RANK[b.row.stamp] || ', '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-no-you',
+    claim: 'the person who merges is in the approvals row',
+    edits: [
+      [
+        'server/snapshot/changes.ts',
+        "return [...peers, { by: 'you', state: row.stamp === 'SHIPPED' ? 'approve' : 'wait' }];",
+        'return peers;',
+      ],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-peer-not-waiting',
+    claim: 'a PR nobody reviewed shows a waiting peer',
+    edits: [
+      [
+        'server/snapshot/changes.ts',
+        "peers.push({ by: 'peer', who: box.state === 'qc' ? box.reviewer : null, state: 'wait' });",
+        '',
+      ],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-marker-from-anyone',
+    claim: 'a marker counts only on a review of the reviewer account',
+    edits: [
+      [
+        'server/snapshot/changes.ts',
+        'const mark = review.reviewer.toLowerCase() === self ? REVIEW_MARK.exec(review.body) : null;',
+        'const mark = REVIEW_MARK.exec(review.body);',
+      ],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-marker-shown',
+    claim: 'HQ markers are not shown to a person',
+    edits: [['server/snapshot/changes.ts', "    .replace(MARKS, '')\n", '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-quote-shown',
+    claim: 'HQ quoting is taken off',
+    edits: [
+      ['server/snapshot/changes.ts', ".replace(FENCED, (_, __, inner: string) => inner.replace(/^│ /gm, ''))", ''],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-rounds-unsorted',
+    claim: 'rounds are numbered oldest first',
+    edits: [['server/snapshot/changes.ts', '[...reviews].sort((a, b) => a.at - b.at)', 'reviews']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-any-url',
+    claim: 'only an http address becomes a link',
+    edits: [['server/snapshot/changes.ts', '(/^https?:\\/\\//i.test(url) ? url : null)', "(url === '' ? null : url)"]],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-any-head-check',
+    claim: 'only checks of the head are shown',
+    edits: [
+      ['server/snapshot/changes.ts', '      .filter((check) => check.headSha === snapshot.change.headSha)\n', ''],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-never-reused',
+    claim: 'a host answer is reused while nothing changed',
+    edits: [
+      [
+        'server/snapshot/changes.ts',
+        'if (seen !== undefined && seen.key === key &&',
+        "if (seen !== undefined && seen.key === '' &&",
+      ],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-stale-key',
+    claim: 'new facts about a PR are read again',
+    edits: [['server/snapshot/changes.ts', 'seen.key === key && ', '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-never-expires',
+    claim: 'an old host answer is asked again',
+    edits: [['server/snapshot/changes.ts', ' && Date.now() - seen.at < (sources.maxAgeMs ?? MAX_AGE_MS)', '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-failure-kept',
+    claim: 'a failed host read is not kept',
+    edits: [['server/snapshot/changes.ts', '        reads.delete(number);\n', '']],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-read-writes',
+    claim: 'reading a PR writes nothing to the host',
+    edits: [
+      [
+        'server/snapshot/changes.ts',
+        '  const reviewHost = sources.reviewHost ?? sources.host;\n',
+        "  const reviewHost = sources.reviewHost ?? sources.host;\n  await sources.host.postComment(sources.repo, number, 'seen');\n",
+      ],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-no-brief-url',
+    claim: 'the posted brief is linked',
+    edits: [
+      ['server/snapshot/changes.ts', 'briefUrl: brief === undefined ? null : httpUrl(brief.url),', 'briefUrl: null,'],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
+  {
+    name: 'changes-not-wired',
+    claim: 'the CLI cages mode serves /api/changes',
+    edits: [
+      ['server/modes/cages-config.ts', 'return withChanges(mode, { host, repo, base, tickets });', 'return mode;'],
+    ],
+    tests: ['server/test/changes.test.ts'],
+  },
 ];
 
 const only = process.argv.slice(2);

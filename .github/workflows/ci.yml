@@ -358,6 +358,10 @@ jobs:
         run: |
           node src/e2e/firewall.mjs
           if ($LASTEXITCODE -ne 0) { throw "the firewall lane failed" }
+      - name: QC gate screen (a scripted review round, CHANGES then READY, no merge control) and its artboard compare
+        run: |
+          node src/e2e/prs.mjs
+          if ($LASTEXITCODE -ne 0) { throw "the prs lane failed" }
       - name: Frame time with six workers, 30 s
         run: |
           node src/e2e/perf.mjs

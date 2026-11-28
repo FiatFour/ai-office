@@ -24,7 +24,7 @@ const PF_MODEL = 'src/screens/preflight/model.ts';
 const PF_SCREEN = 'src/screens/preflight/screen.tsx';
 const DRAWER = 'src/floor/Drawer.tsx';
 
-/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt' | 'preflight', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
+/** @type {Array<{ name: string, claim: string, tier?: 'e2e' | 'lane9' | 'gates' | 'interrupt' | 'preflight' | 'prs', edits: Array<[file: string, find: string, replace: string]>, copies?: Array<[to: string, from: string]> }>} */
 const MUTANTS = [
   {
     name: 'belt-is-code',
@@ -763,7 +763,7 @@ const MUTANTS = [
   {
     name: 'lane9-firewall-counter-removed',
     claim: 'the FIREWALL zone draws its counter',
-    tier: 'lane9',
+    tier: 'e2e',
     edits: [[SCENE, '{view.firewall === null ? null : (', '{view.firewall !== undefined ? null : (']],
   },
   {
@@ -1397,6 +1397,112 @@ const MUTANTS = [
     tier: 'e2e',
     edits: [[APP, '{hq.snapshot.host ? <ModeChip', '{false && hq.snapshot.host ? <ModeChip']],
   },
+  {
+    name: 'prs-merge-button',
+    claim: 'the QC gate screen has no merge control',
+    edits: [
+      [
+        'src/screens/prs/view.tsx',
+        '      <p className="prs-never">',
+        '      <button type="button" className="btn">\n        Merge\n      </button>\n      <p className="prs-never">',
+      ],
+    ],
+  },
+  {
+    name: 'prs-merge-link',
+    claim: 'no link of the screen merges',
+    edits: [
+      [
+        'src/screens/prs/view.tsx',
+        'href={fromHost.url} target="_blank"',
+        'href={`${fromHost.url}/merge`} target="_blank"',
+      ],
+    ],
+  },
+  {
+    name: 'prs-merge-wording-always',
+    claim: 'only a READY PR invites a merge',
+    edits: [
+      [
+        'src/screens/prs/view.tsx',
+        "row.stamp === 'READY' ? t('prs.openToMerge', { host: name }) : t('prs.open', { host: name })",
+        "t('prs.openToMerge', { host: name })",
+      ],
+    ],
+  },
+  {
+    name: 'prs-brief-link-too-early',
+    claim: 'no brief link before a brief can exist',
+    edits: [['src/screens/prs/view.tsx', "  CHANGES: 'prs.brief.changes',", '  CHANGES: null,']],
+  },
+  {
+    name: 'prs-brief-link-loses-task',
+    claim: 'the brief link names the task',
+    edits: [['src/screens/prs/model.ts', "  query.set('task', task);\n", '']],
+  },
+  {
+    name: 'prs-no-factory-is-error',
+    claim: 'an HQ with no factory says so',
+    edits: [['src/screens/prs/model.ts', "    if (res.status === 404) return { phase: 'none' };\n", '']],
+  },
+  {
+    name: 'prs-ready-before-detail',
+    claim: 'the screen is done only once the picked PR is read',
+    edits: [
+      [
+        'src/screens/prs/view.tsx',
+        "(list.phase !== 'rows' || list.rows.length === 0 || detail.phase !== 'loading')",
+        'true',
+      ],
+    ],
+  },
+  {
+    name: 'prs-unread-hidden',
+    claim: 'a host that does not answer is named',
+    edits: [['src/screens/prs/view.tsx', '<code>{fromHost.reason}</code>', '']],
+  },
+  {
+    name: 'prs-merge-button-outside-board',
+    claim: 'the browser check sees a merge control wherever the screen draws it',
+    tier: 'prs',
+    edits: [
+      [
+        'src/screens/prs/screen.tsx',
+        '  return <Board list={list} detail={detail} selected={selected} onSelect={setPicked} search={location.search} />;',
+        '  return (\n    <>\n      <Board list={list} detail={detail} selected={selected} onSelect={setPicked} search={location.search} />\n      <button type="button">Merge</button>\n    </>\n  );',
+      ],
+    ],
+  },
+  {
+    name: 'prs-screen-writes',
+    claim: 'the screen only reads',
+    tier: 'prs',
+    edits: [
+      [
+        'src/screens/prs/model.ts',
+        "const res = await ask(`/api/changes/${number}`, { cache: 'no-store' });",
+        "await ask('/api/changes', { method: 'POST' });\n    const res = await ask(`/api/changes/${number}`, { cache: 'no-store' });",
+      ],
+    ],
+  },
+  {
+    name: 'prs-no-live-update',
+    claim: 'CHANGES turns READY without a reload',
+    tier: 'prs',
+    edits: [['src/screens/prs/screen.tsx', '  }, [id, push]);', '  }, [id]);']],
+  },
+  {
+    name: 'prs-not-wired-in-lane-ready',
+    claim: 'a PR row can be picked and the detail follows',
+    tier: 'prs',
+    edits: [
+      [
+        'src/screens/prs/screen.tsx',
+        '  const selected = rows.some((row) => row.number === picked) ? picked : (rows[0]?.number ?? null);',
+        '  const selected = null as number | null;',
+      ],
+    ],
+  },
 ];
 
 const only = process.argv.slice(2);
@@ -1452,6 +1558,17 @@ const preflight = async () => {
   return result.status === 0
     ? null
     : (result.stdout.match(/FAIL preflight[^\n]{0,160}/) ?? ['preflight lane crashed'])[0];
+};
+const prs = async () => {
+  const built = await build();
+  if (built.status !== 0) return 'build failed';
+  const result = await run('node', ['src/e2e/prs.mjs'], 300_000, {
+    ...process.env,
+    OUT: join(process.env.TMPDIR ?? '/tmp', 'mutant-prs'),
+  });
+  // The artboard compare has its own line, so only the lane's verdict counts.
+  if (result.stdout.includes('PASS prs lane')) return null;
+  return (result.stdout.match(/FAIL prs lane[^\n]{0,160}/) ?? ['prs lane crashed'])[0];
 };
 const gates = async () => {
   const result = await run('node', ['src/e2e/gates.mjs'], 300_000, {
@@ -1546,6 +1663,7 @@ for (const mutant of MUTANTS) {
       how = (await vitest()).status !== 0 ? 'unit tests' : null;
       if (how === null && mutant.tier === 'e2e') how = await lanes();
       if (how === null && mutant.tier === 'preflight') how = await preflight();
+      if (how === null && mutant.tier === 'prs') how = await prs();
     }
     if (how === null) bad += 1;
     log(
@@ -1561,7 +1679,7 @@ for (const mutant of MUTANTS) {
         } catch {}
       } else writeFileSync(path, bytes);
     }
-    if (mutant.tier === 'e2e' || mutant.tier === 'preflight' || mutant.edits.some(([file]) => file.endsWith('.css')))
+    if (['e2e', 'preflight', 'prs'].includes(mutant.tier ?? '') || mutant.edits.some(([file]) => file.endsWith('.css')))
       await build();
   }
 }

@@ -16,6 +16,8 @@ jobs:
   check:
     name: check (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
+    # The longest run so far took under 6 minutes. This ends a hang that no test limit can.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +42,8 @@ jobs:
   server-live:
     name: server live (docker, podman, kill -9, CLI processes, lock race)
     runs-on: ubuntu-latest
+    # The longest run so far took under 6 minutes. This ends a hang that no test limit can.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

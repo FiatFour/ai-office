@@ -16,6 +16,7 @@ const BRIEF = 'server/test/merge-brief.test.ts';
 const AGENTS = 'server/test/agents.test.ts';
 const SANITIZE = 'server/test/sanitize.test.ts';
 const KILL = 'server/test/kill-push.test.ts';
+const LIMITS = 'test/setup/sync-children.test.ts';
 const DOCKER = 'server/test/sandbox/cage-shell.test.ts';
 const CLI = 'server/test/cli.test.ts';
 const SITE = 'server/test/site.test.ts';
@@ -1357,6 +1358,86 @@ const MUTANTS = [
       ],
     ],
     tests: [CILOG],
+  },
+  {
+    name: 'limit-test-default',
+    claim: 'a test with no limit of its own gets 30 s, not 5',
+    edits: [['vitest.config.ts', '    testTimeout: 30_000,\n', '']],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-hook-default',
+    claim: 'a hook with no limit of its own gets 30 s, not 10',
+    edits: [['vitest.config.ts', '    hookTimeout: 30_000,\n', '']],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-setup-not-loaded',
+    claim: 'every test file runs with the sync child limit',
+    edits: [['vitest.config.ts', "    setupFiles: ['./test/setup/sync-children.ts'],\n", '']],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-sync-unbounded-default',
+    claim: 'the default limit of a synchronous child is 60 s',
+    edits: [['test/setup/sync-children.ts', 'const limit = { ms: 60_000 };', 'const limit = { ms: 3_600_000 };']],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-sync-none',
+    claim: 'a hung synchronous child is ended',
+    edits: [['test/setup/sync-children.ts', 'timeout: limit.ms };', '};']],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-sync-sigterm',
+    claim: 'a hung child that ignores SIGTERM is killed',
+    edits: [['test/setup/sync-children.ts', "killSignal: 'SIGKILL', ", '']],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-sync-silent',
+    claim: 'a spawnSync that hit the limit fails the test',
+    edits: [['test/setup/sync-children.ts', "if (result?.error?.code === 'ETIMEDOUT') throw result.error;", '']],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-sync-overrides-caller',
+    claim: 'a timeout the caller gives is kept',
+    edits: [
+      ['test/setup/sync-children.ts', 'if (given?.timeout !== undefined) return real(command, ...rest);\n', '\n'],
+    ],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-sync-null-args',
+    claim: 'a null argument list is not taken for the options',
+    edits: [
+      [
+        'test/setup/sync-children.ts',
+        '(rest[0] == null || Array.isArray(rest[0]))',
+        '(rest[0] === undefined || Array.isArray(rest[0]))',
+      ],
+    ],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-sync-exec-command-only',
+    claim: 'execSync with a command only is limited',
+    edits: [
+      [
+        'test/setup/sync-children.ts',
+        'limited(target.execSync as Call, false)',
+        'limited(target.execSync as Call, true)',
+      ],
+    ],
+    tests: [LIMITS],
+  },
+  {
+    name: 'limit-sync-named-imports',
+    claim: 'named imports of child_process get the limit',
+    edits: [['test/setup/sync-children.ts', '  syncBuiltinESMExports();\n', '']],
+    tests: [LIMITS],
   },
 ];
 

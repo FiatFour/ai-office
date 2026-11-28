@@ -12,6 +12,7 @@ import {
   type Verdict,
 } from '@agent-works/core';
 import type { AgentRuntime, RuntimeId, Ticket, Usage } from '../agents/runtime.ts';
+import { BlockedSites } from '../blocked.ts';
 import { briefMarker, mergeBrief, type ReviewRound, renderBrief } from '../brief/merge-brief.ts';
 import { InvalidEvent } from '../events.ts';
 import {
@@ -187,7 +188,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
     const failures = new Map<string, { count: number; error: string }>();
     const briefs = new Map<TaskId, { head: string; url: string; text: string }>();
     const usage = new Map<TaskId, (Usage | null)[]>();
-    const denials = new Map<string, Omit<Extract<ActionItem, { kind: 'website' }>, 'kind'>>();
+    const denials = new BlockedSites();
     const allowed = new Set<string>();
     const lastPoll = new Map<string, string>();
     let timer: NodeJS.Timeout | null = null;
@@ -621,7 +622,8 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
             });
         }
       }
-      for (const denial of denials.values()) if (!allowed.has(denial.site)) items.push({ kind: 'website', ...denial });
+      for (const denial of denials.list(Date.now()))
+        if (!allowed.has(denial.site)) items.push({ kind: 'website', ...denial });
       for (const entry of hq.outbox())
         if (entry.command.kind === 'alert_human')
           items.push({ kind: 'alert', reason: entry.command.reason, subject: entry.command.subject });
@@ -672,7 +674,7 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
         return body().then(async (raw) => {
           const { host: rawHost, port } = objectOf(raw);
           const site = typeof rawHost === 'string' ? siteOf(rawHost, port)?.site : undefined;
-          if (site === undefined || denials.get(site)?.allow !== true)
+          if (site === undefined || denials.get(site, Date.now())?.allow !== true)
             throw new InvalidEvent(`no blocked website ${JSON.stringify(rawHost)} is waiting`);
           await options.egress?.allow(site);
           allowed.add(site);
@@ -698,18 +700,10 @@ export const cagesMode = (options: CagesOptions): ModeFactory => {
       route,
       noteDenial: (denial) => {
         const valid = siteOf(denial.host, denial.port);
-        const key = valid ?? {
-          site: JSON.stringify(`${denial.host}:${denial.port}`),
-          host: denial.host,
-          port: denial.port,
-        };
-        const seenBefore = denials.get(key.site);
-        denials.set(key.site, {
-          ...key,
-          agent: denial.agent,
-          count: (seenBefore?.count ?? 0) + 1,
-          allow: (seenBefore?.allow ?? true) && valid !== null && denial.reason === NOT_ALLOWLISTED,
-        });
+        const host = denial.host.slice(0, 253);
+        const key = valid ?? { site: JSON.stringify(`${host}:${denial.port}`), host, port: denial.port };
+        const allow = valid !== null && denial.reason === NOT_ALLOWLISTED;
+        denials.note({ ...key, agent: denial.agent, allow }, Date.now());
       },
       wake: pokeAll,
       start: () => {

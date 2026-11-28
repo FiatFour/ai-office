@@ -176,7 +176,7 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 | D20 | not-built | Factory map (minimap) above the shift clock. |
 | D21 | not-built | "+50 XP" rising over the PR rack and in the toast. The snapshot has no XP. |
 | D22 | changed | Toast text. Canvas "SHIPMENT DELIVERED / PR #12 merged · +50 XP". Built "Shipment delivered / alpha/p12c merged and shipped", from the task, in the active language. |
-| D23 | not-built | Firewall counters, the git and npm lights and the blocked packets. HQ has denials but no allowed count. |
+| D23 | not-built | The blocked packets in the FIREWALL gate. The counter under the gate is built (D79). |
 | D24 | not-built | Truck load, the v0.1 label, the crates and the empty slots. Built truck is a blank door (38 by 40 px, the canvas truck is 38 by 78). |
 | D25 | not-built | Shipments board (S-1 sign-in · L1+L3, S-2 webhook · L2, "truck waits for all PRs"). |
 | D26 | not-built | PR rack cards #11, #12, #14, #15. Built rack is art only. |
@@ -223,11 +223,12 @@ Cheap spec items were built: D01 "Demo data", D11 `#ffca28`, D29 `CAGE n · NAME
 | D68 | changed | Boxes per station. The canvas draws 2 at ORDER, 3 at CODE and 4 at QC; built draws the boxes of its snapshot (the live run has two in QC and none elsewhere), so the counts differ by design. |
 | D69 | changed | DOM element counts per tag differ: the canvas HUD has about 25 buttons, 200 spans and 30 divs; built has 7 buttons and 24 spans. |
 | D70 | not-built | DOM elements only on the canvas: 19 links (menu), a label and line breaks. |
-| D72 | fixed | Firewall frame (four red edges), the git and npm lights and the four scan lasers are the canvas shapes. The counters and blocked packets are not built (D23). |
+| D72 | fixed | Firewall frame (four red edges), the git and npm lights and the four scan lasers are the canvas shapes. The blocked packets are not built (D23). |
 | D73 | fixed | Shipping dock: the hazard stripe, the left wall edge, the side ramp and the roll-up door with its blue bumper are the canvas shapes. The truck load is not built (D24). |
 | D74 | fixed | TEST scan lines, the QC press and light stack, and the MERGE pads are drawn as on the canvas. |
 | D75 | changed | Built-only SHIPPED stamp on a delivered box (green), next to SCRAPPED and CHANGES; the canvas has the HOTFIX and BLOCKED tags only (D33). |
 | D76 | changed | The built run-mode chip is a link that opens the preflight screen, so its green frame is painted on a link. The canvas has a button that cycles run modes and a dot that blinks; the built dot is still. |
+| D79 | changed | The FIREWALL counter. Built counts the blocked sites HQ holds and the project allowlist rules, ALL for the open policy; the canvas numbers are drawn data. The git and npm lights are fixed art whatever the policy. |
 <!-- differences:end -->
 
 ## Spec versus canvas conflicts (the operator decides; the choice made in the code is stated)

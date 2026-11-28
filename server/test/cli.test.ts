@@ -268,7 +268,18 @@ live('serve --mode cages', () => {
       const port = await freePort();
       const child = spawn(
         process.execPath,
-        [BIN, 'serve', '--port', String(port), '--home', home, '--mode', 'cages', '--config', config(home)],
+        [
+          BIN,
+          'serve',
+          '--port',
+          String(port),
+          '--home',
+          home,
+          '--mode',
+          'cages',
+          '--config',
+          config(home, { firewall: { policy: 'locked', allow: ['pypi.org'] } }),
+        ],
         {
           stdio: ['ignore', 'ignore', 'pipe'],
         },
@@ -282,6 +293,7 @@ live('serve --mode cages', () => {
           if (snap === null) await sleep(50);
         }
         expect(snap?.mode).toMatchObject({ rounds: {}, jobs: [] });
+        expect(snap).toMatchObject({ firewall: { blocked: 0, allowed: 3 } });
         const bad = await fetch(`http://127.0.0.1:${port}/api/tickets`, { method: 'POST', body: 'null' });
         expect(bad.status).toBe(400);
         child.kill('SIGINT');

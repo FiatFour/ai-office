@@ -16,6 +16,8 @@ const SCAN = 'redteam/test/scan.test.ts';
 const CHECKS = 'redteam/test/checks.test.ts';
 const BLOCKED = 'server/test/blocked.test.ts';
 const PROXY = 'redteam/test/proxy.test.ts';
+const POLICY = 'server/test/firewall-policy.test.ts';
+const IDENTITY = 'server/test/sandbox/identity.test.ts';
 const FLIP = 'redteam/test/flip-label.test.ts';
 const RUNNER = 'redteam/test/mutants-runner.test.ts';
 
@@ -122,7 +124,7 @@ const MUTANTS = [
   {
     name: 'repeat-never-pauses',
     claim: 'HQ pauses a worker that repeats a blocked attempt',
-    edits: [['server/blocked.ts', 'recent.length >= this.limit &&', 'recent.length >= this.limit + 1000 &&']],
+    edits: [['server/blocked.ts', 'repeats >= REPEAT_LIMIT ||', 'repeats >= REPEAT_LIMIT + 1000 ||']],
     tests: [BLOCKED],
   },
   {
@@ -150,21 +152,9 @@ const MUTANTS = [
     tests: [BLOCKED],
   },
   {
-    name: 'pending-allow-pauses',
-    claim: 'three denials that wait on an Allow do not pause the worker',
-    edits: [
-      [
-        'server/hq.ts',
-        '{ counts: !(raw.reason === NOT_ALLOWLISTED && siteOf(raw.host, raw.port) !== null) }',
-        '{ counts: true }',
-      ],
-    ],
-    tests: [BLOCKED],
-  },
-  {
     name: 'repeat-window-ignored',
     claim: 'repeats older than the window do not add up',
-    edits: [['server/blocked.ts', '.filter((at) => attempt.at - at < this.windowMs)', '']],
+    edits: [['server/blocked.ts', 'if (attempt.at - streak.last < REPEAT_WINDOW_MS) break;', 'break;']],
     tests: [BLOCKED],
   },
   {
@@ -176,7 +166,7 @@ const MUTANTS = [
   {
     name: 'allow-offered-after-other-reason',
     claim: 'a site stays non-Allow-able once a denial for it was not a not-allowlisted one',
-    edits: [['server/modes/cages.ts', '(seenBefore?.allow ?? true) && valid', 'valid']],
+    edits: [['server/blocked.ts', '(before?.allow ?? true) && denial.allow', 'denial.allow']],
     tests: [BLOCKED],
   },
   {
@@ -268,6 +258,228 @@ const MUTANTS = [
     claim: 'the host scan finds a private key block and a GitHub token without a planted canary',
     edits: [['redteam/scan.ts', "['private-key-block', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],\n", '']],
     tests: [SCAN],
+  },
+  {
+    name: 'unlisted-denial-not-counted',
+    claim: 'a denial of a host that is only missing from the allowlist counts toward the pause (M2)',
+    edits: [
+      [
+        'server/hq.ts',
+        '      blocked.record(attempt);\n',
+        "      if (raw.reason !== 'not-allowlisted') blocked.record(attempt);\n",
+      ],
+    ],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'distinct-never-pauses',
+    claim: 'ten distinct denials pause a worker',
+    edits: [['server/blocked.ts', ' || counts.size >= DISTINCT_LIMIT) &&', ') &&']],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'streak-split-by-detail',
+    claim: 'a changed detail does not start a fresh count',
+    edits: [
+      [
+        'server/blocked.ts',
+        'const id = `${attempt.worker}\\u0000${attempt.layer}`;',
+        'const id = `${attempt.worker}\\u0000${attempt.layer}\\u0000${attempt.detail}`;',
+      ],
+    ],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'streak-ignores-layer',
+    claim: 'distinct denials add up per layer, not across layers',
+    edits: [
+      [
+        'server/blocked.ts',
+        'const id = `${attempt.worker}\\u0000${attempt.layer}`;',
+        'const id = `${attempt.worker}\\u0000`;',
+      ],
+    ],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'window-anchored-at-first-denial',
+    claim: 'slow retries still pause',
+    edits: [
+      [
+        'server/blocked.ts',
+        '    this.streaks.delete(id);\n    this.streaks.set(id, { last: attempt.at, counts });',
+        '    this.streaks.set(id, { last: this.streaks.get(id)?.last ?? attempt.at, counts });',
+      ],
+    ],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'streak-keys-uncapped',
+    claim: 'a streak holds at most ten distinct keys',
+    edits: [
+      [
+        'server/blocked.ts',
+        'if (counts.has(key) || counts.size < DISTINCT_LIMIT) counts.set(key, repeats);',
+        'counts.set(key, repeats);',
+      ],
+    ],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'streaks-uncapped',
+    claim: 'the streak map stays under its cap',
+    edits: [
+      [
+        'server/blocked.ts',
+        'if (this.streaks.size > MAX_STREAKS) this.streaks.delete(this.streaks.keys().next().value as string);',
+        '',
+      ],
+    ],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'resume-keeps-counts',
+    claim: 'resume clears the counts with the pause',
+    edits: [
+      [
+        'server/blocked.ts',
+        'if (id.startsWith(`${worker}\\u0000`)) this.streaks.delete(id);',
+        'if (id === worker) this.streaks.delete(id);',
+      ],
+    ],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'sites-uncapped',
+    claim: 'the website items stay under their cap',
+    edits: [['server/blocked.ts', 'if (before === undefined && this.sites.size >= this.max) {', 'if (this.max < 0) {']],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'refused-site-evicted',
+    claim: 'a flood cannot make HQ forget a refused site',
+    edits: [['server/blocked.ts', '.find(([, held]) => held.view.allow);', '.find(() => true);']],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'sites-never-expire',
+    claim: 'a quiet website item expires',
+    edits: [['server/blocked.ts', 'if (now - held.last < this.ttlMs) break;', 'break;']],
+    tests: [BLOCKED],
+  },
+  {
+    name: 'locked-holds-github',
+    claim: 'the locked policy has no git host',
+    edits: [
+      ['server/sandbox/firewall.ts', 'locked: [MODEL_API, REGISTRY],', "locked: [MODEL_API, 'github.com', REGISTRY],"],
+    ],
+    tests: [POLICY],
+  },
+  {
+    name: 'open-takes-numeric-names',
+    claim: 'the open policy matches DNS names only',
+    edits: [
+      ['server/sandbox/proxy/allowlist.mjs', 'if (rule.any) return DNS_NAME.test(name);', 'if (rule.any) return true;'],
+    ],
+    tests: [POLICY],
+  },
+  {
+    name: 'squid-takes-any',
+    claim: 'the Squid renderer refuses the * rule',
+    edits: [
+      [
+        'server/sandbox/proxy/allowlist.mjs',
+        'if (rules.some((rule) => rule.any)) throw new Error',
+        'if (false) throw new Error',
+      ],
+    ],
+    tests: [POLICY],
+  },
+  {
+    name: 'config-takes-two-lines',
+    claim: 'a config rule is one host rule',
+    edits: [
+      [
+        'server/modes/cages-config.ts',
+        "if (typeof rule !== 'string' || !ONE_RULE.test(rule)) throw new Error('not a host rule');",
+        '',
+      ],
+    ],
+    tests: [POLICY],
+  },
+  {
+    name: 'config-takes-any-worker',
+    claim: 'a rule for a worker the config does not have is an error',
+    edits: [['server/modes/cages-config.ts', 'if (!names.includes(worker))', 'if (false)']],
+    tests: [POLICY],
+  },
+  {
+    name: 'config-takes-unknown-key',
+    claim: 'an unknown firewall setting is an error',
+    edits: [
+      ['server/modes/cages-config.ts', "if (!['policy', 'allow', 'workers'].includes(key)) throw", 'if (false) throw'],
+    ],
+    tests: [POLICY],
+  },
+  {
+    name: 'count-keeps-allowed-site',
+    claim: 'a site the allowlist has opened is no longer counted as blocked',
+    edits: [['server/snapshot/firewall.ts', 'if (reason !== NOT_ALLOWLISTED || !isAllowed(rules, host, port)) ', '']],
+    tests: [POLICY],
+  },
+  {
+    name: 'count-drops-unfixable',
+    claim: 'a denial an allowlist entry does not lift stays counted',
+    edits: [['server/snapshot/firewall.ts', 'reason !== NOT_ALLOWLISTED || ', '']],
+    tests: [POLICY],
+  },
+  {
+    name: 'proxy-trusts-the-claimed-name',
+    claim: 'the proxy names a cage by its address',
+    edits: [['server/sandbox/proxy/node-proxy.mjs', 'if (cagesPath === undefined) return claimed;', 'return claimed;']],
+    tests: [IDENTITY],
+  },
+  {
+    name: 'unknown-address-keeps-claim',
+    claim: 'an unregistered address is unknown',
+    edits: [
+      [
+        'server/sandbox/proxy/node-proxy.mjs',
+        'if (entry === undefined) return unknown;',
+        'if (entry === undefined) return claimed;',
+      ],
+    ],
+    tests: [IDENTITY],
+  },
+  {
+    name: 'unreadable-registry-keeps-claim',
+    claim: 'an unreadable registry does not fall back to the claimed name',
+    edits: [
+      [
+        'server/sandbox/proxy/node-proxy.mjs',
+        'console.error(`cage registry unreadable: ${error}`);\n    return unknown;',
+        'return claimed;',
+      ],
+    ],
+    tests: [IDENTITY],
+  },
+  {
+    name: 'worker-rules-ignored',
+    claim: "a worker's own rules apply to its cages",
+    edits: [['server/sandbox/proxy/node-proxy.mjs', '[...parseAllowlist(text), ...extra]', 'parseAllowlist(text)']],
+    tests: [IDENTITY],
+  },
+  {
+    name: 'burst-end-not-pushed',
+    claim: 'the state after the last denial of a burst reaches open floors',
+    edits: [
+      [
+        'server/hq.ts',
+        'denialPush ??= setTimeout(() => {\n      denialPush = null;\n      push();\n    }, 250);',
+        'if (denialPush === null) {\n      push();\n      denialPush = setTimeout(() => {\n        denialPush = null;\n      }, 250);\n    }',
+      ],
+    ],
+    tests: [BLOCKED],
   },
 ];
 

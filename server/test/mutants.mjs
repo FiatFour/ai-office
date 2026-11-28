@@ -722,6 +722,56 @@ const MUTANTS = [
     tests: ['server/test/hq.test.ts'],
   },
   {
+    name: 'cage-not-registered',
+    claim: 'the proxy learns each cage by its address',
+    edits: [
+      [
+        'server/sandbox/container.ts',
+        '      writeCages(firewall.cagesPath, this.identities);\n      const view',
+        '      const view',
+      ],
+    ],
+    tests: [DRIVER],
+  },
+  {
+    name: 'cage-stays-registered',
+    claim: 'a released cage leaves the registry',
+    edits: [['server/sandbox/container.ts', "    this.identities.delete(this.addresses.get(id) ?? '');\n", '']],
+    tests: [DRIVER],
+  },
+  {
+    name: 'worker-rules-not-registered',
+    claim: "a worker's own rules reach the proxy",
+    edits: [
+      [
+        'server/sandbox/container.ts',
+        'allow: Object.hasOwn(this.workerAllow, spec.worker) ? (this.workerAllow[spec.worker] ?? []) : [],',
+        'allow: [],',
+      ],
+    ],
+    tests: [DRIVER],
+  },
+  {
+    name: 'allow-not-in-rules',
+    claim: 'an allowed site is counted as part of the allowlist',
+    edits: [['server/sandbox/container.ts', '    this.allowlist = [...this.allowlist, rule];\n', '']],
+    tests: [DRIVER],
+  },
+  {
+    name: 'cage-sends-telemetry',
+    claim: 'a cage turns off nonessential traffic',
+    edits: [
+      ['server/sandbox/container.ts', "        '-e',\n        'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1',\n", ''],
+    ],
+    tests: [DRIVER],
+  },
+  {
+    name: 'cli-ignores-firewall-policy',
+    claim: 'serve gives HQ and the driver the configured policy',
+    edits: [['server/cli.ts', '      firewall: firewallFromConfig(raw),\n', '      firewall: firewallPolicy(),\n']],
+    tests: [CLI],
+  },
+  {
     name: 'changes-ready-while-red',
     claim: 'a PR with a red check is never READY',
     edits: [

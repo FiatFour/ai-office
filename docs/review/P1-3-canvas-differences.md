@@ -85,10 +85,9 @@ D21 | not-built | +50 XP | - | "+50 XP" rising over the PR rack and in the toast
   covers: text:+# xp
 D22 | changed | PR #12 merged | merged and shipped | Toast text. Canvas "SHIPMENT DELIVERED / PR #12 merged · +50 XP". Built "Shipment delivered / alpha/p12c merged and shipped", from the task, in the active language.
   covers: text:alpha/p#c merged and shipped ;; text:pr ## merged · +# xp
-D23 | not-built | 3 BLOCKED · 2 ALLOWED | - | Firewall counters, the git and npm lights and the blocked packets. HQ has denials but no allowed count.
-  covers: paint:firewall:shape:fill:#f5f3ec ;; paint:firewall:text:fill:#ffb3b3 ;; role:laser:floor
-  covers: role:led:firewall ;; shape:firewall:rect ;; shape:firewall:text
-  covers: text:# blocked · # allowed
+D23 | not-built | - | - | The blocked packets in the FIREWALL gate. The counter under the gate is built (D79).
+  covers: paint:firewall:shape:fill:#f5f3ec ;; role:laser:floor
+  covers: role:led:firewall ;; shape:firewall:rect
   regions: R2-4C6-7
 D24 | not-built | 4 / 9 LOADED | - | Truck load, the v0.1 label, the crates and the empty slots. Built truck is a blank door (38 by 40 px, the canvas truck is 38 by 78).
   covers: font:svg:silkscreen:3.4px ;; paint:dock:shape:stroke:#9aa1ab ;; paint:dock:text:fill:#454b55
@@ -301,7 +300,7 @@ D69 | changed | - | - | DOM element counts per tag differ: the canvas HUD has ab
   covers: shape:dom:ul
 D70 | not-built | - | - | DOM elements only on the canvas: 19 links (menu), a label and line breaks.
   covers: shape:dom:a ;; shape:dom:br ;; shape:dom:label
-D72 | fixed | - | - | Firewall frame (four red edges), the git and npm lights and the four scan lasers are the canvas shapes. The counters and blocked packets are not built (D23).
+D72 | fixed | - | - | Firewall frame (four red edges), the git and npm lights and the four scan lasers are the canvas shapes. The blocked packets are not built (D23).
   covers: role:laser:firewall ;; text:git ;; text:npm
   covers: paint:firewall:shape:fill:#66bb6a ;; paint:firewall:text:fill:#15181c ;; paint:firewall:shape:fill:#ef5350
 D73 | fixed | - | - | Shipping dock: the hazard stripe, the left wall edge, the side ramp and the roll-up door with its blue bumper are the canvas shapes. The truck load is not built (D24).
@@ -315,3 +314,4 @@ D75 | changed | - | - | Built-only SHIPPED stamp on a delivered box (green), nex
   covers: text:shipped
 D76 | changed | - | - | The built run-mode chip is a link that opens the preflight screen, so its green frame is painted on a link. The canvas has a button that cycles run modes and a dot that blinks; the built dot is still.
   covers: paint:dom:a:border-bottom:#66bb6a ;; paint:dom:a:border-left:#66bb6a ;; paint:dom:a:border-right:#66bb6a ;; paint:dom:a:border-top:#66bb6a
+D79 | changed | 3 BLOCKED · 2 ALLOWED | 0 BLOCKED · 4 ALLOWED | The FIREWALL counter. Built counts the blocked sites HQ holds and the project allowlist rules, ALL for the open policy; the canvas numbers are drawn data. The git and npm lights are fixed art whatever the policy.

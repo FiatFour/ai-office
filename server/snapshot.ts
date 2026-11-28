@@ -3,6 +3,7 @@ import type { BlockedEntry } from './blocked.ts';
 import type { ActionItem, ModeView } from './modes/cages.ts';
 import type { RegistryView } from './registry.ts';
 import type { CageView } from './sandbox/container.ts';
+import type { FirewallCount } from './snapshot/firewall.ts';
 import type { HostInfo } from './snapshot/host.ts';
 import type { OutboxEntry } from './store/store.ts';
 
@@ -26,6 +27,8 @@ export interface Snapshot {
   readonly cages: readonly CageView[];
   readonly denials: readonly Denial[];
   readonly blocked: readonly BlockedEntry[];
+  /** `null` on an HQ that starts no cage, as in demo mode. */
+  readonly firewall: FirewallCount | null;
   readonly paused: readonly string[];
   readonly actions: readonly ActionItem[];
   readonly mode: ModeView | null;

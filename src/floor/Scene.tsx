@@ -368,6 +368,19 @@ export const Scene = ({
         aria-label={t('floor.scene', { count: view.boxes.length, shipped: view.shipped })}
       >
         <Background names={workers.map((worker) => worker.name)} moods={workers.map((worker) => worker.mood)} />
+        {view.firewall === null ? null : (
+          <text
+            x="239.5"
+            y="99.6"
+            textAnchor="middle"
+            fontFamily="Silkscreen"
+            fontSize="2.8"
+            fill="#ffb3b3"
+            data-testid="firewall-count"
+          >
+            {view.firewall.blocked} BLOCKED · {view.firewall.allowed ?? 'ALL'} ALLOWED
+          </text>
+        )}
         {placed.map(({ box, stack }) => (
           <Box key={box.id} box={box} stack={stack} />
         ))}

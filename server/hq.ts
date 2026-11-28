@@ -14,8 +14,8 @@ import type { HqPort, ModeFactory } from './modes/cages.ts';
 import type { Preflight } from './preflight/report.ts';
 import { Registry, RegistryError } from './registry.ts';
 import type { SandboxDriver } from './sandbox/container.ts';
-import { NOT_ALLOWLISTED, type Denial as RawDenial } from './sandbox/firewall.ts';
-import { siteOf } from './sandbox/site.ts';
+import { DEFAULT_ALLOWLIST, type Denial as RawDenial } from './sandbox/firewall.ts';
+import { firewallCount } from './snapshot/firewall.ts';
 import { type Denial, outboxSummary, type Snapshot } from './snapshot.ts';
 import type { OutboxEntry } from './store/store.ts';
 import { Store, StoreLockedError } from './store/store.ts';
@@ -30,6 +30,8 @@ export interface HqOptions {
   readonly host?: string;
   readonly makeDriver?: (hq: string, onDenial: (denial: RawDenial) => void) => Promise<SandboxDriver | null>;
   readonly executors?: Partial<Record<CommandKind, Executor>>;
+  /** The project allowlist the driver starts with. */
+  readonly allowlist?: readonly string[];
   readonly mode?: ModeFactory;
   readonly assets?: string;
   readonly readOnly?: string;
@@ -104,7 +106,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
   const hqId = hqIdFor(home);
   const denials = new Map<string, Denial>();
   const blocked = new BlockedLog();
-  let lastDenialPush = 0;
+  let denialPush: NodeJS.Timeout | null = null;
   let mode: ReturnType<ModeFactory> | null = null;
 
   const noteDenial = (raw: RawDenial): void => {
@@ -119,7 +121,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
         },
         Date.now(),
       );
-      blocked.record(attempt, { counts: !(raw.reason === NOT_ALLOWLISTED && siteOf(raw.host, raw.port) !== null) });
+      blocked.record(attempt);
     } catch (error) {
       if (!(error instanceof InvalidAttempt)) throw error;
     }
@@ -127,11 +129,11 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     const seen = denials.get(key);
     denials.set(key, { ...raw, count: (seen?.count ?? 0) + 1, lastAt: raw.at });
     if (denials.size > MAX_DENIALS) denials.delete(denials.keys().next().value as string);
-    const now = Date.now();
-    if (now - lastDenialPush >= 250) {
-      lastDenialPush = now;
+    // At most one push in 250 ms, sent at its end, so the last denial of a burst is never left unsent.
+    denialPush ??= setTimeout(() => {
+      denialPush = null;
       push();
-    }
+    }, 250);
   };
   let driver: SandboxDriver | null = null;
   let driverReady: Promise<SandboxDriver | null> | null = null;
@@ -156,6 +158,10 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
     cages: driver?.list() ?? [],
     denials: [...denials.values()],
     blocked: blocked.entries(),
+    firewall:
+      options.makeDriver === undefined
+        ? null
+        : firewallCount(denials.values(), driver?.rules() ?? options.allowlist ?? DEFAULT_ALLOWLIST),
     paused: blocked.paused(),
     actions: mode?.actions() ?? [],
     mode: mode?.view() ?? null,
@@ -402,6 +408,7 @@ export const startHq = async (options: HqOptions): Promise<RunningHq> => {
   const close = (): Promise<void> => {
     closing ??= (async () => {
       await mode?.close();
+      if (denialPush !== null) clearTimeout(denialPush);
       for (const socket of sockets) socket.terminate();
       wss.close();
       await new Promise<void>((resolve) => {

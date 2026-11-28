@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { REPEAT_LIMIT } from '../server/blocked.ts';
+import { DISTINCT_LIMIT, REPEAT_LIMIT } from '../server/blocked.ts';
 import { type RunningHq, startHq } from '../server/hq.ts';
 import type { Denial } from '../server/sandbox/firewall.ts';
 import { newRunId } from '../spikes/P0-3/cage.mjs';
@@ -289,12 +289,24 @@ const denyFromCage = async (tunnelHost: string, times: number) => {
   }
 };
 const pausedNow = () => hq.snapshot().paused.includes(AGENT);
-await denyFromCage(DENIED_HOST, REPEAT_LIMIT);
-const pendingPaused = pausedNow();
-await denyFromCage(METADATA_NAME, REPEAT_LIMIT);
-const loopPaused = pausedNow();
-const paused = loopPaused && !pendingPaused;
-const pauseLine = `PAUSE ${paused ? 'PASS' : 'FAIL'} real CONNECTs from the cage through the proxy: ${REPEAT_LIMIT} to ${DENIED_HOST} (not allowlisted, an Allow can fix it) left ${AGENT} paused=${pendingPaused}, then ${REPEAT_LIMIT} to ${METADATA_NAME} (resolves to a non-public address, no Allow fixes it) left ${AGENT} paused=${loopPaused}`;
+/** Paused one attempt before the limit, then at it. The worker is resumed afterwards, which also clears its counts. */
+const pauseAt = async (hosts: readonly string[]) => {
+  for (const host of hosts.slice(0, -1)) await denyFromCage(host, 1);
+  const early = pausedNow();
+  await denyFromCage(hosts.at(-1) ?? '', 1);
+  const late = pausedNow();
+  await post('/api/workers/resume', { worker: AGENT });
+  return {
+    ok: !early && late,
+    text: `paused=${early} after ${hosts.length - 1}, paused=${late} after ${hosts.length}`,
+  };
+};
+await post('/api/workers/resume', { worker: AGENT });
+const identical = await pauseAt(Array<string>(REPEAT_LIMIT).fill(DENIED_HOST));
+const distinct = await pauseAt(Array.from({ length: DISTINCT_LIMIT }, (_, n) => `h${n}.${DENIED_HOST}`));
+const unfixable = await pauseAt(Array<string>(REPEAT_LIMIT).fill(METADATA_NAME));
+const paused = identical.ok && distinct.ok && unfixable.ok;
+const pauseLine = `PAUSE ${paused ? 'PASS' : 'FAIL'} real CONNECTs from the cage through the proxy. Same unlisted host ${DENIED_HOST}: ${identical.text}. Distinct unlisted hosts: ${distinct.text}. ${METADATA_NAME} (non-public address): ${unfixable.text}`;
 console.log(pauseLine);
 
 writeFileSync(join(out, 'blocked.json'), `${JSON.stringify(hq.snapshot().blocked, null, 1)}\n`);

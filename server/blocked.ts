@@ -1,5 +1,9 @@
 export const REPEAT_LIMIT = 3;
+export const DISTINCT_LIMIT = 10;
 export const REPEAT_WINDOW_MS = 10 * 60_000;
+export const MAX_STREAKS = 256;
+export const MAX_SITES = 100;
+export const SITE_TTL_MS = 24 * 60 * 60_000;
 const MAX_ENTRIES = 500;
 const MAX_TEXT = 240;
 const LAYER = /^(L[1-5]|PF|MS|GS|HG|WH|CG|F[1-5][a-z]?|W[1-3])$/;
@@ -53,35 +57,46 @@ export const parseAttempt = (raw: unknown, now: number): Attempt => {
   };
 };
 
-const fingerprint = (a: Attempt): string => `${a.worker}\u0000${a.layer}\u0000${a.tool}\u0000${a.detail}`;
+/** One worker's denials at one layer. It ends when `REPEAT_WINDOW_MS` passes with no new denial, so a slow retry stays in it. */
+interface Streak {
+  readonly last: number;
+  /** Attempts per distinct tool call and detail. Holds at most `DISTINCT_LIMIT` keys. */
+  readonly counts: Map<string, number>;
+}
 
 export class BlockedLog {
   private readonly list: BlockedEntry[] = [];
-  private readonly times = new Map<string, number[]>();
+  /** Keyed by worker and layer, oldest `last` first. */
+  private readonly streaks = new Map<string, Streak>();
   private readonly held = new Set<string>();
   private seq = 0;
-  private readonly limit: number;
-  private readonly windowMs: number;
 
-  constructor(limit: number = REPEAT_LIMIT, windowMs: number = REPEAT_WINDOW_MS) {
-    this.limit = limit;
-    this.windowMs = windowMs;
-  }
+  record(attempt: Attempt): { readonly entry: BlockedEntry; readonly paused: boolean } {
+    for (const [id, streak] of this.streaks) {
+      if (attempt.at - streak.last < REPEAT_WINDOW_MS) break;
+      this.streaks.delete(id);
+    }
+    const id = `${attempt.worker}\u0000${attempt.layer}`;
+    const counts = this.streaks.get(id)?.counts ?? new Map<string, number>();
+    const key = `${attempt.tool}\u0000${attempt.detail}`;
+    const repeats = (counts.get(key) ?? 0) + 1;
+    if (counts.has(key) || counts.size < DISTINCT_LIMIT) counts.set(key, repeats);
+    this.streaks.delete(id);
+    this.streaks.set(id, { last: attempt.at, counts });
+    if (this.streaks.size > MAX_STREAKS) this.streaks.delete(this.streaks.keys().next().value as string);
 
-  record(
-    attempt: Attempt,
-    { counts = true }: { readonly counts?: boolean } = {},
-  ): { readonly entry: BlockedEntry; readonly paused: boolean } {
-    const key = fingerprint(attempt);
-    const recent = [...(this.times.get(key) ?? []).filter((at) => attempt.at - at < this.windowMs), attempt.at];
-    this.times.set(key, recent);
     this.seq += 1;
-    const entry: BlockedEntry = { ...attempt, seq: this.seq, repeats: recent.length };
+    const entry: BlockedEntry = { ...attempt, seq: this.seq, repeats };
     this.list.push(entry);
     if (this.list.length > MAX_ENTRIES) this.list.shift();
-    const paused = counts && recent.length >= this.limit && !this.held.has(attempt.worker);
+    const paused = (repeats >= REPEAT_LIMIT || counts.size >= DISTINCT_LIMIT) && !this.held.has(attempt.worker);
     if (paused) this.held.add(attempt.worker);
     return { entry, paused };
+  }
+
+  /** How many worker and layer streaks are held, and the most distinct keys one of them holds. */
+  size(): { readonly streaks: number; readonly keys: number } {
+    return { streaks: this.streaks.size, keys: Math.max(0, ...[...this.streaks.values()].map((s) => s.counts.size)) };
   }
 
   entries(): readonly BlockedEntry[] {
@@ -97,8 +112,66 @@ export class BlockedLog {
   }
 
   resume(worker: string): boolean {
-    for (const key of [...this.times.keys()]) if (key.startsWith(`${worker}\u0000`)) this.times.delete(key);
+    for (const id of [...this.streaks.keys()]) if (id.startsWith(`${worker}\u0000`)) this.streaks.delete(id);
     return this.held.delete(worker);
+  }
+}
+
+export interface BlockedSite {
+  readonly site: string;
+  readonly host: string;
+  readonly port: number;
+  readonly agent: string;
+  readonly count: number;
+  readonly allow: boolean;
+}
+
+/**
+ * The blocked websites that wait on a person, one entry per site. A site that once drew a denial no Allow can fix
+ * (`allow: false`) is never evicted to make room, so a flood of other sites cannot make HQ offer Allow for it again.
+ * It leaves only when it has been quiet for `ttlMs`.
+ */
+export class BlockedSites {
+  /** Oldest `last` first. */
+  private readonly sites = new Map<string, { readonly view: BlockedSite; readonly last: number }>();
+  private readonly max: number;
+  private readonly ttlMs: number;
+
+  constructor(max: number = MAX_SITES, ttlMs: number = SITE_TTL_MS) {
+    this.max = max;
+    this.ttlMs = ttlMs;
+  }
+
+  note(denial: Omit<BlockedSite, 'count'>, now: number): void {
+    this.expire(now);
+    const before = this.sites.get(denial.site)?.view;
+    if (before === undefined && this.sites.size >= this.max) {
+      const victim = [...this.sites].find(([, held]) => held.view.allow);
+      if (victim === undefined) return;
+      this.sites.delete(victim[0]);
+    }
+    this.sites.delete(denial.site);
+    this.sites.set(denial.site, {
+      view: { ...denial, count: (before?.count ?? 0) + 1, allow: (before?.allow ?? true) && denial.allow },
+      last: now,
+    });
+  }
+
+  get(site: string, now: number): BlockedSite | undefined {
+    this.expire(now);
+    return this.sites.get(site)?.view;
+  }
+
+  list(now: number): readonly BlockedSite[] {
+    this.expire(now);
+    return [...this.sites.values()].map((held) => held.view);
+  }
+
+  private expire(now: number): void {
+    for (const [site, held] of this.sites) {
+      if (now - held.last < this.ttlMs) break;
+      this.sites.delete(site);
+    }
   }
 }
 

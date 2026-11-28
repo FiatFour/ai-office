@@ -325,6 +325,12 @@ describe('the floor view from the snapshot', () => {
     expect(floorView({ rev: 42, state: run(atQc) }).rev).toBe(42);
   });
 
+  it('carries the firewall count, and none for an HQ that sends none', () => {
+    const firewall = { blocked: 3, allowed: 2 };
+    expect(floorView({ rev: 1, state: run(atQc), firewall }).firewall).toEqual(firewall);
+    expect(floorView({ rev: 1, state: run(atQc) }).firewall).toBeNull();
+  });
+
   it('shows the box code as the upper-case task name without its line', () => {
     expect(box(atBelt).code).toBe('BOX-ONE');
   });

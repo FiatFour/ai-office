@@ -756,6 +756,17 @@ const MUTANTS = [
     ],
   },
   {
+    name: 'view-drops-firewall-count',
+    claim: 'the floor view carries the firewall count of the snapshot',
+    edits: [[MODEL, 'firewall: snapshot.firewall ?? null,', 'firewall: null,']],
+  },
+  {
+    name: 'lane9-firewall-counter-removed',
+    claim: 'the FIREWALL zone draws its counter',
+    tier: 'e2e',
+    edits: [[SCENE, '{view.firewall === null ? null : (', '{view.firewall !== undefined ? null : (']],
+  },
+  {
     name: 'lane9-delete-covers-key',
     claim: 'deleting a covers key makes lane 9 fail',
     tier: 'lane9',

@@ -190,7 +190,7 @@ const MUTANTS = [
     edits: [
       [
         'server/modes/cages.ts',
-        'if (site === undefined || denials.get(site)?.allow !== true)',
+        'if (site === undefined || denials.get(site, Date.now())?.allow !== true)',
         'if (site === undefined)',
       ],
     ],
@@ -776,13 +776,7 @@ const MUTANTS = [
   {
     name: 'm3-allow-not-written',
     claim: 'Allow writes the rule to the running proxy allowlist',
-    edits: [
-      [
-        'server/sandbox/container.ts',
-        'if (!current.includes(rule)) writeAllowlist(allowlistPath, [...current, rule]);',
-        '',
-      ],
-    ],
+    edits: [['server/sandbox/container.ts', 'writeAllowlist(allowlistPath, [...current, rule]);', '']],
     tests: [DOCKER],
   },
   {
@@ -1038,13 +1032,7 @@ const MUTANTS = [
   {
     name: 'r3-wildcard-item-allowable',
     claim: 'the website item for a wildcard CONNECT does not offer Allow',
-    edits: [
-      [
-        'server/modes/cages.ts',
-        'allow: (seenBefore?.allow ?? true) && valid !== null && denial',
-        'allow: (seenBefore?.allow ?? true) && denial',
-      ],
-    ],
+    edits: [['server/modes/cages.ts', 'const allow = valid !== null && denial', 'const allow = denial']],
     tests: [CAGES],
   },
   {

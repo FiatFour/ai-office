@@ -1,10 +1,13 @@
 import { isIP } from 'node:net';
 import { NON_PUBLIC } from './address.mjs';
 
-/** @typedef {{ host: string, wildcard: boolean, port: number }} Rule */
+/** @typedef {{ host: string, wildcard: boolean, port: number, any?: boolean }} Rule */
 
 const DEFAULT_PORT = 443;
 const HOST_LABEL = /^[a-z0-9-]+$/;
+const ANY_HOST = /^\*(?::(\d+))?$/;
+/** A name with a dot and a non-numeric top label, so no numeric spelling of an address and no bare container name. */
+const DNS_NAME = /^(?:[a-z0-9_-]+\.)+[a-z][a-z0-9-]*$/;
 
 /** @param {string} host */
 export function normalizeHost(host) {
@@ -18,8 +21,8 @@ export function isIpLiteral(host) {
 }
 
 /**
- * One rule per line: `host`, `host:port`, `*.domain` or `*.domain:port`. `#` starts a comment.
- * `*.domain` matches subdomains of `domain`, not `domain` itself.
+ * One rule per line: `host`, `host:port`, `*.domain`, `*.domain:port`, `*` or `*:port`. `#` starts a comment.
+ * `*.domain` matches subdomains of `domain`, not `domain` itself. `*` matches every DNS name.
  * @param {string} text
  * @returns {Rule[]}
  */
@@ -29,6 +32,10 @@ export function parseAllowlist(text) {
     .map((line) => line.replace(/#.*/, '').trim())
     .filter((line) => line !== '')
     .map((line) => {
+      const any = ANY_HOST.exec(line);
+      if (any !== null) {
+        return { host: '', wildcard: true, any: true, port: any[1] === undefined ? DEFAULT_PORT : Number(any[1]) };
+      }
       const match = /^(\*\.)?([^:\s]+)(?::(\d+))?$/.exec(line);
       const name = match?.[2] === undefined ? '' : normalizeHost(match[2]);
       if (match === null || isIP(name) !== 0 || !name.split('.').every((label) => HOST_LABEL.test(label))) {
@@ -50,9 +57,11 @@ export function parseAllowlist(text) {
 export function isAllowed(rules, host, port) {
   if (isIpLiteral(host)) return false;
   const name = normalizeHost(host);
-  return rules.some(
-    (rule) => rule.port === port && (rule.wildcard ? name.endsWith(`.${rule.host}`) : name === rule.host),
-  );
+  return rules.some((rule) => {
+    if (rule.port !== port) return false;
+    if (rule.any) return DNS_NAME.test(name);
+    return rule.wildcard ? name.endsWith(`.${rule.host}`) : name === rule.host;
+  });
 }
 
 /**
@@ -79,6 +88,7 @@ const regexEscape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * @param {{ dnsServer: string }} options
  */
 export function toSquidConf(rules, { dnsServer }) {
+  if (rules.some((rule) => rule.any)) throw new Error('allowlist: the Squid config has no form for the * rule');
   const ruleLines = rules.flatMap((rule, index) => [
     `acl r${index}_host dstdom_regex -n -i ${rule.wildcard ? `\\.${regexEscape(rule.host)}$` : `^${regexEscape(rule.host)}$`}`,
     `acl r${index}_port port ${rule.port}`,

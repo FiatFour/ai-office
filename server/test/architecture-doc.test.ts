@@ -22,6 +22,7 @@ type Json = Record<string, unknown>;
 // A type with a table in the doc. `extra` names declarations whose fields belong to the same table.
 export const TYPES: ReadonlyArray<{ name: string; file: string; extra?: readonly string[] }> = [
   { name: 'Snapshot', file: 'server/snapshot.ts' },
+  { name: 'FirewallCount', file: 'server/snapshot/firewall.ts' },
   { name: 'HostInfo', file: 'server/snapshot/host.ts' },
   { name: 'HostEngine', file: 'server/snapshot/host.ts' },
   { name: 'State', file: CORE },

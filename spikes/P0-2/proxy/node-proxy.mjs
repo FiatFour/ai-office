@@ -16,6 +16,29 @@ function agentFrom(header) {
   return user || 'unknown';
 }
 
+/**
+ * Who is on the other end, and the extra rules that agent has. A cage cannot choose its source address, so a registry
+ * keyed by address names the agent, and the name in Proxy-Authorization is only a claim. Without a registry file the
+ * claim stands. A registry that does not name the address gives `unknown` and no extra rule.
+ * @param {import('node:http').IncomingMessage} req
+ * @param {string | undefined} cagesPath
+ * @returns {Promise<{ agent: string, extra: import('./allowlist.mjs').Rule[] }>}
+ */
+async function identify(req, cagesPath) {
+  const claimed = { agent: agentFrom(req.headers['proxy-authorization']), extra: [] };
+  if (cagesPath === undefined) return claimed;
+  const unknown = { agent: 'unknown', extra: [] };
+  try {
+    const entry = JSON.parse(await readFile(cagesPath, 'utf8'))[req.socket.remoteAddress ?? ''];
+    if (entry === undefined) return unknown;
+    return { agent: String(entry.agent), extra: parseAllowlist(entry.allow.join('\n')) };
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') return claimed;
+    console.error(`cage registry unreadable: ${error}`);
+    return unknown;
+  }
+}
+
 const CONNECT_TIMEOUT_MS = 5000;
 const HELLO_TIMEOUT_MS = 5000;
 const MAX_HELLO_BYTES = 70000;
@@ -67,12 +90,13 @@ function helloDenial(hello, host) {
 }
 
 /**
- * Allowlist CONNECT proxy. It re-reads the allowlist file on every request, so an edit takes effect without a restart.
+ * Allowlist CONNECT proxy. It re-reads the allowlist and the cage registry on every request, so an edit takes effect
+ * without a restart.
  * It denies every non-CONNECT request, because cages reach the outside only over TLS.
  * Before it answers 200 it resolves the name once, refuses any non-public address, and dials the address it checked.
  * After the 200 it reads the first TLS record and closes unless the ClientHello's SNI equals the CONNECT host.
  * @param {{
- *   port: number, allowlistPath: string, denyUrl?: string | undefined, host?: string,
+ *   port: number, allowlistPath: string, cagesPath?: string | undefined, denyUrl?: string | undefined, host?: string,
  *   lookup?: (host: string) => Promise<Array<{ address: string, family: number }>>,
  *   dial?: (options: { host: string, port: number, family: number }) => import('node:net').Socket,
  *   denyEventsPerSecond?: number,
@@ -82,6 +106,7 @@ function helloDenial(hello, host) {
 export function startProxy({
   port,
   allowlistPath,
+  cagesPath,
   denyUrl,
   host = '0.0.0.0',
   lookup = (name) => dns.lookup(name, { all: true }),
@@ -109,12 +134,13 @@ export function startProxy({
     }).catch((error) => console.error(`deny report failed: ${error}`));
   };
 
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
+    const { agent } = await identify(req, cagesPath);
     const target = URL.canParse(req.url ?? '') ? new URL(req.url ?? '') : null;
     reportDeny({
       host: target?.hostname ?? '',
       port: Number(target?.port || 80),
-      agent: agentFrom(req.headers['proxy-authorization']),
+      agent,
       method: req.method ?? '',
       ts: new Date().toISOString(),
     });
@@ -124,7 +150,7 @@ export function startProxy({
   server.on('connect', async (req, client, head) => {
     client.on('error', () => client.destroy());
     const target = parseConnectTarget(req.url ?? '');
-    const agent = agentFrom(req.headers['proxy-authorization']);
+    const { agent, extra } = await identify(req, cagesPath);
     /** @param {string} deniedHost @param {number} deniedPort @param {string} reason */
     const deny = (deniedHost, deniedPort, reason) =>
       reportDeny({
@@ -136,7 +162,7 @@ export function startProxy({
         ts: new Date().toISOString(),
       });
     const rules = await readFile(allowlistPath, 'utf8')
-      .then(parseAllowlist)
+      .then((text) => [...parseAllowlist(text), ...extra])
       .catch((error) => {
         console.error(`allowlist unreadable, denying all: ${error}`);
         return [];
@@ -192,6 +218,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await startProxy({
     port: Number(process.env.PORT ?? 3128),
     allowlistPath: process.env.ALLOWLIST ?? '/etc/agent-works/allowlist.txt',
+    cagesPath: process.env.CAGES ?? '/etc/agent-works/cages.json',
     denyUrl: process.env.DENY_URL,
   });
   console.log('node-proxy listening');

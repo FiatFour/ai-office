@@ -187,8 +187,8 @@ D12 | changed | - | when you press Start | The footnote and the header note are 
 D13 | changed | - | Cage image | Row labels are the doctor checks (Node 22.18, HQ port, HQ home, host reach, cage image). The compare replaces each row detail, which names this machine, with one word.
   covers: text:cage cannot reach the host ;; text:cage image ;; text:detail
   covers: text:hq home folder ;; text:hq port # ;; text:node.js #.# or newer
-D14 | changed | DETECTED | no /dev/kvm | The detected card shows what HQ probed (OS label, shell, arch, kvm, engines), not the artboard sample machine.
-  covers: text:docker not answering ;; text:pwsh · x# · no /dev/kvm ;; text:windows (#.#.#, x#)
+D14 | changed | DETECTED | no /dev/kvm | The detected card shows what HQ probed (OS label, shell, arch, kvm, engines), not the artboard sample machine. The compare replaces the engine list, which depends on what the lane machine has installed, with one word.
+  covers: text:engines ;; text:pwsh · x# · no /dev/kvm ;; text:windows (#.#.#, x#)
 D15 | changed | - | Start Docker Desktop and wait | A failing row shows the doctor fix for this OS under a FIX tag. The artboard fix texts belong to rows that are not built.
   covers: text:fix ;; text:start docker desktop and wait until it reports the engine is running, then switch to linux containers.
 D16 | changed | - | - | Colours, fonts and element counts. The page uses floor.css panels and buttons with its own status chips.

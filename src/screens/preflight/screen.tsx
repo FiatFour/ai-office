@@ -55,7 +55,9 @@ const Detected = ({ report }: { report: PreflightReport }) => {
       <span className="pf-mute">
         {[host.shell, host.arch, host.kvm ? t('preflight.kvm.yes') : t('preflight.kvm.no')].join(' · ')}
       </span>
-      <span className="pf-mute">{engines.length === 0 ? t('preflight.engine.none') : engines.join(' · ')}</span>
+      <span className="pf-mute" data-testid="pf-engines">
+        {engines.length === 0 ? t('preflight.engine.none') : engines.join(' · ')}
+      </span>
       <span className="pf-grow" />
       <span className="pf-mute">{t('preflight.runMode')}</span>
       <b>{t('preflight.cages')}</b>

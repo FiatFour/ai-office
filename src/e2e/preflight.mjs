@@ -68,7 +68,7 @@ export const PREFLIGHT_SPEC = artboardSpec({
 
 /**
  * The Preflight artboard against the built screen, on the artboard's own computer (Windows) with docker not answering.
- * Check details name this machine's versions and temp folders, so they are replaced before the inventory is taken.
+ * Check details and the engine list name this machine's versions, temp folders and installed engines, so they are replaced before the inventory is taken.
  * @param {import('playwright').Browser} browser
  */
 export const comparePreflight = async (browser) => {
@@ -86,6 +86,9 @@ export const comparePreflight = async (browser) => {
     await shown(page);
     await page.$$eval('.pf-detail', (nodes) => {
       for (const node of nodes) node.textContent = 'detail';
+    });
+    await page.$eval('[data-testid="pf-engines"]', (node) => {
+      node.textContent = 'engines';
     });
     const verdict = await canvasCompare(browser, page, { inventory: {}, text: '' }, PREFLIGHT_SPEC);
     await ctx.close();

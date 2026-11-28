@@ -26,7 +26,7 @@ const freePort = (): Promise<number> =>
   });
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, stdio: 'pipe' });
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, stdio: 'pipe', timeout: 20_000 });
 
 const repoAt = (root: string, name: string, remote: string): string => {
   const dir = folder(root, name);
@@ -54,7 +54,8 @@ afterEach(() => {
   // With no HQ, `stop` still asks the container engine, which can hang for 20 s on a Windows runner.
   for (const home of homes.splice(0)) if (readRuntime(home) !== null) cli(process.cwd(), home, ['stop']);
   for (const server of holders.splice(0)) server.close();
-});
+  // `stop` of a running HQ can wait 20 s for the container engine, past the default 10 s hook limit.
+}, 60_000);
 
 describe('argument parsing', () => {
   it('reads flags, values and the default command', () => {
@@ -188,7 +189,8 @@ live('the CLI as a process', () => {
     expect(second.err).toContain(`another HQ (pid ${pid})`);
     expect(second.err).not.toContain('Another program');
     expect(second.err).toContain('--port');
-  });
+    // This and the two-factory test start an HQ and stop it in the hook: up to 7.3 s together on Windows runners.
+  }, 60_000);
 
   it('says another HQ owns the state, not a stack trace, when a live process holds the state directory', async () => {
     const root = tempDir('cli-owned');
@@ -236,7 +238,7 @@ live('the CLI as a process', () => {
     expect(Object.keys(repos.repos)).toEqual(['github.com/acme/shared']);
     const ls = cli(f1, home, ['ls']).out;
     expect(ls.match(/repo github.com\/acme\/shared/g)).toHaveLength(2);
-  });
+  }, 60_000);
 });
 
 live('serve --mode cages', () => {

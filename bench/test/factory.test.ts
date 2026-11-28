@@ -47,7 +47,7 @@ const target = (remote: string) => ScratchTarget.of(REPO, remote);
 
 const bare = (): string => {
   const dir = tempDir('scratch-bare');
-  execFileSync('git', ['init', '-q', '--bare', dir]);
+  execFileSync('git', ['init', '-q', '--bare', dir], { timeout: 20_000 });
   return dir;
 };
 
@@ -171,7 +171,8 @@ describe('which remote the seed and the cleanup may write to', () => {
   it('accepts the scratch repo named by any of its GitHub URL forms, or a bare repository on disk', () => {
     for (const remote of GOOD) expect(remoteProblem('FiatFour/agent-works-scratch', remote), remote).toBeNull();
     expect(remoteProblem(REPO, bare())).toBeNull();
-  });
+    // One `git init`, seen up to 2.6 s on Windows runners.
+  }, 30_000);
 
   it('refuses a remote that names another repository, another host, a checkout or a relative path', () => {
     for (const remote of [
